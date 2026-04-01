@@ -39,6 +39,7 @@ function switchTab(name) {
 
     if (name === 'trades') loadTrades(true);
     if (name === 'brain') loadBrain();
+    if (name === 'reports') loadReports();
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
 }
@@ -331,6 +332,146 @@ async function loadLogs() {
     }).join('\n');
 
     viewer.scrollTop = viewer.scrollHeight;
+}
+
+// === REPORTS ===
+async function loadReports() {
+    // Lade letzten Report
+    try {
+        const res = await apiFetch('/api/weekly-report');
+        if (res) {
+            const r = await res.json();
+            if (r.performance) {
+                document.getElementById('report-summary').style.display = 'block';
+                const perf = r.performance;
+                const ret = perf.total_return_pct || 0;
+                const retEl = document.getElementById('rpt-return');
+                retEl.textContent = fmtPct(ret);
+                retEl.className = 'card-value ' + pnlClass(ret);
+                retEl.style.fontSize = '20px';
+                document.getElementById('rpt-winrate').textContent = (perf.win_rate?.toFixed(1) || '0') + '%';
+                document.getElementById('rpt-trades').textContent = r.weekly_trades?.total_trades || 0;
+
+                const sugEl = document.getElementById('rpt-suggestions');
+                const sugs = r.suggestions || [];
+                if (sugs.length === 0) {
+                    sugEl.innerHTML = '<span style="color:var(--green)">Alles OK - keine Verbesserungen noetig</span>';
+                } else {
+                    sugEl.innerHTML = sugs.map(s => {
+                        const color = s.prioritaet === 'HOCH' ? 'var(--red)' : s.prioritaet === 'MITTEL' ? 'var(--orange)' : 'var(--green)';
+                        return `<div style="margin-bottom:6px;padding:6px;background:var(--bg-input);border-radius:6px;border-left:3px solid ${color}">
+                            <span style="color:${color};font-weight:bold;font-size:11px">${s.prioritaet}</span>
+                            <span style="color:var(--text-dim);font-size:11px"> ${s.bereich}</span>
+                            <div style="margin-top:2px">${s.vorschlag}</div>
+                            <div style="color:var(--accent);font-size:11px;margin-top:2px">${s.aktion}</div>
+                        </div>`;
+                    }).join('');
+                }
+            }
+        }
+    } catch (e) { console.error('Report load:', e); }
+
+    // Lade Discovery Ergebnisse
+    try {
+        const res = await apiFetch('/api/discovery');
+        if (res) {
+            const d = await res.json();
+            if (d.new_found > 0) {
+                document.getElementById('discovery-results').style.display = 'block';
+                document.getElementById('disc-found').textContent = d.new_found;
+                document.getElementById('disc-evaluated').textContent = d.evaluated;
+                document.getElementById('disc-added').textContent = d.added;
+
+                const tbody = document.getElementById('disc-top-table');
+                tbody.innerHTML = '';
+                (d.top_10 || []).forEach(a => {
+                    const scoreColor = a.score >= 15 ? 'var(--green)' : a.score >= 0 ? 'var(--text)' : 'var(--red)';
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="font-weight:600">${a.symbol}</td>
+                        <td>${a.name}</td>
+                        <td><span class="badge badge-blue">${a.class}</span></td>
+                        <td style="color:${scoreColor};font-weight:700">${a.score?.toFixed(1) || '--'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        }
+    } catch (e) { console.error('Discovery load:', e); }
+
+    // Lade PDF-Liste
+    try {
+        const res = await apiFetch('/api/weekly-report/pdfs');
+        if (res) {
+            const data = await res.json();
+            if (data.pdfs && data.pdfs.length > 0) {
+                document.getElementById('pdf-list-card').style.display = 'block';
+                document.getElementById('pdf-list').innerHTML = data.pdfs.map(p =>
+                    `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid var(--border)">
+                        <span>${p.filename}</span>
+                        <span style="color:var(--text-dim);font-size:12px">${p.size_kb} KB</span>
+                    </div>`
+                ).join('');
+            }
+        }
+    } catch (e) { console.error('PDF list load:', e); }
+}
+
+async function generateReport() {
+    showToast('Report wird generiert...');
+    try {
+        const res = await apiFetch('/api/weekly-report/send', { method: 'POST' });
+        if (res) {
+            const data = await res.json();
+            if (data.error) {
+                showToast('Fehler: ' + data.error);
+            } else {
+                showToast('Report generiert! ' + data.trades_this_week + ' Trades diese Woche');
+                loadReports();
+            }
+        }
+    } catch (e) {
+        showToast('Report-Fehler: ' + e.message);
+    }
+}
+
+async function downloadReportPdf() {
+    showToast('PDF wird erstellt...');
+    try {
+        const res = await apiFetch('/api/weekly-report/pdf');
+        if (res && res.ok) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'InvestPilot_Report.pdf';
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('PDF heruntergeladen');
+        } else {
+            showToast('PDF nicht verfuegbar');
+        }
+    } catch (e) {
+        showToast('PDF-Fehler: ' + e.message);
+    }
+}
+
+async function runDiscovery() {
+    showToast('Asset Discovery gestartet... (kann 2-3 Min. dauern)');
+    try {
+        const res = await apiFetch('/api/discovery/run', { method: 'POST' });
+        if (res) {
+            const data = await res.json();
+            if (data.error) {
+                showToast('Fehler: ' + data.error);
+            } else {
+                showToast(`Discovery: ${data.new_found} neue, ${data.added} hinzugefuegt`);
+                loadReports();
+            }
+        }
+    } catch (e) {
+        showToast('Discovery-Fehler: ' + e.message);
+    }
 }
 
 // === INIT ===

@@ -291,6 +291,14 @@ tr:hover {
 .btn-primary:hover { opacity: 0.9; }
 .btn-primary:active { transform: scale(0.98); }
 
+.btn-secondary {
+    background: transparent;
+    color: var(--blue);
+    border: 1px solid var(--blue);
+    width: 100%;
+}
+.btn-secondary:hover { background: rgba(96,165,250,0.1); }
+
 .btn-danger {
     background: var(--red);
     color: white;

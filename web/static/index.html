@@ -26,6 +26,7 @@
     <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab" onclick="switchTab('trades')">Trades</button>
     <button class="tab" onclick="switchTab('brain')">Brain</button>
+    <button class="tab" onclick="switchTab('reports')">Reports</button>
     <button class="tab" onclick="switchTab('settings')">Settings</button>
     <button class="tab" onclick="switchTab('logs')">Logs</button>
 </div>
@@ -140,6 +141,80 @@
         <div class="card">
             <div class="card-title">Gelernte Regeln</div>
             <div id="rules-list" style="font-size:13px; color: var(--text-dim)">Keine Regeln</div>
+        </div>
+    </div>
+
+    <!-- === REPORTS TAB === -->
+    <div id="tab-reports" class="tab-content">
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-title">Weekly Report</div>
+                <div class="card-sub">Performance, Brain, Technik, Vorschlaege</div>
+                <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="generateReport()">Report generieren</button>
+                <button class="btn btn-secondary" style="width:100%;margin-top:8px" onclick="downloadReportPdf()">PDF herunterladen</button>
+            </div>
+            <div class="card">
+                <div class="card-title">Asset Discovery</div>
+                <div class="card-sub">eToro nach neuen Assets durchsuchen</div>
+                <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="runDiscovery()">Discovery starten</button>
+            </div>
+        </div>
+
+        <!-- Report Summary -->
+        <div class="card" id="report-summary" style="display:none">
+            <div class="card-title">Letzter Report</div>
+            <div class="grid-3">
+                <div>
+                    <div class="card-sub">Rendite</div>
+                    <div class="card-value" style="font-size:20px" id="rpt-return">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Win Rate</div>
+                    <div class="card-value" style="font-size:20px" id="rpt-winrate">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Trades (Woche)</div>
+                    <div class="card-value" style="font-size:20px" id="rpt-trades">--</div>
+                </div>
+            </div>
+            <div style="margin-top:12px">
+                <div class="card-sub" style="font-weight:bold;margin-bottom:6px">Verbesserungsvorschlaege:</div>
+                <div id="rpt-suggestions" style="font-size:13px;color:var(--text-dim)">--</div>
+            </div>
+        </div>
+
+        <!-- Discovery Results -->
+        <div class="card" id="discovery-results" style="display:none">
+            <div class="card-title">Discovery Ergebnisse</div>
+            <div class="grid-3">
+                <div>
+                    <div class="card-sub">Neue gefunden</div>
+                    <div class="card-value" style="font-size:20px" id="disc-found">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Bewertet</div>
+                    <div class="card-value" style="font-size:20px" id="disc-evaluated">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Hinzugefuegt</div>
+                    <div class="card-value" style="font-size:20px" id="disc-added">--</div>
+                </div>
+            </div>
+            <div style="margin-top:12px">
+                <div class="card-sub" style="font-weight:bold;margin-bottom:6px">Top Entdeckungen:</div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Symbol</th><th>Name</th><th>Klasse</th><th>Score</th></tr></thead>
+                        <tbody id="disc-top-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- PDF Liste -->
+        <div class="card" id="pdf-list-card" style="display:none">
+            <div class="card-title">Gespeicherte Berichte</div>
+            <div id="pdf-list" style="font-size:13px"></div>
         </div>
     </div>
 
