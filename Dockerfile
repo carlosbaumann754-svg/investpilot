@@ -15,8 +15,9 @@ COPY web/ web/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-# Data-Verzeichnis vorbereiten
+# Data-Verzeichnis vorbereiten + Default-Config kopieren
 RUN mkdir -p /app/data/logs
+COPY data/config.json /app/data/config.json
 
 # Port fuer Dashboard
 EXPOSE 8000
