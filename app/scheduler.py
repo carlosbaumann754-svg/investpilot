@@ -70,6 +70,18 @@ def scheduler_loop():
     log.info(f"Trading Flag: {TRADING_FLAG}")
     log.info("=" * 55)
 
+    # Cloud-Restore: Brain-Daten aus letztem Backup wiederherstellen
+    log.info("Cloud-Restore: Pruefe ob Backup vorhanden...")
+    try:
+        from app.persistence import restore_from_cloud
+        restored = restore_from_cloud()
+        if restored:
+            log.info("Cloud-Restore: Learnings erfolgreich wiederhergestellt!")
+        else:
+            log.info("Cloud-Restore: Kein Restore noetig (lokal vorhanden oder kein Backup)")
+    except Exception as e:
+        log.warning(f"Cloud-Restore fehlgeschlagen: {e}")
+
     # Keep-Alive Thread starten (verhindert dass Render Free Tier einschlaeft)
     ka = threading.Thread(target=_keep_alive, daemon=True)
     ka.start()

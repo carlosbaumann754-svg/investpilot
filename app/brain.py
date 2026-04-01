@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.config_manager import load_config, save_config, load_json, save_json
 from app.etoro_client import EtoroClient
+from app.persistence import backup_to_cloud
 
 log = logging.getLogger("TradeBrain")
 
@@ -497,6 +498,10 @@ def run_brain_cycle(portfolio):
         log.info("  -> Keine Anpassung noetig")
 
     report = generate_performance_report()
+
+    # Cloud-Backup nach jedem Brain-Zyklus
+    log.info("\n[+] Cloud-Backup der Learnings...")
+    backup_to_cloud()
 
     log.info("\nBrain-Zyklus abgeschlossen.")
     return report
