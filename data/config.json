@@ -9,6 +9,17 @@
     "strategy": "aggressive_day_trade",
     "max_single_trade_usd": 3000,
     "default_leverage": 2,
+    "max_positions": 20,
+    "min_scanner_score": 15,
+    "scan_interval_cycles": 6,
+    "enabled_asset_classes": [
+      "stocks",
+      "etf",
+      "crypto",
+      "commodities",
+      "forex",
+      "indices"
+    ],
     "portfolio_targets": {
       "TSLA": {"name": "Tesla", "instrument_id": 1397, "allocation_pct": 25, "leverage": 2},
       "NVDA": {"name": "NVIDIA", "instrument_id": 1518, "allocation_pct": 25, "leverage": 2},
