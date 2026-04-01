@@ -99,6 +99,27 @@ def scheduler_loop():
                 time.sleep(INTERVAL_SECONDS)
                 continue
 
+            # --- Freitag 17:00: Asset Discovery ---
+            from app.asset_discovery import is_friday_discovery_time
+            if is_friday_discovery_time():
+                log.info(f"[{datetime.now():%H:%M}] Freitag - Starte Asset Discovery...")
+                try:
+                    from app.asset_discovery import run_weekly_discovery
+                    run_weekly_discovery()
+                except Exception as e:
+                    log.error(f"Asset Discovery Fehler: {e}", exc_info=True)
+
+            # --- Freitag 18:00: Weekly Report ---
+            from app.weekly_report import is_friday_evening
+            if is_friday_evening():
+                log.info(f"[{datetime.now():%H:%M}] Freitag - Sende Weekly Report...")
+                try:
+                    from app.weekly_report import send_weekly_report
+                    send_weekly_report()
+                except Exception as e:
+                    log.error(f"Weekly Report Fehler: {e}", exc_info=True)
+
+            # --- Trading Zyklus ---
             log.info(f"[{datetime.now():%H:%M}] Starte Trading-Zyklus...")
             from app.trader import run_trading_cycle
             run_trading_cycle()

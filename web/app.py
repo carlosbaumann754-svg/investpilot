@@ -315,3 +315,99 @@ async def api_trading_stop(user=Depends(require_auth)):
 async def api_logs(lines: int = 100, user=Depends(require_auth)):
     """Letzte N Zeilen des Trading-Logs."""
     return {"lines": read_log_tail(lines)}
+
+
+@app.get("/api/weekly-report")
+async def api_weekly_report(user=Depends(require_auth)):
+    """Letzter Weekly Report (oder neu generieren)."""
+    report = read_json_safe("weekly_report.json")
+    if report:
+        return report
+    # Noch kein Report vorhanden - on-demand generieren
+    try:
+        from app.weekly_report import generate_weekly_report
+        return generate_weekly_report()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/weekly-report/send")
+async def api_send_weekly_report(user=Depends(require_auth)):
+    """Weekly Report manuell ausloesen und senden."""
+    try:
+        from app.weekly_report import send_weekly_report
+        report = send_weekly_report()
+        return {"status": "ok", "trades_this_week": report.get("weekly_trades", {}).get("total_trades", 0)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/discovery")
+async def api_discovery(user=Depends(require_auth)):
+    """Letzte Asset Discovery Ergebnisse."""
+    result = read_json_safe("discovery_result.json")
+    if result:
+        return result
+    return {"new_found": 0, "evaluated": 0, "added": 0, "message": "Noch keine Discovery gelaufen"}
+
+
+@app.post("/api/discovery/run")
+async def api_run_discovery(user=Depends(require_auth)):
+    """Asset Discovery manuell ausloesen."""
+    try:
+        from app.asset_discovery import run_weekly_discovery
+        result = run_weekly_discovery()
+        return {"status": "ok", **result}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/weekly-report/pdf")
+async def api_weekly_report_pdf(user=Depends(require_auth)):
+    """Letzten PDF-Report herunterladen oder on-demand generieren."""
+    from pathlib import Path
+    import glob as glob_mod
+
+    bericht_dir = Path(__file__).parent.parent / "Bericht"
+    bericht_dir.mkdir(parents=True, exist_ok=True)
+
+    # Neuestes PDF finden
+    pdfs = sorted(bericht_dir.glob("InvestPilot_Report_*.pdf"), reverse=True)
+    if pdfs:
+        return FileResponse(
+            str(pdfs[0]),
+            media_type="application/pdf",
+            filename=pdfs[0].name,
+        )
+
+    # Kein PDF vorhanden - on-demand generieren
+    try:
+        from app.weekly_report import generate_weekly_report
+        from app.report_pdf import generate_pdf
+        report = generate_weekly_report()
+        pdf_path = generate_pdf(report, output_dir=bericht_dir)
+        return FileResponse(
+            str(pdf_path),
+            media_type="application/pdf",
+            filename=pdf_path.name,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF-Erstellung fehlgeschlagen: {e}")
+
+
+@app.get("/api/weekly-report/pdfs")
+async def api_list_pdfs(user=Depends(require_auth)):
+    """Liste aller verfuegbaren PDF-Reports."""
+    from pathlib import Path
+
+    bericht_dir = Path(__file__).parent.parent / "Bericht"
+    if not bericht_dir.exists():
+        return {"pdfs": []}
+
+    pdfs = sorted(bericht_dir.glob("InvestPilot_Report_*.pdf"), reverse=True)
+    return {
+        "pdfs": [
+            {"filename": p.name, "size_kb": p.stat().st_size // 1024}
+            for p in pdfs[:20]
+        ]
+    }
