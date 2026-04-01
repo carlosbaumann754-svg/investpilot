@@ -16,7 +16,7 @@ from app.config_manager import get_data_path
 log = logging.getLogger("Scheduler")
 
 TRADING_FLAG = get_data_path("trading_enabled.flag")
-INTERVAL_SECONDS = 3600  # 1 Stunde
+INTERVAL_SECONDS = 300  # 5 Minuten
 
 
 def is_trading_enabled():
