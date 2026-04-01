@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.log
+*.sqlite
+data/brain_state.json
+data/trade_history.json
+data/logs/
+data/audit.db
+.claude/
+briefings/
+brain_state.json
+trade_history.json
+config.json
+!data/config.json

@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: investpilot
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: TZ
+        value: Europe/Zurich
+      - key: INVESTPILOT_DATA_DIR
+        value: /app/data
+      - key: PYTHONPATH
+        value: /app
+      - key: ETORO_PUBLIC_KEY
+        sync: false
+      - key: ETORO_DEMO_PRIVATE_KEY
+        sync: false
+      - key: ETORO_ENVIRONMENT
+        value: demo
+      - key: DASHBOARD_USERNAME
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false

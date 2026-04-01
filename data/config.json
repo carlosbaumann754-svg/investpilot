@@ -1,0 +1,38 @@
+{
+  "etoro": {
+    "username": "carlosbaumann777",
+    "base_url": "https://public-api.etoro.com/api/v1",
+    "environment": "demo"
+  },
+  "demo_trading": {
+    "enabled": true,
+    "strategy": "aggressive_day_trade",
+    "max_single_trade_usd": 3000,
+    "default_leverage": 2,
+    "portfolio_targets": {
+      "TSLA": {"name": "Tesla", "instrument_id": 1397, "allocation_pct": 25, "leverage": 2},
+      "NVDA": {"name": "NVIDIA", "instrument_id": 1518, "allocation_pct": 25, "leverage": 2},
+      "AMZN": {"name": "Amazon", "instrument_id": 1026, "allocation_pct": 15, "leverage": 2},
+      "GOOGL":{"name": "Alphabet", "instrument_id": 1002, "allocation_pct": 10, "leverage": 2},
+      "AAPL": {"name": "Apple", "instrument_id": 6408, "allocation_pct": 10, "leverage": 2},
+      "MSFT": {"name": "Microsoft", "instrument_id": 1139, "allocation_pct": 10, "leverage": 2},
+      "QQQ":  {"name": "NASDAQ 100 ETF", "instrument_id": 1321, "allocation_pct": 5, "leverage": 1}
+    },
+    "rebalance_threshold_pct": 2,
+    "stop_loss_pct": -3,
+    "take_profit_pct": 5
+  },
+  "alerts": {
+    "price_change_threshold_percent": 3.0,
+    "daily_loss_alert_percent": -2.0,
+    "daily_gain_alert_percent": 5.0
+  },
+  "market_indices": [
+    {"symbol": "^GSPC", "name": "S&P 500"},
+    {"symbol": "^IXIC", "name": "NASDAQ"},
+    {"symbol": "^SSMI", "name": "SMI"},
+    {"symbol": "^GDAXI", "name": "DAX"},
+    {"symbol": "^STOXX50E", "name": "EURO STOXX 50"}
+  ],
+  "monthly_budget_chf": 1500
+}

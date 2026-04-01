@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>InvestPilot Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+    <h1>InvestPilot</h1>
+    <div class="trading-toggle">
+        <span class="toggle-label" id="toggle-label">OFF</span>
+        <label class="toggle-switch">
+            <input type="checkbox" id="trading-toggle" onchange="toggleTrading(this.checked)">
+            <span class="toggle-slider"></span>
+        </label>
+    </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+    <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
+    <button class="tab" onclick="switchTab('trades')">Trades</button>
+    <button class="tab" onclick="switchTab('brain')">Brain</button>
+    <button class="tab" onclick="switchTab('settings')">Settings</button>
+    <button class="tab" onclick="switchTab('logs')">Logs</button>
+</div>
+
+<!-- CONTENT -->
+<div class="content">
+
+    <!-- === DASHBOARD TAB === -->
+    <div id="tab-dashboard" class="tab-content active">
+        <div class="card">
+            <div class="card-title">Portfolio-Wert</div>
+            <div class="card-value" id="total-value">--</div>
+            <div class="card-sub" id="total-pnl">--</div>
+        </div>
+
+        <div class="grid-3">
+            <div class="card">
+                <div class="card-title">Cash</div>
+                <div class="card-value" style="font-size:18px" id="cash-value">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Investiert</div>
+                <div class="card-value" style="font-size:18px" id="invested-value">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Positionen</div>
+                <div class="card-value" style="font-size:18px" id="num-positions">--</div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-title">Brain Status</div>
+                <div id="brain-regime" class="badge badge-blue">--</div>
+                <div class="card-sub" id="brain-stats">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Trading</div>
+                <div id="trading-status-badge" class="badge badge-green">--</div>
+                <div class="card-sub" id="last-run">--</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Positionen</div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>ID</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th></tr>
+                    </thead>
+                    <tbody id="positions-table"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- === TRADES TAB === -->
+    <div id="tab-trades" class="tab-content">
+        <div class="card">
+            <div class="card-title">Trade-Historie</div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Zeit</th><th>Aktion</th><th>Symbol</th><th>Betrag</th><th>Lev</th></tr>
+                    </thead>
+                    <tbody id="trades-table"></tbody>
+                </table>
+            </div>
+            <button class="btn btn-primary" style="margin-top:12px" onclick="loadMoreTrades()">Mehr laden</button>
+        </div>
+    </div>
+
+    <!-- === BRAIN TAB === -->
+    <div id="tab-brain" class="tab-content">
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-title">Marktregime</div>
+                <div class="card-value" style="font-size:20px" id="brain-regime-detail">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Laeufe</div>
+                <div class="card-value" style="font-size:20px" id="brain-runs">--</div>
+            </div>
+        </div>
+        <div class="grid-3">
+            <div class="card">
+                <div class="card-title">Win-Rate</div>
+                <div class="card-value" style="font-size:18px" id="brain-winrate">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Sharpe</div>
+                <div class="card-value" style="font-size:18px" id="brain-sharpe">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Regeln</div>
+                <div class="card-value" style="font-size:18px" id="brain-rules">--</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Instrument Scores</div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>ID</th><th>Score</th><th>Avg %</th><th>Win %</th><th>Trend</th></tr>
+                    </thead>
+                    <tbody id="scores-table"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Gelernte Regeln</div>
+            <div id="rules-list" style="font-size:13px; color: var(--text-dim)">Keine Regeln</div>
+        </div>
+    </div>
+
+    <!-- === SETTINGS TAB === -->
+    <div id="tab-settings" class="tab-content">
+        <div class="card">
+            <div class="card-title">Strategie</div>
+            <form id="settings-form" onsubmit="saveSettings(event)">
+                <div class="form-group">
+                    <label>Strategie-Vorlage</label>
+                    <select id="cfg-strategy" onchange="onStrategyPreset(this.value)">
+                        <option value="aggressive_day_trade">Aggressiv (Day Trade)</option>
+                        <option value="balanced_growth">Ausgewogen (Growth)</option>
+                        <option value="conservative_etf">Konservativ (ETF)</option>
+                        <option value="custom">Eigene Strategie</option>
+                    </select>
+                </div>
+                <div id="strategy-desc" class="card-sub" style="margin:-4px 0 12px; font-size:12px"></div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>Stop-Loss (%)</label>
+                        <input type="number" id="cfg-sl" step="0.5" min="-50" max="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Take-Profit (%)</label>
+                        <input type="number" id="cfg-tp" step="0.5" min="0" max="100">
+                    </div>
+                </div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>Rebalance-Schwelle (%)</label>
+                        <input type="number" id="cfg-rebalance" step="0.5" min="1" max="20">
+                    </div>
+                    <div class="form-group">
+                        <label>Default Leverage</label>
+                        <select id="cfg-leverage">
+                            <option value="1">1x</option>
+                            <option value="2">2x</option>
+                            <option value="5">5x</option>
+                            <option value="10">10x</option>
+                            <option value="25">25x</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Max. Einzeltrade (USD)</label>
+                    <input type="number" id="cfg-max-trade" step="100" min="100" max="50000">
+                </div>
+                <button type="submit" class="btn btn-primary">Speichern</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Portfolio-Allokation</div>
+            <div id="allocation-editor"></div>
+        </div>
+
+        <div class="card" style="margin-top:20px">
+            <button class="btn btn-danger" style="width:100%" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <!-- === LOGS TAB === -->
+    <div id="tab-logs" class="tab-content">
+        <div class="card">
+            <div class="card-title">Trading Log (Live)</div>
+            <div class="log-viewer" id="log-viewer">Lade Logs...</div>
+        </div>
+    </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
