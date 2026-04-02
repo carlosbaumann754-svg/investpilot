@@ -1,0 +1,175 @@
+{
+  "runs": [
+    {
+      "timestamp": "2026-04-02T13:53:20.650371",
+      "action": "optimized",
+      "previous_params": {
+        "min_scanner_score": 15,
+        "stop_loss_pct": -3,
+        "take_profit_pct": 5,
+        "use_ml_scoring": false
+      },
+      "new_params": {
+        "min_scanner_score": 20,
+        "stop_loss_pct": -12,
+        "take_profit_pct": 15,
+        "use_ml_scoring": false
+      },
+      "details": {
+        "action": "optimized",
+        "timestamp": "2026-04-02T13:53:20.650282",
+        "changes": {
+          "min_scanner_score": {
+            "old": 15,
+            "new": 20
+          },
+          "stop_loss_pct": {
+            "old": -3,
+            "new": -12
+          },
+          "take_profit_pct": {
+            "old": 5,
+            "new": 15
+          }
+        },
+        "grid_search": {
+          "best_params": {
+            "min_scanner_score": 20,
+            "stop_loss_pct": -12,
+            "take_profit_pct": 15
+          },
+          "best_oos_sharpe": 0.51,
+          "top_5": [
+            {
+              "params": {
+                "min_scanner_score": 20,
+                "stop_loss_pct": -12,
+                "take_profit_pct": 15
+              },
+              "oos_sharpe": 0.51,
+              "oos_return": -9.04,
+              "oos_max_dd": 83.89,
+              "oos_win_rate": 47.5,
+              "oos_trades": 61,
+              "ins_sharpe": 0.8,
+              "ins_return": 93.82
+            },
+            {
+              "params": {
+                "min_scanner_score": 20,
+                "stop_loss_pct": -8,
+                "take_profit_pct": 15
+              },
+              "oos_sharpe": 0.38,
+              "oos_return": -18.12,
+              "oos_max_dd": 78.83,
+              "oos_win_rate": 39.7,
+              "oos_trades": 78,
+              "ins_sharpe": 0.64,
+              "ins_return": 2.54
+            },
+            {
+              "params": {
+                "min_scanner_score": 20,
+                "stop_loss_pct": -12,
+                "take_profit_pct": 12
+              },
+              "oos_sharpe": 0.37,
+              "oos_return": -18.32,
+              "oos_max_dd": 82.05,
+              "oos_win_rate": 48.6,
+              "oos_trades": 72,
+              "ins_sharpe": 0.63,
+              "ins_return": -21.82
+            },
+            {
+              "params": {
+                "min_scanner_score": 20,
+                "stop_loss_pct": -5,
+                "take_profit_pct": 15
+              },
+              "oos_sharpe": 0.36,
+              "oos_return": -16.97,
+              "oos_max_dd": 68.69,
+              "oos_win_rate": 31.7,
+              "oos_trades": 101,
+              "ins_sharpe": 0.71,
+              "ins_return": 73.83
+            },
+            {
+              "params": {
+                "min_scanner_score": 20,
+                "stop_loss_pct": -5,
+                "take_profit_pct": 12
+              },
+              "oos_sharpe": 0.28,
+              "oos_return": -19.69,
+              "oos_max_dd": 69.94,
+              "oos_win_rate": 37.0,
+              "oos_trades": 108,
+              "ins_sharpe": 0.77,
+              "ins_return": 124.82
+            }
+          ],
+          "total_tested": 52
+        },
+        "ml_comparison": {
+          "fixed_weights": {
+            "oos_sharpe": -1.5,
+            "oos_return": -80.98,
+            "oos_win_rate": 40.2
+          },
+          "ml_scoring": null,
+          "recommendation": "keep_fixed",
+          "reason": "ML nicht trainiert oder nicht besser"
+        },
+        "asset_class_params": {
+          "stocks": {
+            "sl_pct": -2.8,
+            "tp_pct": 5.6,
+            "avg_volatility": 29.79
+          },
+          "etf": {
+            "sl_pct": -2.4,
+            "tp_pct": 4.8,
+            "avg_volatility": 24.91
+          },
+          "crypto": {
+            "sl_pct": -5.8,
+            "tp_pct": 11.6,
+            "avg_volatility": 61.22
+          },
+          "commodities": {
+            "sl_pct": -5.1,
+            "tp_pct": 10.2,
+            "avg_volatility": 54.46
+          },
+          "forex": {
+            "sl_pct": -2,
+            "tp_pct": 4,
+            "avg_volatility": 7.59
+          },
+          "indices": {
+            "sl_pct": -3,
+            "tp_pct": 6,
+            "avg_volatility": 1.8
+          }
+        },
+        "min_expected_return_pct": 0.78,
+        "current_params": {
+          "min_scanner_score": 15,
+          "stop_loss_pct": -3,
+          "take_profit_pct": 5,
+          "use_ml_scoring": false
+        },
+        "new_params": {
+          "min_scanner_score": 20,
+          "stop_loss_pct": -12,
+          "take_profit_pct": 15,
+          "use_ml_scoring": false
+        }
+      }
+    }
+  ],
+  "last_run": "2026-04-02T13:53:20.650377"
+}
