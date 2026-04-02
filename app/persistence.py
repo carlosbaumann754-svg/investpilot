@@ -38,6 +38,7 @@ BACKUP_FILES = [
     "weekly_report.json",
     "backtest_results.json",
     "ml_model.json",
+    "optimization_history.json",
 ]
 
 

@@ -40,7 +40,7 @@ function switchTab(name) {
     if (name === 'trades') loadTrades(true);
     if (name === 'brain') loadBrain();
     if (name === 'reports') loadReports();
-    if (name === 'backtest') loadBacktest();
+    if (name === 'backtest') { loadBacktest(); loadOptimizer(); }
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
 }
@@ -776,6 +776,132 @@ async function trainML() {
     } finally {
         btn.disabled = false;
         btn.textContent = 'Train ML Model';
+    }
+}
+
+// === OPTIMIZER ===
+
+async function loadOptimizer() {
+    try {
+        const res = await apiFetch('/api/optimizer');
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        renderOptimizer(data);
+    } catch (e) {
+        console.error('Optimizer load error:', e);
+    }
+}
+
+function renderOptimizer(data) {
+    const runs = data.runs || [];
+    if (!runs.length) {
+        showToast('Noch keine Optimierung gelaufen');
+        return;
+    }
+
+    const last = runs[runs.length - 1];
+    const details = last.details || {};
+
+    // Status card
+    const card = document.getElementById('opt-status-card');
+    card.style.display = 'block';
+
+    const actionEl = document.getElementById('opt-action');
+    actionEl.textContent = last.action || '--';
+    actionEl.className = last.action === 'optimized' ? 'card-value positive' : 'card-value';
+
+    const ts = last.timestamp ? new Date(last.timestamp) : null;
+    document.getElementById('opt-time').textContent = ts
+        ? ts.toLocaleDateString('de-DE') + ' ' + ts.toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit'})
+        : '--';
+
+    const gs = details.grid_search || {};
+    document.getElementById('opt-tested').textContent = gs.total_tested || '--';
+    document.getElementById('opt-sharpe').textContent = gs.best_oos_sharpe != null
+        ? gs.best_oos_sharpe.toFixed(2) : '--';
+
+    // Changes
+    const changes = last.details?.changes || {};
+    const changesTable = document.getElementById('opt-changes-table');
+    const changesCard = document.getElementById('opt-changes-card');
+
+    if (Object.keys(changes).length > 0) {
+        changesCard.style.display = 'block';
+        changesTable.innerHTML = '';
+        for (const [key, val] of Object.entries(changes)) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${key}</td>
+                <td style="color:var(--text-dim)">${val.old}</td>
+                <td style="color:var(--green);font-weight:bold">${val.new}</td>`;
+            changesTable.appendChild(tr);
+        }
+    }
+
+    // History
+    if (runs.length > 1) {
+        const histCard = document.getElementById('opt-history-card');
+        histCard.style.display = 'block';
+        const histTable = document.getElementById('opt-history-table');
+        histTable.innerHTML = '';
+
+        for (const run of runs.slice().reverse().slice(0, 10)) {
+            const tr = document.createElement('tr');
+            const rts = run.timestamp ? new Date(run.timestamp).toLocaleDateString('de-DE') : '?';
+            const rchanges = run.details?.changes || {};
+            const changeList = Object.entries(rchanges)
+                .map(([k,v]) => `${k}: ${v.old} → ${v.new}`).join(', ') || 'keine';
+            const badge = run.action === 'optimized' ? 'badge-green'
+                : run.action === 'rollback' ? 'badge-red' : 'badge-blue';
+            tr.innerHTML = `<td>${rts}</td>
+                <td><span class="badge ${badge}">${run.action}</span></td>
+                <td style="font-size:12px">${changeList}</td>`;
+            histTable.appendChild(tr);
+        }
+    }
+}
+
+async function runOptimizer() {
+    const btn = document.getElementById('btn-run-optimizer');
+    btn.disabled = true;
+    btn.textContent = 'Optimierung laeuft...';
+    showToast('Optimizer gestartet (kann 5-10 Minuten dauern)...');
+
+    try {
+        const res = await apiFetch('/api/optimizer/run', { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            showToast('Optimierung abgeschlossen: ' + (data.result?.action || 'done'));
+            if (data.result) {
+                loadOptimizer();
+                loadBacktest();
+            }
+        } else {
+            const err = await res?.json();
+            showToast('Optimizer Fehler: ' + (err?.detail || 'Unbekannt'));
+        }
+    } catch (e) {
+        showToast('Optimizer Fehler: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Optimizer starten';
+    }
+}
+
+async function rollbackOptimizer() {
+    if (!confirm('Letzte Optimierung rueckgaengig machen?')) return;
+
+    try {
+        const res = await apiFetch('/api/optimizer/rollback', { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            showToast('Rollback erfolgreich');
+            loadOptimizer();
+        } else {
+            const err = await res?.json();
+            showToast('Rollback Fehler: ' + (err?.detail || 'Unbekannt'));
+        }
+    } catch (e) {
+        showToast('Rollback Fehler: ' + e.message);
     }
 }
 

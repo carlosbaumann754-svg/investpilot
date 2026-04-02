@@ -578,6 +578,27 @@ def execute_scanner_trades(client, config, scan_results):
                 if amount < 50:
                     continue
 
+                # Kosten-Filter: Trade muss nach Kosten profitabel sein
+                try:
+                    from app.optimizer import calculate_min_expected_return, get_asset_class_params
+                    min_return = config.get("min_expected_return_pct", 0)
+                    if min_return <= 0:
+                        min_return = calculate_min_expected_return()
+                    tp_check = dt_config.get("take_profit_pct", 5)
+                    # Asset-Klassen-spezifische SL/TP
+                    ac_params = get_asset_class_params(config)
+                    if asset_class in ac_params:
+                        ac = ac_params[asset_class]
+                        stop_loss_pct = ac.get("sl_pct", stop_loss_pct)
+                        tp_check = ac.get("tp_pct", tp_check)
+                    # Erwarteter Return = WinRate * TP - (1-WinRate) * |SL|
+                    # Vereinfacht: TP muss > min_return sein
+                    if tp_check < min_return:
+                        log.info(f"  SKIP {symbol}: TP {tp_check}% < min {min_return}% (Kosten-Filter)")
+                        continue
+                except ImportError:
+                    pass
+
                 # Risk/Reward Check
                 if lm:
                     entry_price = analysis.get("price", 0)

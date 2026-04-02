@@ -73,6 +73,22 @@
     "default_years": 5,
     "default_symbols": null
   },
+  "optimizer": {
+    "enabled": true,
+    "schedule": "sunday_02:00",
+    "max_changes_per_week": 3,
+    "rollback_threshold_pct": -5.0,
+    "min_oos_sharpe_improvement": 0.3
+  },
+  "asset_class_params": {
+    "stocks":      {"sl_pct": -4,  "tp_pct": 8,  "avg_volatility": 2.5},
+    "etf":         {"sl_pct": -3,  "tp_pct": 6,  "avg_volatility": 1.5},
+    "crypto":      {"sl_pct": -8,  "tp_pct": 15, "avg_volatility": 5.0},
+    "commodities": {"sl_pct": -5,  "tp_pct": 10, "avg_volatility": 3.0},
+    "forex":       {"sl_pct": -2,  "tp_pct": 4,  "avg_volatility": 1.0},
+    "indices":     {"sl_pct": -3,  "tp_pct": 6,  "avg_volatility": 1.8}
+  },
+  "min_expected_return_pct": 0.5,
   "alerts": {
     "price_change_threshold_percent": 3.0,
     "daily_loss_alert_percent": -2.0,

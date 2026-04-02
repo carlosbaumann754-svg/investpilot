@@ -600,6 +600,34 @@ def walk_forward_validate(histories, config=None, train_pct=0.8):
 # ORCHESTRATOR
 # ============================================================
 
+def quick_walk_forward(histories, config):
+    """Schneller Walk-Forward nur fuer Optimizer Grid-Search (ohne Equity Curve/Monthly)."""
+    train_histories = {}
+    test_histories = {}
+
+    for sym, hist in histories.items():
+        n = len(hist)
+        split = int(n * 0.8)
+        if split < 100 or (n - split) < 30:
+            continue
+        train_histories[sym] = hist.iloc[:split]
+        test_histories[sym] = hist.iloc[split:]
+
+    if not train_histories or not test_histories:
+        return None
+
+    test_trades = simulate_trades(test_histories, config)
+    test_metrics = calculate_metrics(test_trades)
+
+    train_trades = simulate_trades(train_histories, config)
+    train_metrics = calculate_metrics(train_trades)
+
+    return {
+        "in_sample": {"metrics": train_metrics, "trades_count": len(train_trades)},
+        "out_of_sample": {"metrics": test_metrics, "trades_count": len(test_trades)},
+    }
+
+
 def run_full_backtest(config=None, symbols=None, years=5):
     """Full backtest pipeline: download -> simulate -> metrics -> walk-forward.
 

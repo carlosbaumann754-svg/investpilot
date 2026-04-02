@@ -137,6 +137,20 @@ def scheduler_loop():
                 except Exception as e:
                     log.error(f"Weekly Report Fehler: {e}", exc_info=True)
 
+            # --- Sonntag 02:00: Weekly Optimization ---
+            try:
+                from app.optimizer import is_sunday_optimization_time
+                if is_sunday_optimization_time():
+                    log.info(f"[{datetime.now():%H:%M}] Sonntag - Starte Weekly Optimization...")
+                    try:
+                        from app.optimizer import run_weekly_optimization
+                        result = run_weekly_optimization()
+                        log.info(f"Optimization Ergebnis: {result.get('action', 'unknown')}")
+                    except Exception as e:
+                        log.error(f"Weekly Optimization Fehler: {e}", exc_info=True)
+            except ImportError:
+                pass
+
             # --- Trading Zyklus ---
             log.info(f"[{datetime.now():%H:%M}] Starte Trading-Zyklus...")
             from app.trader import run_trading_cycle

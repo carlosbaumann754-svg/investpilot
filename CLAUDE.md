@@ -4,6 +4,7 @@
 Vollautonomer Trading Bot auf der eToro Public API. Selbstlernend, Docker-containerisiert, mit Web-Dashboard.
 Inkl. Risk Management, Leverage Management, Asset-Filters, Market Context, Execution Tracking, Alerting.
 Inkl. Backtesting Engine, ML Scoring (Gradient Boosting), Walk-Forward Validation.
+Inkl. Self-Improvement Optimizer (woechentlich, Grid-Search, Auto-ML, Rollback).
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
@@ -20,6 +21,7 @@ investpilot/
 │   ├── market_scanner.py       # 70+ Assets Technical Analysis + Multi-Timeframe + ML Scoring
 │   ├── backtester.py           # [NEU v3] Backtesting Engine: 5J Historie, Walk-Forward, Kostenmodell
 │   ├── ml_scorer.py            # [NEU v3] ML Scoring: Gradient Boosting, 14 Features, JSON-Serialisierung
+│   ├── optimizer.py            # [NEU v4] Self-Improvement: Grid-Search, Auto-ML, Rollback, Kosten-Filter
 │   ├── risk_manager.py         # Risikomanagement: Position Sizing, Drawdown, Margin, Korrelation
 │   ├── leverage_manager.py     # Dynamischer Hebel, eToro-Limits, Trailing SL, TP-Staffelung
 │   ├── alerts.py               # Telegram/Discord Notifications, Watchdog, Kill Switch
@@ -28,7 +30,7 @@ investpilot/
 │   ├── execution.py            # Slippage-Tracking, Latenz, Performance-Breakdown, Sortino
 │   ├── asset_discovery.py      # Woechentliche neue Asset-Suche (40+ Queries)
 │   ├── scheduler.py            # Daemon Loop (5 Min Intervall, Watchdog, Market Context)
-│   ├── persistence.py          # GitHub Gist Cloud Backup/Restore (14 Dateien)
+│   ├── persistence.py          # GitHub Gist Cloud Backup/Restore (15 Dateien)
 │   ├── weekly_report.py        # Freitag-Reports (JSON + HTML + PDF) inkl. Backtest-Sektion
 │   ├── report_pdf.py           # PDF-Generierung via ReportLab
 │   └── config_manager.py       # Config/Pfad-Management (Docker + lokal)
@@ -118,6 +120,16 @@ investpilot/
 - **Integration**: `market_scanner.score_asset(use_ml=True)` — ML-Score 0-100 → -100/+100 Mapping
 - **Safety Default**: `use_ml_scoring: false` — manuell aktivieren nach Backtest-Validierung
 
+### Self-Improvement Optimizer (`app/optimizer.py`)
+- **Woechentlicher Auto-Lauf**: Sonntag 02:00 via Scheduler
+- **Parameter Grid-Search**: min_score, SL, TP Kombinationen per Walk-Forward getestet
+- **Volatilitaets-basierte SL/TP**: Pro Asset-Klasse berechnet (Crypto -8%, Aktien -4%, Forex -2%)
+- **Kosten-Filter**: Trades muessen min 1.5x Kosten erwarten (`min_expected_return_pct`)
+- **ML Auto-Vergleich**: ML vs Fixed Weights, automatische Aktivierung wenn OOS Sharpe +0.3 besser
+- **Safety Guards**: Rollback bei -5% Wochen-Drawdown, Max 1 grosse Aenderung/Woche
+- **History**: Alle Laeufe in `optimization_history.json` (letzte 52 Wochen)
+- **Dashboard**: Optimizer-Sektion im Backtest-Tab, manueller Trigger + Rollback Button
+
 ## Kern-Module (v1, aktualisiert)
 
 ### eToro Client (`app/etoro_client.py`)
@@ -171,6 +183,9 @@ investpilot/
 - **`POST /api/backtest/run`** — [NEU v3] Backtest ausfuehren (async)
 - **`GET /api/ml-model`** — [NEU v3] ML-Modell Info (Feature Importances, Accuracy)
 - **`POST /api/ml-model/train`** — [NEU v3] ML-Modell trainieren
+- **`GET /api/optimizer`** — [NEU v4] Optimizer Status und History
+- **`POST /api/optimizer/run`** — [NEU v4] Optimization manuell starten
+- **`POST /api/optimizer/rollback`** — [NEU v4] Letzte Optimierung rueckgaengig machen
 - `GET /api/logs` — Scheduler Logs
 - `GET/POST /api/weekly-report` — Weekly Report
 - `GET /api/weekly-report/pdf|pdfs` — PDF Reports
@@ -187,6 +202,9 @@ investpilot/
 - **market_context**: [NEU] VIX-Thresholds, Fear&Greed, Earnings-Filter
 - **backtest**: [NEU v3] Default Years (5), Default Symbols
 - **demo_trading.use_ml_scoring**: [NEU v3] ML Scoring aktivieren (default: false)
+- **optimizer**: [NEU v4] Schedule, Rollback-Threshold, Max Changes/Woche
+- **asset_class_params**: [NEU v4] SL/TP pro Asset-Klasse (Stocks, Crypto, Forex etc.)
+- **min_expected_return_pct**: [NEU v4] Kosten-Filter Schwelle
 - **alerts**: Telegram/Discord Config, Email
 - **strategies**: Core/Growth/Dividend/Tactical Targets
 
@@ -213,6 +231,7 @@ investpilot/
 - `alert_state.json` — [NEU] Watchdog Heartbeat, Alert-Counter
 - `backtest_results.json` — [NEU v3] Backtest-Ergebnisse, Equity Curve, Monthly Returns
 - `ml_model.json` — [NEU v3] Trainiertes ML-Modell (Feature Importances, Thresholds)
+- `optimization_history.json` — [NEU v4] Optimierungs-Laeufe, Parameter-Aenderungen, Rollbacks
 - `scanner_state.json` — Scanner-Cache
 - `discovery_result.json` — Letzte Asset-Discovery
 - `weekly_report.json` — Letzter Weekly Report

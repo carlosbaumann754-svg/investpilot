@@ -599,6 +599,58 @@ async def api_train_ml(user=Depends(require_auth)):
 
 
 # ============================================================
+# OPTIMIZER
+# ============================================================
+
+@app.get("/api/optimizer")
+async def api_optimizer(user=Depends(require_auth)):
+    """Optimizer Status und History."""
+    history = read_json_safe("optimization_history.json")
+    if history:
+        return history
+    return {"runs": [], "last_run": None}
+
+
+@app.post("/api/optimizer/run")
+async def api_run_optimizer(user=Depends(require_auth)):
+    """Weekly Optimization manuell starten."""
+    try:
+        from app.optimizer import run_weekly_optimization
+        result = run_weekly_optimization()
+
+        try:
+            from web.security import log_audit
+            await log_audit(user, "OPTIMIZER_RUN",
+                            f"Action={result.get('action', 'unknown')}")
+        except Exception:
+            pass
+
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/optimizer/rollback")
+async def api_rollback(user=Depends(require_auth)):
+    """Letzte Optimierung rueckgaengig machen."""
+    try:
+        from app.optimizer import rollback_optimization
+        success, msg = rollback_optimization()
+
+        try:
+            from web.security import log_audit
+            await log_audit(user, "OPTIMIZER_ROLLBACK", msg)
+        except Exception:
+            pass
+
+        if success:
+            return {"status": "ok", "message": msg}
+        raise HTTPException(status_code=400, detail=msg)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # PDF REPORTS
 # ============================================================
 

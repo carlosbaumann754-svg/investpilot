@@ -362,6 +362,59 @@
             </div>
             <div class="card-sub" style="margin-top:8px;font-size:11px" id="ml-trained-at">--</div>
         </div>
+
+        <!-- Optimizer Section -->
+        <div class="card" style="border-color:var(--orange)">
+            <div class="card-title" style="color:var(--orange)">Self-Improvement Optimizer</div>
+            <div class="card-sub" style="margin-bottom:12px">Automatische Parameter-Optimierung (woechentlich Sonntag 02:00)</div>
+            <div class="grid-3">
+                <button class="btn btn-primary" id="btn-run-optimizer" onclick="runOptimizer()" style="background:var(--orange)">Optimizer starten</button>
+                <button class="btn btn-secondary" onclick="loadOptimizer()">Status laden</button>
+                <button class="btn btn-danger" id="btn-rollback" onclick="rollbackOptimizer()">Rollback</button>
+            </div>
+        </div>
+
+        <div class="card" id="opt-status-card" style="display:none">
+            <div class="card-title">Letzter Optimierungslauf</div>
+            <div class="grid-4" id="opt-metrics">
+                <div>
+                    <div class="card-sub">Aktion</div>
+                    <div class="card-value" style="font-size:16px" id="opt-action">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Zeitpunkt</div>
+                    <div class="card-value" style="font-size:14px" id="opt-time">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Getestete Kombis</div>
+                    <div class="card-value" style="font-size:16px" id="opt-tested">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Bester OOS Sharpe</div>
+                    <div class="card-value" style="font-size:16px" id="opt-sharpe">--</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" id="opt-changes-card" style="display:none">
+            <div class="card-title">Parameter-Aenderungen</div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Parameter</th><th>Vorher</th><th>Nachher</th></tr></thead>
+                    <tbody id="opt-changes-table"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card" id="opt-history-card" style="display:none">
+            <div class="card-title">Optimierungs-Historie</div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Datum</th><th>Aktion</th><th>Aenderungen</th></tr></thead>
+                    <tbody id="opt-history-table"></tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <!-- === SETTINGS TAB === -->
