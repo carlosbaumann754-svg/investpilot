@@ -54,39 +54,39 @@ def download_history(symbols=None, years=5):
         return {}
 
     if symbols is None:
-        # Representative subset: top liquid assets across classes
-        symbols = [
-            "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META",
-            "JPM", "V", "KO",
-            "SPY", "QQQ", "GLD",
-            "BTC", "ETH",
-            "GOLD", "OIL",
-            "EURUSD",
-        ]
+        # Full ASSET_UNIVERSE for realistic backtesting
+        symbols = list(ASSET_UNIVERSE.keys())
 
     period = f"{years}y"
     histories = {}
     errors = 0
+    batch_size = 10
 
     log.info(f"Downloading {len(symbols)} assets, period={period}...")
 
-    for sym in symbols:
-        info = ASSET_UNIVERSE.get(sym)
-        if not info:
-            continue
-        yf_sym = info["yf"]
-        try:
-            ticker = yf.Ticker(yf_sym)
-            hist = ticker.history(period=period, interval="1d")
-            if hist.empty or len(hist) < 100:
-                log.debug(f"  {sym}: zu wenig Daten ({len(hist)} Tage)")
-                errors += 1
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i + batch_size]
+        for sym in batch:
+            info = ASSET_UNIVERSE.get(sym)
+            if not info:
                 continue
-            histories[sym] = hist
-            log.debug(f"  {sym}: {len(hist)} Tage geladen")
-        except Exception as e:
-            log.debug(f"  {sym} Download-Fehler: {e}")
-            errors += 1
+            yf_sym = info["yf"]
+            try:
+                ticker = yf.Ticker(yf_sym)
+                hist = ticker.history(period=period, interval="1d")
+                if hist.empty or len(hist) < 100:
+                    log.debug(f"  {sym}: zu wenig Daten ({len(hist)} Tage)")
+                    errors += 1
+                    continue
+                histories[sym] = hist
+                log.debug(f"  {sym}: {len(hist)} Tage geladen")
+            except Exception as e:
+                log.debug(f"  {sym} Download-Fehler: {e}")
+                errors += 1
+        # Rate limiting between batches
+        if i + batch_size < len(symbols):
+            import time
+            time.sleep(2)
 
     log.info(f"Download fertig: {len(histories)} OK, {errors} Fehler")
     return histories
@@ -220,8 +220,14 @@ def simulate_trades(histories, config=None):
     min_score = dt.get("min_scanner_score", 15)
     max_positions = dt.get("max_positions", 20)
 
+    # Trailing SL Parameter
+    lev_cfg = config.get("leverage", {})
+    trailing_sl_pct = lev_cfg.get("trailing_sl_pct", 2.0) / 100
+    trailing_activation_pct = lev_cfg.get("trailing_sl_activation_pct", 1.0) / 100
+
     trades = []          # completed trades
     open_positions = {}  # symbol -> {entry_price, entry_date, entry_idx, score}
+    trailing_sl = {}     # symbol -> highest trailing SL level
 
     # We need all symbols to have aligned date indices
     # Get the common date range
@@ -264,6 +270,32 @@ def simulate_trades(histories, config=None):
             entry_price = pos["entry_price"]
             pnl_pct = (current_price - entry_price) / entry_price
 
+            # Trailing SL Update + Check
+            if pnl_pct >= trailing_activation_pct:
+                trail_level = current_price * (1 - trailing_sl_pct)
+                if sym not in trailing_sl or trail_level > trailing_sl[sym]:
+                    trailing_sl[sym] = trail_level
+
+            if sym in trailing_sl and current_price <= trailing_sl[sym]:
+                days_held = (current_date - pos["entry_date"]).days
+                cost = _calc_costs(entry_price, days_held)
+                trades.append({
+                    "symbol": sym,
+                    "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                    "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                    "entry_price": round(entry_price, 4),
+                    "exit_price": round(current_price, 4),
+                    "pnl_pct": round(pnl_pct * 100, 2),
+                    "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                    "cost_pct": round(cost * 100, 3),
+                    "days_held": days_held,
+                    "exit_reason": "TRAILING_SL",
+                    "entry_score": pos["score"],
+                })
+                del open_positions[sym]
+                del trailing_sl[sym]
+                continue
+
             # Stop Loss
             if pnl_pct <= sl_pct:
                 days_held = (current_date - pos["entry_date"]).days
@@ -282,6 +314,8 @@ def simulate_trades(histories, config=None):
                     "entry_score": pos["score"],
                 })
                 del open_positions[sym]
+                if sym in trailing_sl:
+                    del trailing_sl[sym]
                 continue
 
             # Take Profit
@@ -302,6 +336,8 @@ def simulate_trades(histories, config=None):
                     "entry_score": pos["score"],
                 })
                 del open_positions[sym]
+                if sym in trailing_sl:
+                    del trailing_sl[sym]
                 continue
 
         # 2. Score all assets and look for new entries

@@ -76,10 +76,11 @@ function fmtTime(iso) {
 // === DASHBOARD ===
 async function loadDashboard() {
     try {
-        const [portfolioRes, brainRes, statusRes] = await Promise.all([
+        const [portfolioRes, brainRes, statusRes, regimeRes] = await Promise.all([
             apiFetch('/api/portfolio'),
             apiFetch('/api/brain'),
             apiFetch('/api/trading/status'),
+            apiFetch('/api/regime'),
         ]);
 
         if (portfolioRes) {
@@ -132,6 +133,29 @@ async function loadDashboard() {
             badge.textContent = s.enabled ? 'AKTIV' : 'GESTOPPT';
             document.getElementById('last-run').textContent =
                 s.last_run ? `Letzter Lauf: ${s.last_run}` : 'Noch kein Lauf';
+        }
+
+        // Regime Status
+        if (regimeRes) {
+            const r = await regimeRes.json();
+            const el = document.getElementById('regime-status');
+            if (el && !r.error) {
+                let html = '';
+                if (r.vix_level != null) {
+                    const vixClass = r.vix_regime === 'high_fear' ? 'badge-red' : r.vix_regime === 'elevated' ? 'badge-orange' : 'badge-green';
+                    html += `<span class="badge ${vixClass}">VIX ${r.vix_level?.toFixed(1)}</span> `;
+                }
+                if (r.trading_halted) {
+                    html += '<span class="badge badge-red">REGIME HALT</span> ';
+                }
+                if (r.recovery_mode) {
+                    html += '<span class="badge badge-orange">RECOVERY</span> ';
+                }
+                if (!r.trading_halted && !r.recovery_mode) {
+                    html += '<span class="badge badge-green">NORMAL</span>';
+                }
+                el.innerHTML = html;
+            }
         }
     } catch (err) {
         console.error('Dashboard load error:', err);

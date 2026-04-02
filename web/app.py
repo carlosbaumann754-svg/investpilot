@@ -670,3 +670,69 @@ async def api_list_pdfs(user=Depends(require_auth)):
             for p in pdfs[:20]
         ]
     }
+
+
+# ============================================================
+# V5: REGIME, TRAILING SL, SECTORS
+# ============================================================
+
+@app.get("/api/regime")
+async def api_regime(user=Depends(require_auth)):
+    """Aktueller Regime-Status: VIX, Marktregime, Recovery Mode, Trading Halt."""
+    try:
+        from app.market_context import get_current_context
+        from app.risk_manager import check_recovery_mode
+        config = load_config()
+        ctx = get_current_context()
+        rf = config.get("regime_filter", {})
+
+        vix = ctx.get("vix_level")
+        vix_halt = rf.get("vix_halt_threshold", 35)
+
+        brain = read_json_safe("brain_state.json") or {}
+
+        recovery_active, recovery_restrictions = check_recovery_mode(config)
+
+        return {
+            "vix_level": vix,
+            "vix_regime": ctx.get("vix_regime", "unknown"),
+            "market_regime": brain.get("market_regime", "unknown"),
+            "trading_halted": vix is not None and vix > vix_halt,
+            "vix_halt_threshold": vix_halt,
+            "recovery_mode": recovery_active,
+            "recovery_restrictions": recovery_restrictions if recovery_active else None,
+            "regime_filter_enabled": rf.get("enabled", False),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/trailing-sl")
+async def api_trailing_sl(user=Depends(require_auth)):
+    """Aktive Trailing Stop-Loss Levels."""
+    state = read_json_safe("trailing_sl_state.json")
+    if not state:
+        return {"positions": []}
+    positions = []
+    for pos_id, data in state.items():
+        positions.append({
+            "position_id": pos_id,
+            "sl_level": data.get("sl_level"),
+            "peak_price": data.get("peak_price"),
+            "activated": data.get("activated", False),
+        })
+    return {"positions": positions}
+
+
+@app.get("/api/sectors")
+async def api_sectors(user=Depends(require_auth)):
+    """Sektor-Staerke basierend auf letztem Scan."""
+    scan_results = read_json_safe("last_scan.json")
+    if not scan_results:
+        return {"sectors": {}, "message": "Kein Scan verfuegbar"}
+    try:
+        from app.market_scanner import calculate_sector_strength, ASSET_UNIVERSE
+        strength = calculate_sector_strength(scan_results)
+        return {"sectors": strength}
+    except Exception as e:
+        return {"error": str(e)}

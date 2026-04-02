@@ -34,6 +34,7 @@ FEATURE_NAMES = [
     "volatility", "volume_trend",
     "above_sma20", "above_sma50", "golden_cross",
     "rsi_slope", "price_vs_sma20_pct",
+    "atr_pct", "adx", "obv_slope", "vwap_deviation_pct",
 ]
 
 
@@ -41,24 +42,104 @@ FEATURE_NAMES = [
 # FEATURE ENGINEERING
 # ============================================================
 
-def prepare_features(closes, volumes, min_lookback=60):
+def _calc_atr(highs, lows, closes, period=14):
+    """Average True Range als Prozent des Preises."""
+    if len(closes) < period + 1:
+        return 0
+    trs = []
+    for j in range(1, len(closes)):
+        tr = max(highs[j] - lows[j],
+                 abs(highs[j] - closes[j - 1]),
+                 abs(lows[j] - closes[j - 1]))
+        trs.append(tr)
+    if len(trs) < period:
+        return 0
+    atr = sum(trs[-period:]) / period
+    return (atr / closes[-1] * 100) if closes[-1] > 0 else 0
+
+
+def _calc_adx(highs, lows, closes, period=14):
+    """Average Directional Index (Trendstaerke 0-100)."""
+    if len(closes) < period * 2:
+        return 50  # neutral default
+    plus_dm, minus_dm, tr_list = [], [], []
+    for j in range(1, len(closes)):
+        up = highs[j] - highs[j - 1]
+        down = lows[j - 1] - lows[j]
+        plus_dm.append(up if up > down and up > 0 else 0)
+        minus_dm.append(down if down > up and down > 0 else 0)
+        tr_list.append(max(highs[j] - lows[j],
+                           abs(highs[j] - closes[j - 1]),
+                           abs(lows[j] - closes[j - 1])))
+    if len(tr_list) < period:
+        return 50
+    # Smoothed averages
+    atr = sum(tr_list[:period]) / period
+    plus_di = sum(plus_dm[:period]) / period
+    minus_di = sum(minus_dm[:period]) / period
+    for j in range(period, len(tr_list)):
+        atr = (atr * (period - 1) + tr_list[j]) / period
+        plus_di = (plus_di * (period - 1) + plus_dm[j]) / period
+        minus_di = (minus_di * (period - 1) + minus_dm[j]) / period
+    if atr == 0:
+        return 50
+    plus_di_pct = (plus_di / atr) * 100
+    minus_di_pct = (minus_di / atr) * 100
+    di_sum = plus_di_pct + minus_di_pct
+    if di_sum == 0:
+        return 50
+    dx = abs(plus_di_pct - minus_di_pct) / di_sum * 100
+    return min(100, dx)
+
+
+def _calc_obv_slope(closes, volumes, period=20):
+    """On-Balance Volume Steigung (normalisiert)."""
+    if len(closes) < period + 1:
+        return 0
+    obv = [0]
+    for j in range(1, len(closes)):
+        if closes[j] > closes[j - 1]:
+            obv.append(obv[-1] + volumes[j])
+        elif closes[j] < closes[j - 1]:
+            obv.append(obv[-1] - volumes[j])
+        else:
+            obv.append(obv[-1])
+    # Slope: (OBV now - OBV period ago) / abs(OBV period ago) normalisiert
+    recent = obv[-1]
+    past = obv[-period] if len(obv) >= period else obv[0]
+    if abs(past) < 1:
+        return 1.0 if recent > 0 else -1.0
+    return max(-5, min(5, (recent - past) / abs(past)))
+
+
+def prepare_features(closes, volumes, min_lookback=60, highs=None, lows=None):
     """Compute feature matrix from price/volume arrays.
 
     Args:
         closes: list of close prices
         volumes: list of volumes
         min_lookback: minimum bars needed before first feature row
+        highs: list of high prices (optional, for ATR/ADX)
+        lows: list of low prices (optional, for ATR/ADX)
 
     Returns:
         list of feature dicts (one per bar from min_lookback onward)
         list of corresponding bar indices
     """
+    # Use closes as fallback for highs/lows if not provided
+    if highs is None:
+        highs = closes
+    if lows is None:
+        lows = closes
+
     features = []
     indices = []
 
     for i in range(min_lookback, len(closes)):
         window = closes[max(0, i - min_lookback):i + 1]
         vol_window = volumes[max(0, i - min_lookback):i + 1]
+        high_window = highs[max(0, i - min_lookback):i + 1]
+        low_window = lows[max(0, i - min_lookback):i + 1]
 
         if len(window) < 20:
             continue
@@ -100,12 +181,28 @@ def prepare_features(closes, volumes, min_lookback=60):
 
         price_vs_sma20_pct = (current - sma_20) / sma_20 * 100 if sma_20 > 0 else 0
 
+        # New v5 features
+        atr_pct = _calc_atr(high_window, low_window, window)
+        adx = _calc_adx(high_window, low_window, window)
+        obv_slope = _calc_obv_slope(window, vol_window)
+
+        # VWAP deviation
+        if len(high_window) >= 20 and sum(vol_window[-20:]) > 0:
+            typical = [(h + l + c) / 3 for h, l, c in
+                       zip(high_window[-20:], low_window[-20:], window[-20:])]
+            vols_20 = vol_window[-20:]
+            vwap = sum(t * v for t, v in zip(typical, vols_20)) / sum(vols_20)
+            vwap_deviation_pct = (current - vwap) / vwap * 100 if vwap > 0 else 0
+        else:
+            vwap_deviation_pct = 0
+
         features.append([
             rsi, macd_val, macd_signal, macd_hist,
             boll_pos, momentum_5d, momentum_20d,
             volatility, vol_trend,
             above_sma20, above_sma50, golden_cross,
             rsi_slope, price_vs_sma20_pct,
+            atr_pct, adx, obv_slope, vwap_deviation_pct,
         ])
         indices.append(i)
 
@@ -164,8 +261,10 @@ def train_model(histories, train_pct=0.8):
     for sym, hist in histories.items():
         closes = hist["Close"].values.tolist()
         volumes = hist["Volume"].values.tolist()
+        highs = hist["High"].values.tolist() if "High" in hist.columns else None
+        lows = hist["Low"].values.tolist() if "Low" in hist.columns else None
 
-        features, indices = prepare_features(closes, volumes)
+        features, indices = prepare_features(closes, volumes, highs=highs, lows=lows)
         labels, valid_indices = prepare_labels(closes, indices)
 
         # Trim features to match valid labels
@@ -281,12 +380,16 @@ def score_asset_ml(analysis):
     above_sma50 = 1.0 if analysis.get("above_sma50", False) else 0.0
     golden_cross = 1.0 if analysis.get("golden_cross", False) else 0.0
 
-    # We don't have rsi_slope and price_vs_sma20_pct from the analysis dict
-    # Approximate them
+    # Approximate features not directly in analysis dict
     rsi_slope = 0  # not available in single-point analysis
     price = analysis.get("price", 0)
-    # price_vs_sma20 — we can estimate from bollinger position
     price_vs_sma20_pct = (boll_pos - 0.5) * 10  # rough approximation
+
+    # New v5 features
+    atr_pct = analysis.get("atr_pct", 0)
+    adx = analysis.get("adx", 50)
+    obv_slope = analysis.get("obv_slope", 0)
+    vwap_deviation_pct = analysis.get("vwap_deviation_pct", 0)
 
     features = np.array([[
         rsi, macd_val, macd_signal, macd_hist,
@@ -294,6 +397,7 @@ def score_asset_ml(analysis):
         volatility, vol_trend,
         above_sma20, above_sma50, golden_cross,
         rsi_slope, price_vs_sma20_pct,
+        atr_pct, adx, obv_slope, vwap_deviation_pct,
     ]])
 
     try:

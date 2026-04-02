@@ -167,6 +167,21 @@ def calculate_position_size(portfolio_value, stop_loss_pct, config=None):
     return round(max(position_size, 0), 2)
 
 
+def calculate_dynamic_position_size(portfolio_value, stop_loss_pct, signal_score, config=None):
+    """Dynamische Positionsgroesse basierend auf Signal-Score.
+
+    Hoeherer Score = groessere Position (max 150%), niedriger Score = kleiner (min 50%).
+    """
+    if config is None:
+        config = load_config()
+    base_size = calculate_position_size(portfolio_value, stop_loss_pct, config)
+    reference_score = config.get("risk_management", {}).get("dynamic_sizing_reference_score", 30)
+    if reference_score <= 0:
+        reference_score = 30
+    scale = max(0.5, min(1.5, signal_score / reference_score))
+    return round(base_size * scale, 2)
+
+
 def calculate_leveraged_position_size(portfolio_value, stop_loss_pct, leverage, config=None):
     """Position Sizing mit Hebel: Effektives Risiko = Verlust * Hebel."""
     if config is None:
@@ -559,6 +574,41 @@ def validate_trade(portfolio_value, amount_usd, leverage, asset_class,
         log.warning(f"  Trade ABGELEHNT: {' | '.join(reasons)}")
 
     return allowed, reasons
+
+
+def check_recovery_mode(config=None):
+    """Pruefe ob Recovery Mode aktiv ist (Weekly Drawdown zwischen Threshold und Kill-Switch).
+
+    Im Recovery Mode:
+    - Positionsgroessen halbiert
+    - Min Score erhoeht
+    - Kein Leverage
+
+    Returns:
+        (active: bool, restrictions: dict)
+    """
+    if config is None:
+        config = load_config()
+    risk_cfg = config.get("risk_management", {})
+    state = _load_risk_state()
+
+    recovery_threshold = risk_cfg.get("recovery_mode_threshold_pct", -3)
+    weekly_limit = risk_cfg.get("weekly_drawdown_stop_pct", -10)
+    weekly_pnl = state.get("weekly_pnl_pct", 0)
+
+    if recovery_threshold < weekly_pnl or weekly_pnl <= weekly_limit:
+        return False, {}
+
+    # Recovery Mode aktiv
+    restrictions = {
+        "position_size_multiplier": 0.5,
+        "min_score": risk_cfg.get("recovery_mode_min_score", 30),
+        "max_leverage": risk_cfg.get("recovery_mode_max_leverage", 1),
+        "weekly_pnl_pct": weekly_pnl,
+        "reason": f"RECOVERY MODE: Weekly P&L {weekly_pnl:.1f}% (Threshold: {recovery_threshold}%)",
+    }
+    log.warning(f"  {restrictions['reason']}")
+    return True, restrictions
 
 
 def get_risk_summary():

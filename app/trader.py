@@ -269,11 +269,37 @@ def check_stop_loss_take_profit(client, config):
         if p["invested"] <= 0:
             continue
 
-        # Trailing SL Update
+        # Trailing SL Update + Trigger Check
         if lm and p.get("current_price"):
             lm.update_trailing_stop_loss(
                 p["position_id"], p["current_price"], p.get("entry_price", p["current_price"]),
                 p["leverage"], config)
+
+            # Pruefe ob Trailing SL ausgeloest wurde
+            triggered = lm.check_trailing_stop_losses([{
+                "position_id": p["position_id"],
+                "instrument_id": p["instrument_id"],
+                "current_price": p["current_price"],
+            }])
+            if triggered:
+                result = client.close_position(p["position_id"])
+                if result:
+                    trade_entry = {
+                        "timestamp": datetime.now().isoformat(),
+                        "action": "TRAILING_SL_CLOSE",
+                        "instrument_id": p["instrument_id"],
+                        "position_id": p["position_id"],
+                        "pnl_pct": p["pnl_pct"],
+                        "pnl_usd": p["pnl"],
+                        "leverage": p["leverage"],
+                        "trailing_sl_level": triggered[0]["sl_level"],
+                        "status": "executed",
+                    }
+                    save_trade(trade_entry)
+                    actions.append("TRAILING_SL_CLOSE")
+                    if al:
+                        al.alert_trade_executed(trade_entry)
+                continue  # Trailing SL hat Prioritaet, Skip fixed SL/TP
 
         # Stop-Loss Check
         if p["pnl_pct"] <= sl_pct:
@@ -424,13 +450,22 @@ def execute_scanner_trades(client, config, scan_results):
                     dd_reason)
             return []
 
-    # Market Context: Positionsgroessen-Multiplikator
+    # Market Context: Positionsgroessen-Multiplikator + Regime Gate
     ctx_multiplier = 1.0
+    regime_halt = False
     if mc:
         ctx = mc.get_current_context()
         ctx_multiplier = ctx.get("position_size_multiplier", 1.0)
         if ctx_multiplier < 1.0:
             log.info(f"  Marktkontext: Positionsgroessen x{ctx_multiplier}")
+
+        # Regime Halt: VIX ueber Schwelle = keine neuen Kaeufe
+        vix_level = ctx.get("vix_level")
+        vix_halt_threshold = config.get("regime_filter", {}).get("vix_halt_threshold", 35)
+        if vix_level and vix_level > vix_halt_threshold:
+            log.warning(f"  REGIME HALT: VIX {vix_level:.1f} > {vix_halt_threshold} "
+                        f"- Keine neuen Kaeufe")
+            regime_halt = True
 
     # Risk Manager: Margin Safety Check
     if rm:
@@ -485,6 +520,19 @@ def execute_scanner_trades(client, config, scan_results):
                         al.alert_trade_executed(trade_entry)
 
     # --- KAUFEN: Top Opportunities mit vollen Safety-Checks ---
+    if regime_halt:
+        log.info("  BUY-Phase uebersprungen (Regime Halt aktiv)")
+        return trades_executed
+
+    # Recovery Mode: Einschraenkungen bei moderatem Drawdown
+    recovery_active = False
+    recovery_restrictions = {}
+    if rm:
+        recovery_active, recovery_restrictions = rm.check_recovery_mode(config)
+        if recovery_active:
+            log.warning(f"  {recovery_restrictions.get('reason', 'RECOVERY MODE')}")
+            min_score = max(min_score, recovery_restrictions.get("min_score", 30))
+
     buy_candidates = [r for r in scan_results
                       if r["signal"] in ("BUY", "STRONG_BUY")
                       and r["score"] >= min_score
@@ -558,6 +606,19 @@ def execute_scanner_trades(client, config, scan_results):
                     max_size = rm.calculate_leveraged_position_size(
                         total_value, stop_loss_pct, leverage, config)
                     amount = min(amount, max_size)
+
+                # Dynamic Position Sizing: Score-basierte Skalierung
+                if rm and config.get("risk_management", {}).get("dynamic_sizing_enabled", False):
+                    dynamic_size = rm.calculate_dynamic_position_size(
+                        total_value, stop_loss_pct, candidate["score"], config)
+                    amount = min(amount, dynamic_size)
+
+                # Recovery Mode Restrictions
+                if recovery_active:
+                    amount = round(amount * recovery_restrictions.get("position_size_multiplier", 0.5), 2)
+                    max_lev = recovery_restrictions.get("max_leverage", 1)
+                    if leverage > max_lev:
+                        leverage = max_lev
 
                 # Risk Manager: Pre-Trade Validation
                 if rm:

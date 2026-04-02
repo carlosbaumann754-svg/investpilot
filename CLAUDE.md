@@ -5,6 +5,7 @@ Vollautonomer Trading Bot auf der eToro Public API. Selbstlernend, Docker-contai
 Inkl. Risk Management, Leverage Management, Asset-Filters, Market Context, Execution Tracking, Alerting.
 Inkl. Backtesting Engine, ML Scoring (Gradient Boosting), Walk-Forward Validation.
 Inkl. Self-Improvement Optimizer (woechentlich, Grid-Search, Auto-ML, Rollback).
+Inkl. v5 Profitabilitaets-Upgrade: Regime Filter, Trailing SL, Dynamic Sizing, MTF Confluence, Sector Rotation, Recovery Mode.
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
@@ -20,8 +21,8 @@ investpilot/
 │   ├── brain.py                # Selbstlernendes AI-Modul (Walk-Forward, Scoring, Regime)
 │   ├── market_scanner.py       # 70+ Assets Technical Analysis + Multi-Timeframe + ML Scoring
 │   ├── backtester.py           # [NEU v3] Backtesting Engine: 5J Historie, Walk-Forward, Kostenmodell
-│   ├── ml_scorer.py            # [NEU v3] ML Scoring: Gradient Boosting, 14 Features, JSON-Serialisierung
-│   ├── optimizer.py            # [NEU v4] Self-Improvement: Grid-Search, Auto-ML, Rollback, Kosten-Filter
+│   ├── ml_scorer.py            # [v5] ML Scoring: Gradient Boosting, 18 Features (ATR, ADX, OBV, VWAP), JSON
+│   ├── optimizer.py            # [v5] Self-Improvement: Grid-Search inkl. Trailing SL, Auto-ML, Rollback
 │   ├── risk_manager.py         # Risikomanagement: Position Sizing, Drawdown, Margin, Korrelation
 │   ├── leverage_manager.py     # Dynamischer Hebel, eToro-Limits, Trailing SL, TP-Staffelung
 │   ├── alerts.py               # Telegram/Discord Notifications, Watchdog, Kill Switch
@@ -113,7 +114,7 @@ investpilot/
 
 ### ML Scoring (`app/ml_scorer.py`)
 - **Modell**: GradientBoostingClassifier (100 Trees, Depth 4, LR 0.1, Subsample 0.8)
-- **14 Features**: RSI, MACD (3), Bollinger Position, Momentum (5d/20d), Volatilitaet, Volume Trend, SMA-Vergleiche, Golden Cross, RSI Slope, Price vs SMA20%
+- **18 Features**: RSI, MACD (3), Bollinger Position, Momentum (5d/20d), Volatilitaet, Volume Trend, SMA-Vergleiche, Golden Cross, RSI Slope, Price vs SMA20%, ATR%, ADX, OBV Slope, VWAP Deviation%
 - **Label**: Binaer — Preis steigt >1% in naechsten 5 Tagen
 - **Walk-Forward Training**: 80/20 Split, Accuracy/Precision/Recall/F1
 - **JSON-Serialisierung**: Kein Pickle — Feature Importances + Thresholds als JSON (Docker-sicher)
@@ -122,13 +123,60 @@ investpilot/
 
 ### Self-Improvement Optimizer (`app/optimizer.py`)
 - **Woechentlicher Auto-Lauf**: Sonntag 02:00 via Scheduler
-- **Parameter Grid-Search**: min_score, SL, TP Kombinationen per Walk-Forward getestet
+- **Parameter Grid-Search**: min_score, SL, TP, Trailing SL Kombinationen per Walk-Forward getestet
 - **Volatilitaets-basierte SL/TP**: Pro Asset-Klasse berechnet (Crypto -8%, Aktien -4%, Forex -2%)
 - **Kosten-Filter**: Trades muessen min 1.5x Kosten erwarten (`min_expected_return_pct`)
 - **ML Auto-Vergleich**: ML vs Fixed Weights, automatische Aktivierung wenn OOS Sharpe +0.3 besser
 - **Safety Guards**: Rollback bei -5% Wochen-Drawdown, Max 1 grosse Aenderung/Woche
 - **History**: Alle Laeufe in `optimization_history.json` (letzte 52 Wochen)
 - **Dashboard**: Optimizer-Sektion im Backtest-Tab, manueller Trigger + Rollback Button
+
+## Neue Features (v5 — Profitabilitaets-Upgrade)
+
+### Regime Filter (`market_scanner.py`, `trader.py`)
+- **VIX-basiertes Scoring**: Score-Penalties bei elevated/high_fear VIX
+- **Marktregime-Penalty**: Bear -10, Sideways -3 auf Scanner-Score
+- **Regime Halt**: Kompletter Kauf-Stopp wenn VIX > 35 (konfigurierbar)
+- Config: `regime_filter.enabled`, `vix_halt_threshold`, `bear_score_penalty` etc.
+
+### Trailing Stop-Loss Wiring (`trader.py`, `backtester.py`)
+- **Live-Trading**: `leverage_manager.check_trailing_stop_losses()` in SL/TP Loop verdrahtet
+- **Backtester**: Trailing SL Simulation (Aktivierung + Trail), neuer Exit Reason `TRAILING_SL`
+- **Optimizer**: Trailing SL Parameter (pct, activation_pct) im Grid-Search
+
+### Extended ML Features (`ml_scorer.py`, `market_scanner.py`)
+- **18 statt 14 Features**: +ATR% (Average True Range), +ADX (Trendstaerke), +OBV Slope, +VWAP Deviation%
+- `analyze_single_asset()` liefert alle 18 Features im Return-Dict
+- `train_model()` uebergibt High/Low-Daten fuer ATR/ADX Berechnung
+
+### Dynamic Position Sizing (`risk_manager.py`, `trader.py`)
+- `calculate_dynamic_position_size()`: Score-basierte Skalierung (50%-150% der Basisgroesse)
+- Reference Score 30 = 100%, Score 45 = 150%, Score 15 = 50%
+- Config: `risk_management.dynamic_sizing_enabled`, `dynamic_sizing_reference_score`
+
+### Multi-Timeframe Confluence (`market_scanner.py`)
+- **`calculate_confluence_score()`**: 1H (50%) + 15M (30%) + 5M (20%) = -100 bis +100
+- Confirming TFs: +20% Score-Boost, Conflicting TFs: -30% Penalty
+- `enrich_with_mtf()` jetzt in `scan_all_assets()` verdrahtet (war vorher nie aufgerufen!)
+- Config: `multi_timeframe.enabled`, `top_n`, `min_confluence_score`
+
+### Sector Rotation (`market_scanner.py`)
+- **Sektor-Feld** in ASSET_UNIVERSE: tech, finance, health, consumer, growth
+- `calculate_sector_strength()`: Durchschnittsscore pro Sektor
+- `apply_sector_rotation()`: Starker Sektor +15%, schwacher Sektor -15%
+
+### Drawdown Recovery Mode (`risk_manager.py`, `trader.py`)
+- **Aktiviert** bei Weekly Drawdown zwischen -3% und Kill-Switch (-10%)
+- **Einschraenkungen**: Positionsgroessen halbiert, Min Score 30, kein Leverage
+- Config: `recovery_mode_threshold_pct`, `recovery_mode_min_score`, `recovery_mode_max_leverage`
+
+### Expanded Backtest Assets (`backtester.py`)
+- `download_history()` nutzt jetzt volles ASSET_UNIVERSE (64+ Assets) statt 18
+- Batch-Download (10 pro Batch, 2s Pause) fuer Rate Limiting
+
+### Dashboard v5 (`web/app.py`, `index.html`, `app.js`)
+- Regime Status Card: VIX Level, Halt, Recovery Mode Badges
+- API: `/api/regime`, `/api/trailing-sl`, `/api/sectors`
 
 ## Kern-Module (v1, aktualisiert)
 
@@ -155,10 +203,13 @@ investpilot/
 - **Parameter-Performance**: Analyse welche Kombinationen in welchen Regimes funktionieren
 - **Sortino Ratio**: Im Report enthalten
 
-### Market Scanner (`app/market_scanner.py`) — v2
-- 70+ Assets: 35 Aktien, 12 ETFs, 10 Crypto, 5 Commodities, 5 Forex, 4 Indizes
-- **Multi-Timeframe**: 1H Trend + 15M Entry + 5M Stop-Loss
-- **MTF Score-Bonus**: 15% wenn alle Timeframes aligned
+### Market Scanner (`app/market_scanner.py`) — v5
+- 70+ Assets mit Sektor-Tags: tech, finance, health, consumer, growth
+- **Multi-Timeframe**: 1H Trend + 15M Entry + 5M SL — Confluence Score (-100 bis +100)
+- **MTF Confluence**: Confirming +20% Boost, Conflicting -30% Penalty
+- **Sector Rotation**: Starke Sektoren +15%, schwache -15%
+- **Regime Filter**: VIX/Marktregime Score-Penalties
+- **v5 Indikatoren**: ATR%, ADX, OBV Slope, VWAP Deviation in analyze_single_asset()
 
 ## Dashboard Endpoints
 
@@ -186,6 +237,9 @@ investpilot/
 - **`GET /api/optimizer`** — [NEU v4] Optimizer Status und History
 - **`POST /api/optimizer/run`** — [NEU v4] Optimization manuell starten
 - **`POST /api/optimizer/rollback`** — [NEU v4] Letzte Optimierung rueckgaengig machen
+- **`GET /api/regime`** — [NEU v5] VIX-Level, Marktregime, Recovery Mode, Trading Halt
+- **`GET /api/trailing-sl`** — [NEU v5] Aktive Trailing Stop-Loss Levels
+- **`GET /api/sectors`** — [NEU v5] Sektor-Staerke Daten
 - `GET /api/logs` — Scheduler Logs
 - `GET/POST /api/weekly-report` — Weekly Report
 - `GET /api/weekly-report/pdf|pdfs` — PDF Reports
@@ -205,6 +259,10 @@ investpilot/
 - **optimizer**: [NEU v4] Schedule, Rollback-Threshold, Max Changes/Woche
 - **asset_class_params**: [NEU v4] SL/TP pro Asset-Klasse (Stocks, Crypto, Forex etc.)
 - **min_expected_return_pct**: [NEU v4] Kosten-Filter Schwelle
+- **regime_filter**: [NEU v5] VIX Halt Threshold, Bear/Sideways/Fear Penalties
+- **multi_timeframe**: [NEU v5] Enabled, Top N, Min Confluence Score
+- **risk_management.dynamic_sizing_enabled**: [NEU v5] Score-basierte Positionsgroesse
+- **risk_management.recovery_mode_***: [NEU v5] Recovery Mode Thresholds
 - **alerts**: Telegram/Discord Config, Email
 - **strategies**: Core/Growth/Dividend/Tactical Targets
 

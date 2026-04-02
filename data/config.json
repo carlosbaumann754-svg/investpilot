@@ -112,7 +112,27 @@
       "avg_volatility": 1.8
     }
   },
+  "risk_management": {
+    "dynamic_sizing_enabled": true,
+    "dynamic_sizing_reference_score": 30,
+    "recovery_mode_threshold_pct": -3,
+    "recovery_mode_min_score": 30,
+    "recovery_mode_max_leverage": 1
+  },
   "min_expected_return_pct": 0.78,
+  "multi_timeframe": {
+    "enabled": true,
+    "top_n": 20,
+    "min_confluence_score": 40
+  },
+  "regime_filter": {
+    "enabled": true,
+    "bear_score_penalty": -10,
+    "sideways_score_penalty": -3,
+    "high_fear_score_penalty": -15,
+    "elevated_score_penalty": -5,
+    "vix_halt_threshold": 35
+  },
   "alerts": {
     "price_change_threshold_percent": 3.0,
     "daily_loss_alert_percent": -2.0,

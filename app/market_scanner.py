@@ -23,46 +23,46 @@ except ImportError:
 # ============================================================
 
 ASSET_UNIVERSE = {
-    # --- US Large Cap Stocks ---
-    "AAPL":  {"etoro_id": 6408,  "yf": "AAPL",  "class": "stocks",  "name": "Apple"},
-    "MSFT":  {"etoro_id": 1139,  "yf": "MSFT",  "class": "stocks",  "name": "Microsoft"},
-    "GOOGL": {"etoro_id": 1002,  "yf": "GOOGL", "class": "stocks",  "name": "Alphabet"},
-    "AMZN":  {"etoro_id": 1026,  "yf": "AMZN",  "class": "stocks",  "name": "Amazon"},
-    "TSLA":  {"etoro_id": 1397,  "yf": "TSLA",  "class": "stocks",  "name": "Tesla"},
-    "NVDA":  {"etoro_id": 1518,  "yf": "NVDA",  "class": "stocks",  "name": "NVIDIA"},
-    "META":  {"etoro_id": 10548, "yf": "META",  "class": "stocks",  "name": "Meta"},
-    "NFLX":  {"etoro_id": 1049,  "yf": "NFLX",  "class": "stocks",  "name": "Netflix"},
-    "AMD":   {"etoro_id": 1004,  "yf": "AMD",   "class": "stocks",  "name": "AMD"},
-    "INTC":  {"etoro_id": 1033,  "yf": "INTC",  "class": "stocks",  "name": "Intel"},
+    # --- US Large Cap Tech ---
+    "AAPL":  {"etoro_id": 6408,  "yf": "AAPL",  "class": "stocks",  "name": "Apple",     "sector": "tech"},
+    "MSFT":  {"etoro_id": 1139,  "yf": "MSFT",  "class": "stocks",  "name": "Microsoft", "sector": "tech"},
+    "GOOGL": {"etoro_id": 1002,  "yf": "GOOGL", "class": "stocks",  "name": "Alphabet",  "sector": "tech"},
+    "AMZN":  {"etoro_id": 1026,  "yf": "AMZN",  "class": "stocks",  "name": "Amazon",    "sector": "consumer"},
+    "TSLA":  {"etoro_id": 1397,  "yf": "TSLA",  "class": "stocks",  "name": "Tesla",     "sector": "growth"},
+    "NVDA":  {"etoro_id": 1518,  "yf": "NVDA",  "class": "stocks",  "name": "NVIDIA",    "sector": "tech"},
+    "META":  {"etoro_id": 10548, "yf": "META",  "class": "stocks",  "name": "Meta",      "sector": "tech"},
+    "NFLX":  {"etoro_id": 1049,  "yf": "NFLX",  "class": "stocks",  "name": "Netflix",   "sector": "tech"},
+    "AMD":   {"etoro_id": 1004,  "yf": "AMD",   "class": "stocks",  "name": "AMD",       "sector": "tech"},
+    "INTC":  {"etoro_id": 1033,  "yf": "INTC",  "class": "stocks",  "name": "Intel",     "sector": "tech"},
     # --- US Finance & Health ---
-    "JPM":   {"etoro_id": 1036,  "yf": "JPM",   "class": "stocks",  "name": "JPMorgan"},
-    "V":     {"etoro_id": 1180,  "yf": "V",     "class": "stocks",  "name": "Visa"},
-    "MA":    {"etoro_id": 1089,  "yf": "MA",    "class": "stocks",  "name": "Mastercard"},
-    "UNH":   {"etoro_id": 1166,  "yf": "UNH",   "class": "stocks",  "name": "UnitedHealth"},
-    "JNJ":   {"etoro_id": 1035,  "yf": "JNJ",   "class": "stocks",  "name": "Johnson & Johnson"},
-    "PFE":   {"etoro_id": 1094,  "yf": "PFE",   "class": "stocks",  "name": "Pfizer"},
+    "JPM":   {"etoro_id": 1036,  "yf": "JPM",   "class": "stocks",  "name": "JPMorgan",            "sector": "finance"},
+    "V":     {"etoro_id": 1180,  "yf": "V",     "class": "stocks",  "name": "Visa",                "sector": "finance"},
+    "MA":    {"etoro_id": 1089,  "yf": "MA",    "class": "stocks",  "name": "Mastercard",           "sector": "finance"},
+    "UNH":   {"etoro_id": 1166,  "yf": "UNH",   "class": "stocks",  "name": "UnitedHealth",        "sector": "health"},
+    "JNJ":   {"etoro_id": 1035,  "yf": "JNJ",   "class": "stocks",  "name": "Johnson & Johnson",   "sector": "health"},
+    "PFE":   {"etoro_id": 1094,  "yf": "PFE",   "class": "stocks",  "name": "Pfizer",              "sector": "health"},
     # --- US Consumer & Industrial ---
-    "KO":    {"etoro_id": 1038,  "yf": "KO",    "class": "stocks",  "name": "Coca-Cola"},
-    "PG":    {"etoro_id": 1096,  "yf": "PG",    "class": "stocks",  "name": "Procter & Gamble"},
-    "DIS":   {"etoro_id": 1024,  "yf": "DIS",   "class": "stocks",  "name": "Disney"},
-    "BA":    {"etoro_id": 1008,  "yf": "BA",    "class": "stocks",  "name": "Boeing"},
-    "NKE":   {"etoro_id": 1053,  "yf": "NKE",   "class": "stocks",  "name": "Nike"},
-    "MCD":   {"etoro_id": 1044,  "yf": "MCD",   "class": "stocks",  "name": "McDonald's"},
+    "KO":    {"etoro_id": 1038,  "yf": "KO",    "class": "stocks",  "name": "Coca-Cola",           "sector": "consumer"},
+    "PG":    {"etoro_id": 1096,  "yf": "PG",    "class": "stocks",  "name": "Procter & Gamble",    "sector": "consumer"},
+    "DIS":   {"etoro_id": 1024,  "yf": "DIS",   "class": "stocks",  "name": "Disney",              "sector": "consumer"},
+    "BA":    {"etoro_id": 1008,  "yf": "BA",    "class": "stocks",  "name": "Boeing",              "sector": "consumer"},
+    "NKE":   {"etoro_id": 1053,  "yf": "NKE",   "class": "stocks",  "name": "Nike",                "sector": "consumer"},
+    "MCD":   {"etoro_id": 1044,  "yf": "MCD",   "class": "stocks",  "name": "McDonald's",          "sector": "consumer"},
     # --- US Growth / Tech ---
-    "PYPL":  {"etoro_id": 5765,  "yf": "PYPL",  "class": "stocks",  "name": "PayPal"},
-    "SQ":    {"etoro_id": 7961,  "yf": "SQ",    "class": "stocks",  "name": "Block (Square)"},
-    "SHOP":  {"etoro_id": 7905,  "yf": "SHOP",  "class": "stocks",  "name": "Shopify"},
-    "UBER":  {"etoro_id": 14066, "yf": "UBER",  "class": "stocks",  "name": "Uber"},
-    "COIN":  {"etoro_id": 18001, "yf": "COIN",  "class": "stocks",  "name": "Coinbase"},
-    "PLTR":  {"etoro_id": 17181, "yf": "PLTR",  "class": "stocks",  "name": "Palantir"},
-    "SNAP":  {"etoro_id": 8014,  "yf": "SNAP",  "class": "stocks",  "name": "Snap"},
-    "ROKU":  {"etoro_id": 8150,  "yf": "ROKU",  "class": "stocks",  "name": "Roku"},
-    "CRM":   {"etoro_id": 1021,  "yf": "CRM",   "class": "stocks",  "name": "Salesforce"},
-    "ADBE":  {"etoro_id": 1003,  "yf": "ADBE",  "class": "stocks",  "name": "Adobe"},
+    "PYPL":  {"etoro_id": 5765,  "yf": "PYPL",  "class": "stocks",  "name": "PayPal",       "sector": "growth"},
+    "SQ":    {"etoro_id": 7961,  "yf": "SQ",    "class": "stocks",  "name": "Block (Square)","sector": "growth"},
+    "SHOP":  {"etoro_id": 7905,  "yf": "SHOP",  "class": "stocks",  "name": "Shopify",      "sector": "growth"},
+    "UBER":  {"etoro_id": 14066, "yf": "UBER",  "class": "stocks",  "name": "Uber",         "sector": "growth"},
+    "COIN":  {"etoro_id": 18001, "yf": "COIN",  "class": "stocks",  "name": "Coinbase",     "sector": "growth"},
+    "PLTR":  {"etoro_id": 17181, "yf": "PLTR",  "class": "stocks",  "name": "Palantir",     "sector": "tech"},
+    "SNAP":  {"etoro_id": 8014,  "yf": "SNAP",  "class": "stocks",  "name": "Snap",         "sector": "tech"},
+    "ROKU":  {"etoro_id": 8150,  "yf": "ROKU",  "class": "stocks",  "name": "Roku",         "sector": "tech"},
+    "CRM":   {"etoro_id": 1021,  "yf": "CRM",   "class": "stocks",  "name": "Salesforce",   "sector": "tech"},
+    "ADBE":  {"etoro_id": 1003,  "yf": "ADBE",  "class": "stocks",  "name": "Adobe",        "sector": "tech"},
     # --- EU Stocks ---
-    "SAP":   {"etoro_id": 1341,  "yf": "SAP",   "class": "stocks",  "name": "SAP"},
-    "ASML":  {"etoro_id": 5523,  "yf": "ASML",  "class": "stocks",  "name": "ASML"},
-    "LVMH":  {"etoro_id": 1350,  "yf": "MC.PA", "class": "stocks",  "name": "LVMH"},
+    "SAP":   {"etoro_id": 1341,  "yf": "SAP",   "class": "stocks",  "name": "SAP",    "sector": "tech"},
+    "ASML":  {"etoro_id": 5523,  "yf": "ASML",  "class": "stocks",  "name": "ASML",   "sector": "tech"},
+    "LVMH":  {"etoro_id": 1350,  "yf": "MC.PA", "class": "stocks",  "name": "LVMH",   "sector": "consumer"},
     # --- ETFs ---
     "SPY":   {"etoro_id": 1116,  "yf": "SPY",   "class": "etf",     "name": "S&P 500 ETF"},
     "QQQ":   {"etoro_id": 1321,  "yf": "QQQ",   "class": "etf",     "name": "NASDAQ 100 ETF"},
@@ -233,6 +233,24 @@ def analyze_single_asset(symbol, asset_info):
         above_sma50 = current_price > sma_50
         golden_cross = sma_20 > sma_50
 
+        # v5 Features: ATR, ADX, OBV, VWAP
+        highs = hist["High"].tolist() if "High" in hist.columns else closes
+        lows = hist["Low"].tolist() if "Low" in hist.columns else closes
+        from app.ml_scorer import _calc_atr, _calc_adx, _calc_obv_slope
+        atr_pct = _calc_atr(highs, lows, closes)
+        adx = _calc_adx(highs, lows, closes)
+        obv_slope = _calc_obv_slope(closes, volumes)
+
+        # VWAP deviation
+        vwap_deviation_pct = 0
+        if len(highs) >= 20 and sum(volumes[-20:]) > 0:
+            typical = [(h + l + c) / 3 for h, l, c in
+                       zip(highs[-20:], lows[-20:], closes[-20:])]
+            vols_20 = volumes[-20:]
+            vwap = sum(t * v for t, v in zip(typical, vols_20)) / sum(vols_20)
+            if vwap > 0:
+                vwap_deviation_pct = (current_price - vwap) / vwap * 100
+
         return {
             "symbol": symbol,
             "name": asset_info["name"],
@@ -251,6 +269,10 @@ def analyze_single_asset(symbol, asset_info):
             "above_sma20": above_sma20,
             "above_sma50": above_sma50,
             "golden_cross": golden_cross,
+            "atr_pct": round(atr_pct, 2),
+            "adx": round(adx, 1),
+            "obv_slope": round(obv_slope, 3),
+            "vwap_deviation_pct": round(vwap_deviation_pct, 2),
         }
 
     except Exception as e:
@@ -338,6 +360,31 @@ def score_asset(analysis, use_ml=False):
     # Volatilitaets-Malus
     if analysis["volatility"] > 5:
         score *= 0.9  # Hohe Volatilitaet = etwas weniger Vertrauen
+
+    # Regime Filter: Score-Penalties basierend auf VIX und Marktregime
+    try:
+        from app.config_manager import load_config, load_json
+        cfg = load_config()
+        rf = cfg.get("regime_filter", {})
+        if rf.get("enabled", False):
+            from app.market_context import get_current_context
+            ctx = get_current_context()
+            brain = load_json("brain_state.json") or {}
+
+            vix_regime = ctx.get("vix_regime", "normal")
+            market_regime = brain.get("market_regime", "unknown")
+
+            if vix_regime == "high_fear":
+                score += rf.get("high_fear_score_penalty", -15)
+            elif vix_regime == "elevated":
+                score += rf.get("elevated_score_penalty", -5)
+
+            if market_regime == "bear":
+                score += rf.get("bear_score_penalty", -10)
+            elif market_regime == "sideways":
+                score += rf.get("sideways_score_penalty", -3)
+    except Exception:
+        pass
 
     return round(score, 1)
 
@@ -456,6 +503,60 @@ def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
             log.info(f"    [{r['signal']}] {r['symbol']:8s} ({r['class']:12s}) "
                      f"Score={r['score']:+6.1f}  RSI={r['analysis']['rsi']:.0f}")
 
+    # Sector Rotation: Boost/Penalty basierend auf Sektorstaerke
+    results = apply_sector_rotation(results)
+
+    # Multi-Timeframe Confluence (enriches top results)
+    results = enrich_with_mtf(results)
+
+    return results
+
+
+def calculate_sector_strength(results):
+    """Berechne durchschnittliche Staerke pro Sektor.
+
+    Returns:
+        dict {sector: avg_score}
+    """
+    sector_scores = {}
+    for r in results:
+        sector = ASSET_UNIVERSE.get(r["symbol"], {}).get("sector")
+        if not sector:
+            continue
+        if sector not in sector_scores:
+            sector_scores[sector] = []
+        sector_scores[sector].append(r["score"])
+
+    return {s: sum(scores) / len(scores) for s, scores in sector_scores.items() if scores}
+
+
+def apply_sector_rotation(results):
+    """Boost/Penalty basierend auf Sektorstaerke.
+
+    Starker Sektor (ueber Durchschnitt): +15% Boost
+    Schwacher Sektor (5+ unter Durchschnitt): -15% Penalty
+    """
+    sector_strength = calculate_sector_strength(results)
+    if not sector_strength:
+        return results
+
+    avg_strength = sum(sector_strength.values()) / len(sector_strength)
+
+    for r in results:
+        sector = ASSET_UNIVERSE.get(r["symbol"], {}).get("sector")
+        if not sector or sector not in sector_strength:
+            continue
+
+        strength = sector_strength[sector]
+        r["sector_strength"] = round(strength, 1)
+
+        if strength > avg_strength:
+            r["score"] = round(r["score"] * 1.15, 1)
+        elif strength < avg_strength - 5:
+            r["score"] = round(r["score"] * 0.85, 1)
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    log.info(f"  Sector Strength: {', '.join(f'{s}={v:.1f}' for s, v in sorted(sector_strength.items(), key=lambda x: x[1], reverse=True))}")
     return results
 
 
@@ -551,8 +652,57 @@ def analyze_multi_timeframe(symbol, asset_info):
         return None
 
 
-def enrich_with_mtf(scan_results, top_n=20):
-    """Ergaenze die Top-N Scanner-Ergebnisse mit Multi-Timeframe-Daten."""
+def calculate_confluence_score(mtf):
+    """Berechne gewichteten Confluence-Score aus MTF-Daten.
+
+    1H Trend (50%) + 15M Entry (30%) + 5M Alignment (20%) = -100 bis +100.
+    """
+    score = 0
+
+    # 1H Trend: 50% Gewicht
+    trend = mtf.get("trend_1h", "neutral")
+    if trend == "up":
+        score += 50
+    elif trend == "down":
+        score -= 50
+
+    # 15M Entry: 30% Gewicht
+    entry = mtf.get("entry_15m", "neutral")
+    if entry == "buy":
+        score += 30
+    elif entry == "sell":
+        score -= 30
+
+    # 5M RSI alignment: 20% Gewicht (via 15m RSI as proxy)
+    rsi_15m = mtf.get("rsi_15m", 50)
+    if trend == "up" and rsi_15m < 50:
+        score += 20  # Dip in Uptrend = guter Entry
+    elif trend == "down" and rsi_15m > 50:
+        score -= 20  # Bounce in Downtrend = guter Short
+
+    return score
+
+
+def enrich_with_mtf(scan_results, top_n=20, min_confluence=None):
+    """Ergaenze die Top-N Scanner-Ergebnisse mit Multi-Timeframe-Daten.
+
+    Confluence-gewichtete Anpassung:
+    - Confirming TFs: +20% Score-Boost
+    - Conflicting TFs: -30% Penalty
+    """
+    try:
+        from app.config_manager import load_config
+        cfg = load_config()
+        mtf_cfg = cfg.get("multi_timeframe", {})
+        if not mtf_cfg.get("enabled", False):
+            return scan_results
+        if top_n is None:
+            top_n = mtf_cfg.get("top_n", 20)
+        if min_confluence is None:
+            min_confluence = mtf_cfg.get("min_confluence_score", 0)
+    except Exception:
+        pass
+
     enriched = 0
     for result in scan_results[:top_n]:
         if result["signal"] not in ("BUY", "STRONG_BUY", "SELL", "STRONG_SELL"):
@@ -564,14 +714,29 @@ def enrich_with_mtf(scan_results, top_n=20):
 
         mtf = analyze_multi_timeframe(result["symbol"], asset_info)
         if mtf:
+            confluence = calculate_confluence_score(mtf)
+            mtf["confluence_score"] = confluence
             result["mtf"] = mtf
-            # Score-Bonus wenn alle Timeframes aligned sind
-            if mtf["mtf_aligned"]:
-                result["score"] = round(result["score"] * 1.15, 1)  # 15% Bonus
-                log.info(f"    MTF ALIGNED: {result['symbol']} -> Score {result['score']:+.1f}")
+            result["confluence_score"] = confluence
+
+            is_buy = result["signal"] in ("BUY", "STRONG_BUY")
+
+            if (is_buy and confluence >= 40) or (not is_buy and confluence <= -40):
+                # Confirming: +20% boost
+                result["score"] = round(result["score"] * 1.20, 1)
+                log.info(f"    MTF CONFIRMING: {result['symbol']} "
+                         f"Confluence={confluence} -> Score {result['score']:+.1f}")
+            elif (is_buy and confluence < 0) or (not is_buy and confluence > 0):
+                # Conflicting: -30% penalty
+                result["score"] = round(result["score"] * 0.70, 1)
+                log.info(f"    MTF CONFLICTING: {result['symbol']} "
+                         f"Confluence={confluence} -> Score {result['score']:+.1f}")
+
             enriched += 1
 
         time.sleep(0.5)  # Rate limiting
 
+    # Re-sort after score adjustments
+    scan_results.sort(key=lambda x: x["score"], reverse=True)
     log.info(f"  MTF: {enriched} Assets mit Multi-Timeframe angereichert")
     return scan_results

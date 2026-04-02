@@ -34,9 +34,10 @@ ASSET_CLASS_DEFAULTS = {
 
 PARAM_GRID = {
     "min_scanner_score": [20, 30, 40, 50],
-    "stop_loss_pct":     [-3, -5, -8, -12],
-    "take_profit_pct":   [5, 8, 12, 15],
-    "max_positions":     [5, 10, 15],
+    "stop_loss_pct":     [-3, -5, -8],
+    "take_profit_pct":   [5, 8, 12],
+    "trailing_sl_pct":   [1.5, 2.0, 3.0],
+    "trailing_sl_activation_pct": [0.5, 1.0],
 }
 
 # Minimum expected return nach Kosten (Trade muss sich lohnen)
@@ -139,7 +140,9 @@ def run_grid_search(histories, base_config=None):
     results = []
     total_combos = (len(PARAM_GRID["min_scanner_score"]) *
                     len(PARAM_GRID["stop_loss_pct"]) *
-                    len(PARAM_GRID["take_profit_pct"]))
+                    len(PARAM_GRID["take_profit_pct"]) *
+                    len(PARAM_GRID["trailing_sl_pct"]) *
+                    len(PARAM_GRID["trailing_sl_activation_pct"]))
 
     log.info(f"Grid-Search: {total_combos} Kombinationen testen...")
     combo_num = 0
@@ -151,40 +154,48 @@ def run_grid_search(histories, base_config=None):
                 if tp < abs(sl):
                     continue
 
-                combo_num += 1
-                test_config = copy.deepcopy(base_config)
-                test_config["demo_trading"]["min_scanner_score"] = min_score
-                test_config["demo_trading"]["stop_loss_pct"] = sl
-                test_config["demo_trading"]["take_profit_pct"] = tp
+                for trail_sl in PARAM_GRID["trailing_sl_pct"]:
+                    for trail_act in PARAM_GRID["trailing_sl_activation_pct"]:
+                        combo_num += 1
+                        test_config = copy.deepcopy(base_config)
+                        test_config["demo_trading"]["min_scanner_score"] = min_score
+                        test_config["demo_trading"]["stop_loss_pct"] = sl
+                        test_config["demo_trading"]["take_profit_pct"] = tp
+                        if "leverage" not in test_config:
+                            test_config["leverage"] = {}
+                        test_config["leverage"]["trailing_sl_pct"] = trail_sl
+                        test_config["leverage"]["trailing_sl_activation_pct"] = trail_act
 
-                try:
-                    wf = walk_forward_validate(histories, test_config)
-                    if not wf:
-                        continue
+                        try:
+                            wf = walk_forward_validate(histories, test_config)
+                            if not wf:
+                                continue
 
-                    oos = wf["out_of_sample"]["metrics"]
-                    ins = wf["in_sample"]["metrics"]
+                            oos = wf["out_of_sample"]["metrics"]
+                            ins = wf["in_sample"]["metrics"]
 
-                    results.append({
-                        "params": {
-                            "min_scanner_score": min_score,
-                            "stop_loss_pct": sl,
-                            "take_profit_pct": tp,
-                        },
-                        "oos_sharpe": oos.get("sharpe_ratio", -99),
-                        "oos_return": oos.get("total_return_pct", -100),
-                        "oos_max_dd": oos.get("max_drawdown_pct", -100),
-                        "oos_win_rate": oos.get("win_rate_pct", 0),
-                        "oos_trades": oos.get("total_trades", 0),
-                        "ins_sharpe": ins.get("sharpe_ratio", -99),
-                        "ins_return": ins.get("total_return_pct", -100),
-                    })
+                            results.append({
+                                "params": {
+                                    "min_scanner_score": min_score,
+                                    "stop_loss_pct": sl,
+                                    "take_profit_pct": tp,
+                                    "trailing_sl_pct": trail_sl,
+                                    "trailing_sl_activation_pct": trail_act,
+                                },
+                                "oos_sharpe": oos.get("sharpe_ratio", -99),
+                                "oos_return": oos.get("total_return_pct", -100),
+                                "oos_max_dd": oos.get("max_drawdown_pct", -100),
+                                "oos_win_rate": oos.get("win_rate_pct", 0),
+                                "oos_trades": oos.get("total_trades", 0),
+                                "ins_sharpe": ins.get("sharpe_ratio", -99),
+                                "ins_return": ins.get("total_return_pct", -100),
+                            })
 
-                    if combo_num % 10 == 0:
-                        log.info(f"  Grid-Search: {combo_num}/{total_combos} getestet...")
+                            if combo_num % 20 == 0:
+                                log.info(f"  Grid-Search: {combo_num}/{total_combos} getestet...")
 
-                except Exception as e:
-                    log.debug(f"  Combo {min_score}/{sl}/{tp} Fehler: {e}")
+                        except Exception as e:
+                            log.debug(f"  Combo {min_score}/{sl}/{tp}/trail{trail_sl} Fehler: {e}")
 
     # Sortiere nach OOS Sharpe (bestes zuerst)
     results.sort(key=lambda r: r["oos_sharpe"], reverse=True)
@@ -196,6 +207,7 @@ def run_grid_search(histories, base_config=None):
         log.info(f"  Beste Kombi: score>={best['params']['min_scanner_score']}, "
                  f"SL={best['params']['stop_loss_pct']}%, "
                  f"TP={best['params']['take_profit_pct']}%, "
+                 f"Trail={best['params']['trailing_sl_pct']}%@{best['params']['trailing_sl_activation_pct']}%, "
                  f"OOS Sharpe={best['oos_sharpe']:.2f}")
 
     return {
