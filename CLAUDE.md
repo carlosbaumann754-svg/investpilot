@@ -3,6 +3,7 @@
 ## Projekt-Uebersicht
 Vollautonomer Trading Bot auf der eToro Public API. Selbstlernend, Docker-containerisiert, mit Web-Dashboard.
 Inkl. Risk Management, Leverage Management, Asset-Filters, Market Context, Execution Tracking, Alerting.
+Inkl. Backtesting Engine, ML Scoring (Gradient Boosting), Walk-Forward Validation.
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
@@ -16,32 +17,34 @@ investpilot/
 │   ├── etoro_client.py         # eToro REST API Client (demo + real, Key-Variante A/B)
 │   ├── trader.py               # Trading Engine v2 (5-Min-Zyklen, alle Safety-Checks integriert)
 │   ├── brain.py                # Selbstlernendes AI-Modul (Walk-Forward, Scoring, Regime)
-│   ├── market_scanner.py       # 70+ Assets Technical Analysis + Multi-Timeframe
-│   ├── risk_manager.py         # [NEU] Risikomanagement: Position Sizing, Drawdown, Margin, Korrelation
-│   ├── leverage_manager.py     # [NEU] Dynamischer Hebel, eToro-Limits, Trailing SL, TP-Staffelung
-│   ├── alerts.py               # [NEU] Telegram/Discord Notifications, Watchdog, Kill Switch
-│   ├── market_context.py       # [NEU] VIX, Fear&Greed, Makro-Events, Earnings, Saisonalitaet
-│   ├── asset_filters.py        # [NEU] Asset-Klassen-Filter: Zeitfenster, Crypto, Forex, Rohstoffe
-│   ├── execution.py            # [NEU] Slippage-Tracking, Latenz, Performance-Breakdown, Sortino
+│   ├── market_scanner.py       # 70+ Assets Technical Analysis + Multi-Timeframe + ML Scoring
+│   ├── backtester.py           # [NEU v3] Backtesting Engine: 5J Historie, Walk-Forward, Kostenmodell
+│   ├── ml_scorer.py            # [NEU v3] ML Scoring: Gradient Boosting, 14 Features, JSON-Serialisierung
+│   ├── risk_manager.py         # Risikomanagement: Position Sizing, Drawdown, Margin, Korrelation
+│   ├── leverage_manager.py     # Dynamischer Hebel, eToro-Limits, Trailing SL, TP-Staffelung
+│   ├── alerts.py               # Telegram/Discord Notifications, Watchdog, Kill Switch
+│   ├── market_context.py       # VIX, Fear&Greed, Makro-Events, Earnings, Saisonalitaet
+│   ├── asset_filters.py        # Asset-Klassen-Filter: Zeitfenster, Crypto, Forex, Rohstoffe
+│   ├── execution.py            # Slippage-Tracking, Latenz, Performance-Breakdown, Sortino
 │   ├── asset_discovery.py      # Woechentliche neue Asset-Suche (40+ Queries)
 │   ├── scheduler.py            # Daemon Loop (5 Min Intervall, Watchdog, Market Context)
-│   ├── persistence.py          # GitHub Gist Cloud Backup/Restore
-│   ├── weekly_report.py        # Freitag-Reports (JSON + HTML + PDF)
+│   ├── persistence.py          # GitHub Gist Cloud Backup/Restore (14 Dateien)
+│   ├── weekly_report.py        # Freitag-Reports (JSON + HTML + PDF) inkl. Backtest-Sektion
 │   ├── report_pdf.py           # PDF-Generierung via ReportLab
 │   └── config_manager.py       # Config/Pfad-Management (Docker + lokal)
 ├── web/                        # FastAPI Dashboard
-│   ├── app.py                  # 22+ REST Endpoints inkl. Kill Switch, Risk, Exposure
+│   ├── app.py                  # 34 REST Endpoints inkl. Kill Switch, Risk, Backtest, ML
 │   ├── auth.py                 # Login, bcrypt, Sessions
 │   ├── security.py             # Rate Limiting, Audit Log, Failed Login Tracking
 │   ├── data_access.py          # JSON Read/Write, Log Tailing
-│   └── static/                 # Frontend (dark mode, mobile-first)
+│   └── static/                 # Frontend (dark mode, mobile-first, Backtest Tab mit SVG Charts)
 ├── Dockerfile                  # Python 3.11-slim, Port 8000
 ├── docker-compose.yml          # Port 8443:8000, TZ=Europe/Zurich
 ├── render.yaml                 # Render Web Service Config
 ├── deploy_nas.sh               # Synology NAS Deployment
 ├── entrypoint.sh               # Scheduler + Uvicorn Start
 ├── config.json                 # Konfiguration inkl. Risk/Leverage/Filters
-└── requirements.txt            # Dependencies
+└── requirements.txt            # Dependencies (inkl. scikit-learn, numpy)
 ```
 
 ## Neue Module (v2)
@@ -95,6 +98,26 @@ investpilot/
 - **Sortino Ratio**: Berechnung (nur Downside-Volatilitaet)
 - **Execution Stats API**: 7-Tage Statistiken, P95 Latenz
 
+## Neue Module (v3)
+
+### Backtesting Engine (`app/backtester.py`)
+- **Historische Daten**: 5 Jahre OHLCV via yfinance, 18 repraesentative Assets
+- **Scanner-Replikation**: Exakte Nachbildung der `score_asset()` Logik auf historischen Bars
+- **Trade-Simulation**: Positionsmanagement mit SL/TP, Score-Threshold
+- **Transaktionskosten**: Spread 0.15%, Overnight 0.01%/Nacht, Slippage 0.05%
+- **Walk-Forward Validation**: 80/20 Split, In-Sample + Out-of-Sample Metriken
+- **Metriken**: Total Return, Annual Return, Sharpe Ratio, Max Drawdown, Win Rate, Profit Factor
+- **Output**: `backtest_results.json` mit Equity Curve, Monthly Returns, Best/Worst Trades
+
+### ML Scoring (`app/ml_scorer.py`)
+- **Modell**: GradientBoostingClassifier (100 Trees, Depth 4, LR 0.1, Subsample 0.8)
+- **14 Features**: RSI, MACD (3), Bollinger Position, Momentum (5d/20d), Volatilitaet, Volume Trend, SMA-Vergleiche, Golden Cross, RSI Slope, Price vs SMA20%
+- **Label**: Binaer — Preis steigt >1% in naechsten 5 Tagen
+- **Walk-Forward Training**: 80/20 Split, Accuracy/Precision/Recall/F1
+- **JSON-Serialisierung**: Kein Pickle — Feature Importances + Thresholds als JSON (Docker-sicher)
+- **Integration**: `market_scanner.score_asset(use_ml=True)` — ML-Score 0-100 → -100/+100 Mapping
+- **Safety Default**: `use_ml_scoring: false` — manuell aktivieren nach Backtest-Validierung
+
 ## Kern-Module (v1, aktualisiert)
 
 ### eToro Client (`app/etoro_client.py`)
@@ -144,6 +167,10 @@ investpilot/
 - **`GET /api/market-context`** — [NEU] VIX, Fear&Greed, Events
 - **`GET /api/execution-stats`** — [NEU] Slippage, Latenz Stats
 - **`GET /api/performance-breakdown`** — [NEU] Breakdown nach Zeit/Asset
+- **`GET /api/backtest`** — [NEU v3] Letzte Backtest-Ergebnisse
+- **`POST /api/backtest/run`** — [NEU v3] Backtest ausfuehren (async)
+- **`GET /api/ml-model`** — [NEU v3] ML-Modell Info (Feature Importances, Accuracy)
+- **`POST /api/ml-model/train`** — [NEU v3] ML-Modell trainieren
 - `GET /api/logs` — Scheduler Logs
 - `GET/POST /api/weekly-report` — Weekly Report
 - `GET /api/weekly-report/pdf|pdfs` — PDF Reports
@@ -158,6 +185,8 @@ investpilot/
 - **leverage**: [NEU] Hebel-Defaults, Trailing SL, TP-Staffelung, Short-Regeln
 - **asset_filters**: [NEU] Zeitfenster, Buffer, Crypto/Forex-Filter
 - **market_context**: [NEU] VIX-Thresholds, Fear&Greed, Earnings-Filter
+- **backtest**: [NEU v3] Default Years (5), Default Symbols
+- **demo_trading.use_ml_scoring**: [NEU v3] ML Scoring aktivieren (default: false)
 - **alerts**: Telegram/Discord Config, Email
 - **strategies**: Core/Growth/Dividend/Tactical Targets
 
@@ -182,6 +211,8 @@ investpilot/
 - `trailing_sl_state.json` — [NEU] Trailing Stop-Loss Levels
 - `decision_log.json` — [NEU] Trade-Entscheid-Kontext
 - `alert_state.json` — [NEU] Watchdog Heartbeat, Alert-Counter
+- `backtest_results.json` — [NEU v3] Backtest-Ergebnisse, Equity Curve, Monthly Returns
+- `ml_model.json` — [NEU v3] Trainiertes ML-Modell (Feature Importances, Thresholds)
 - `scanner_state.json` — Scanner-Cache
 - `discovery_result.json` — Letzte Asset-Discovery
 - `weekly_report.json` — Letzter Weekly Report
