@@ -282,7 +282,7 @@ def check_stop_loss_take_profit(client, config):
                 "current_price": p["current_price"],
             }])
             if triggered:
-                result = client.close_position(p["position_id"])
+                result = client.close_position(p["position_id"], p["instrument_id"])
                 if result:
                     trade_entry = {
                         "timestamp": datetime.now().isoformat(),
@@ -305,7 +305,7 @@ def check_stop_loss_take_profit(client, config):
         if p["pnl_pct"] <= sl_pct:
             log.warning(f"  STOP-LOSS: Position {p['position_id']} "
                         f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
-            result = client.close_position(p["position_id"])
+            result = client.close_position(p["position_id"], p["instrument_id"])
             if result:
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
@@ -326,7 +326,7 @@ def check_stop_loss_take_profit(client, config):
         elif p["pnl_pct"] >= tp_pct:
             log.info(f"  TAKE-PROFIT: Position {p['position_id']} "
                      f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
-            result = client.close_position(p["position_id"])
+            result = client.close_position(p["position_id"], p["instrument_id"])
             if result:
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
@@ -493,7 +493,7 @@ def execute_scanner_trades(client, config, scan_results):
                          f"(Score={candidate['score']:+.1f}, {candidate['signal']})")
 
                 start_time = time.time()
-                result = client.close_position(p["position_id"])
+                result = client.close_position(p["position_id"], p["instrument_id"])
 
                 if ex and result:
                     ex.track_execution(None, result, candidate["etoro_id"],
@@ -764,7 +764,7 @@ def check_overnight_positions(client, config):
 
     closed = []
     for pos in to_close:
-        result = client.close_position(pos["position_id"])
+        result = client.close_position(pos["position_id"], pos.get("instrument_id"))
         if result:
             trade_entry = {
                 "timestamp": datetime.now().isoformat(),

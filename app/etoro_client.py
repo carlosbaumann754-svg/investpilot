@@ -161,10 +161,13 @@ class EtoroClient:
         log.info(f"  SELL: InstrumentID={instrument_id}, Amount=${amount_usd}")
         return self._post(f"/trading/execution/{self.env}/market-open-orders/by-amount", payload)
 
-    def close_position(self, position_id):
+    def close_position(self, position_id, instrument_id=None):
         """Position schliessen."""
-        log.info(f"  CLOSE: PositionID={position_id}")
-        return self._post(f"/trading/execution/{self.env}/market-close-orders/positions/{position_id}", {})
+        log.info(f"  CLOSE: PositionID={position_id}" + (f", InstrumentID={instrument_id}" if instrument_id else ""))
+        payload = {}
+        if instrument_id:
+            payload["InstrumentID"] = instrument_id
+        return self._post(f"/trading/execution/{self.env}/market-close-orders/positions/{position_id}", payload)
 
     # --- Instruments ---
 
