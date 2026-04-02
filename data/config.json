@@ -21,17 +21,57 @@
       "indices"
     ],
     "portfolio_targets": {
-      "TSLA": {"name": "Tesla", "instrument_id": 1397, "allocation_pct": 25, "leverage": 2},
-      "NVDA": {"name": "NVIDIA", "instrument_id": 1518, "allocation_pct": 25, "leverage": 2},
-      "AMZN": {"name": "Amazon", "instrument_id": 1026, "allocation_pct": 15, "leverage": 2},
-      "GOOGL":{"name": "Alphabet", "instrument_id": 1002, "allocation_pct": 10, "leverage": 2},
-      "AAPL": {"name": "Apple", "instrument_id": 6408, "allocation_pct": 10, "leverage": 2},
-      "MSFT": {"name": "Microsoft", "instrument_id": 1139, "allocation_pct": 10, "leverage": 2},
-      "QQQ":  {"name": "NASDAQ 100 ETF", "instrument_id": 1321, "allocation_pct": 5, "leverage": 1}
+      "TSLA": {
+        "name": "Tesla",
+        "instrument_id": 1397,
+        "allocation_pct": 25,
+        "leverage": 2
+      },
+      "NVDA": {
+        "name": "NVIDIA",
+        "instrument_id": 1518,
+        "allocation_pct": 25,
+        "leverage": 2
+      },
+      "AMZN": {
+        "name": "Amazon",
+        "instrument_id": 1026,
+        "allocation_pct": 15,
+        "leverage": 2
+      },
+      "GOOGL": {
+        "name": "Alphabet",
+        "instrument_id": 1002,
+        "allocation_pct": 10,
+        "leverage": 2
+      },
+      "AAPL": {
+        "name": "Apple",
+        "instrument_id": 6408,
+        "allocation_pct": 10,
+        "leverage": 2
+      },
+      "MSFT": {
+        "name": "Microsoft",
+        "instrument_id": 1139,
+        "allocation_pct": 10,
+        "leverage": 2
+      },
+      "QQQ": {
+        "name": "NASDAQ 100 ETF",
+        "instrument_id": 1321,
+        "allocation_pct": 5,
+        "leverage": 1
+      }
     },
     "rebalance_threshold_pct": 2,
     "stop_loss_pct": -3,
-    "take_profit_pct": 5
+    "take_profit_pct": 5,
+    "use_ml_scoring": false
+  },
+  "backtest": {
+    "default_years": 5,
+    "default_symbols": null
   },
   "alerts": {
     "price_change_threshold_percent": 3.0,
@@ -39,11 +79,26 @@
     "daily_gain_alert_percent": 5.0
   },
   "market_indices": [
-    {"symbol": "^GSPC", "name": "S&P 500"},
-    {"symbol": "^IXIC", "name": "NASDAQ"},
-    {"symbol": "^SSMI", "name": "SMI"},
-    {"symbol": "^GDAXI", "name": "DAX"},
-    {"symbol": "^STOXX50E", "name": "EURO STOXX 50"}
+    {
+      "symbol": "^GSPC",
+      "name": "S&P 500"
+    },
+    {
+      "symbol": "^IXIC",
+      "name": "NASDAQ"
+    },
+    {
+      "symbol": "^SSMI",
+      "name": "SMI"
+    },
+    {
+      "symbol": "^GDAXI",
+      "name": "DAX"
+    },
+    {
+      "symbol": "^STOXX50E",
+      "name": "EURO STOXX 50"
+    }
   ],
   "monthly_budget_chf": 1500
 }

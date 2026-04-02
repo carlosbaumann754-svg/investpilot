@@ -237,6 +237,35 @@ def _generate_improvement_suggestions(brain, trade_stats, tech_checks, tech_warn
     return suggestions
 
 
+def _get_backtest_summary():
+    """Hole letzte Backtest-Ergebnisse fuer den Report."""
+    bt = load_json("backtest_results.json")
+    if not bt:
+        return None
+
+    fp = bt.get("full_period", {})
+    metrics = fp.get("metrics", {})
+    wf_is = bt.get("in_sample", {})
+    wf_os = bt.get("out_of_sample", {})
+
+    ml = load_json("ml_model.json")
+
+    return {
+        "timestamp": bt.get("timestamp", ""),
+        "total_return_pct": metrics.get("total_return_pct", 0),
+        "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+        "max_drawdown_pct": metrics.get("max_drawdown_pct", 0),
+        "win_rate_pct": metrics.get("win_rate_pct", 0),
+        "total_trades": metrics.get("total_trades", 0),
+        "profit_factor": metrics.get("profit_factor", 0),
+        "in_sample_return": wf_is.get("metrics", {}).get("total_return_pct", 0) if wf_is else 0,
+        "out_of_sample_return": wf_os.get("metrics", {}).get("total_return_pct", 0) if wf_os else 0,
+        "ml_active": ml is not None,
+        "ml_accuracy": ml.get("test_accuracy", 0) if ml else 0,
+        "ml_f1": ml.get("test_f1", 0) if ml else 0,
+    }
+
+
 def generate_weekly_report():
     """Erstelle den vollstaendigen Wochen-Bericht."""
     log.info("Generiere Weekly Report...")
@@ -248,6 +277,7 @@ def generate_weekly_report():
     brain_strengths, brain_issues = _assess_brain_health(brain)
     tech_checks, tech_warnings = _tech_health_check()
     suggestions = _generate_improvement_suggestions(brain, trade_stats, tech_checks, tech_warnings)
+    backtest = _get_backtest_summary()
 
     report = {
         "generated": datetime.now().isoformat(),
@@ -259,6 +289,7 @@ def generate_weekly_report():
         "tech_ok": tech_checks,
         "tech_warnings": tech_warnings,
         "suggestions": suggestions,
+        "backtest": backtest,
     }
 
     log.info(f"Weekly Report generiert: {trade_stats['total_trades']} Trades, "
@@ -397,6 +428,9 @@ def _render_html_report(report):
             <ul style="margin:4px 0;padding-left:20px;">{tech_warn_items or '<li style="color:#10b981;">Keine Warnungen</li>'}</ul>
           </div>
         </div>
+
+        <!-- Backtest & ML -->
+        {'<div style="background:#252839;border-radius:12px;padding:24px;margin:20px 0;border-left:4px solid #8b5cf6;"><h2 style="margin:0 0 16px;color:#8b5cf6;font-size:18px;">Backtest & ML-Modell</h2><table style="width:100%;border-collapse:collapse;"><tr><td style="padding:6px 0;color:#94a3b8;">Backtest Rendite</td><td style="padding:6px 0;color:' + ('#10b981' if report.get("backtest", {}).get("total_return_pct", 0) >= 0 else '#ef4444') + ';font-weight:bold;">' + f'{report.get("backtest", {}).get("total_return_pct", 0):+.2f}%' + '</td></tr><tr><td style="padding:6px 0;color:#94a3b8;">Sharpe Ratio</td><td style="padding:6px 0;color:#e2e8f0;">' + f'{report.get("backtest", {}).get("sharpe_ratio", 0):.2f}' + '</td></tr><tr><td style="padding:6px 0;color:#94a3b8;">Max Drawdown</td><td style="padding:6px 0;color:#ef4444;">' + f'-{report.get("backtest", {}).get("max_drawdown_pct", 0):.1f}%' + '</td></tr><tr><td style="padding:6px 0;color:#94a3b8;">Win Rate</td><td style="padding:6px 0;color:#e2e8f0;">' + f'{report.get("backtest", {}).get("win_rate_pct", 0):.1f}%' + '</td></tr><tr><td style="padding:6px 0;color:#94a3b8;">In-Sample Return</td><td style="padding:6px 0;color:#e2e8f0;">' + f'{report.get("backtest", {}).get("in_sample_return", 0):+.2f}%' + '</td></tr><tr><td style="padding:6px 0;color:#94a3b8;">Out-of-Sample Return</td><td style="padding:6px 0;color:#e2e8f0;font-weight:bold;">' + f'{report.get("backtest", {}).get("out_of_sample_return", 0):+.2f}%' + '</td></tr><tr><td style="padding:6px 0;color:#94a3b8;">ML Accuracy</td><td style="padding:6px 0;color:#e2e8f0;">' + (f'{report.get("backtest", {}).get("ml_accuracy", 0):.1f}%' if report.get("backtest", {}).get("ml_active") else 'Nicht trainiert') + '</td></tr></table></div>' if report.get("backtest") else '<div style="background:#252839;border-radius:12px;padding:24px;margin:20px 0;"><h2 style="margin:0 0 8px;color:#8b5cf6;font-size:18px;">Backtest</h2><p style="color:#94a3b8;">Noch kein Backtest gelaufen. Im Dashboard starten.</p></div>'}
 
         <!-- Improvement Suggestions -->
         <div style="background:#252839;border-radius:12px;padding:24px;margin:20px 0;border-left:4px solid #60a5fa;">

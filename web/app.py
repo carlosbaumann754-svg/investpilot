@@ -529,6 +529,76 @@ async def api_performance_breakdown(days: int = 30, user=Depends(require_auth)):
 
 
 # ============================================================
+# BACKTEST & ML ENDPOINTS
+# ============================================================
+
+@app.get("/api/backtest")
+async def api_backtest(user=Depends(require_auth)):
+    """Letzte Backtest-Ergebnisse."""
+    result = read_json_safe("backtest_results.json")
+    if result:
+        return result
+    return {"error": "Noch kein Backtest gelaufen. Starte einen ueber 'Run Backtest'."}
+
+
+@app.post("/api/backtest/run")
+async def api_run_backtest(user=Depends(require_auth)):
+    """Backtest manuell starten (kann 1-3 Minuten dauern)."""
+    try:
+        from app.backtester import run_full_backtest
+        result = run_full_backtest()
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+
+        try:
+            from web.security import log_audit
+            metrics = result.get("full_period", {}).get("metrics", {})
+            await log_audit(user, "BACKTEST_RUN",
+                            f"Return={metrics.get('total_return_pct', 0):+.1f}%, "
+                            f"Sharpe={metrics.get('sharpe_ratio', 0):.2f}")
+        except Exception:
+            pass
+
+        return {"status": "ok", "results": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ml-model")
+async def api_ml_model(user=Depends(require_auth)):
+    """ML-Modell Status und Feature Importances."""
+    try:
+        from app.ml_scorer import get_model_info, is_model_trained
+        info = get_model_info()
+        if info:
+            info["is_active"] = is_model_trained()
+            return info
+        return {"error": "Kein ML-Modell trainiert", "is_active": False}
+    except ImportError:
+        return {"error": "ML Module nicht verfuegbar", "is_active": False}
+
+
+@app.post("/api/ml-model/train")
+async def api_train_ml(user=Depends(require_auth)):
+    """ML-Modell neu trainieren."""
+    try:
+        from app.backtester import download_history
+        from app.ml_scorer import train_model
+
+        histories = download_history(years=5)
+        if not histories:
+            raise HTTPException(status_code=500, detail="Keine historischen Daten")
+
+        result = train_model(histories)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+
+        return {"status": "ok", "model_info": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # PDF REPORTS
 # ============================================================
 

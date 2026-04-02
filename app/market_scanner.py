@@ -262,8 +262,25 @@ def analyze_single_asset(symbol, asset_info):
 # SCORING
 # ============================================================
 
-def score_asset(analysis):
-    """Berechne einen Gesamtscore (-100 bis +100) fuer ein Asset."""
+def score_asset(analysis, use_ml=False):
+    """Berechne einen Gesamtscore (-100 bis +100) fuer ein Asset.
+
+    Args:
+        analysis: dict von analyze_single_asset()
+        use_ml: wenn True, ML-Modell statt fixe Gewichte verwenden
+    """
+    # ML Scoring Path
+    if use_ml:
+        try:
+            from app.ml_scorer import score_asset_ml, is_model_trained
+            if is_model_trained():
+                ml_score = score_asset_ml(analysis)
+                if ml_score is not None:
+                    # ML gibt 0-100 (Wahrscheinlichkeit), umrechnen auf -100 bis +100
+                    return round((ml_score - 50) * 2, 1)
+        except ImportError:
+            pass
+
     score = 0
 
     # RSI Signal (-20 bis +20)
@@ -329,13 +346,14 @@ def score_asset(analysis):
 # SCANNER HAUPTFUNKTION
 # ============================================================
 
-def scan_all_assets(enabled_classes=None, max_per_class=None):
+def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
     """
     Scannt alle Assets im Universum und gibt sortierte Opportunities zurueck.
 
     Args:
         enabled_classes: Liste von Asset-Klassen (None = alle)
         max_per_class: Max Anzahl Resultate pro Klasse (None = unbegrenzt)
+        use_ml: ML-Scoring verwenden? None = aus config lesen
 
     Returns:
         Liste von {symbol, name, class, etoro_id, score, analysis, signal}
@@ -346,6 +364,15 @@ def scan_all_assets(enabled_classes=None, max_per_class=None):
 
     if enabled_classes is None:
         enabled_classes = ["stocks", "etf", "crypto", "commodities", "forex", "indices"]
+
+    # ML-Flag aus Config lesen wenn nicht explizit gesetzt
+    if use_ml is None:
+        try:
+            from app.config_manager import load_config
+            cfg = load_config()
+            use_ml = cfg.get("demo_trading", {}).get("use_ml_scoring", False)
+        except Exception:
+            use_ml = False
 
     log.info("=" * 55)
     log.info("MARKET SCANNER - Alle Asset-Klassen")
@@ -368,7 +395,7 @@ def scan_all_assets(enabled_classes=None, max_per_class=None):
             errors += 1
             continue
 
-        score = score_asset(analysis)
+        score = score_asset(analysis, use_ml=use_ml)
 
         # Signal bestimmen
         if score >= 25:

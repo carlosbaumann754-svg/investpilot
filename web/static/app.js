@@ -40,6 +40,7 @@ function switchTab(name) {
     if (name === 'trades') loadTrades(true);
     if (name === 'brain') loadBrain();
     if (name === 'reports') loadReports();
+    if (name === 'backtest') loadBacktest();
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
 }
@@ -503,6 +504,278 @@ async function runDiscovery() {
         }
     } catch (e) {
         showToast('Discovery-Fehler: ' + e.message);
+    }
+}
+
+// === BACKTEST ===
+async function loadBacktest() {
+    try {
+        const [btRes, mlRes] = await Promise.all([
+            apiFetch('/api/backtest'),
+            apiFetch('/api/ml-model'),
+        ]);
+
+        if (btRes) {
+            const bt = await btRes.json();
+            if (!bt.error) renderBacktestResults(bt);
+        }
+
+        if (mlRes) {
+            const ml = await mlRes.json();
+            if (!ml.error) renderMLModel(ml);
+        }
+    } catch (e) {
+        console.error('Backtest load:', e);
+    }
+}
+
+function renderBacktestResults(bt) {
+    const fp = bt.full_period || {};
+    const m = fp.metrics || {};
+
+    // Show metrics cards
+    document.getElementById('bt-metrics-card').style.display = 'block';
+    const retEl = document.getElementById('bt-return');
+    retEl.textContent = fmtPct(m.total_return_pct);
+    retEl.className = 'card-value ' + pnlClass(m.total_return_pct);
+    retEl.style.fontSize = '20px';
+    document.getElementById('bt-sharpe').textContent = m.sharpe_ratio?.toFixed(2) || '--';
+    document.getElementById('bt-maxdd').textContent = m.max_drawdown_pct ? '-' + m.max_drawdown_pct.toFixed(1) + '%' : '--';
+    document.getElementById('bt-winrate').textContent = m.win_rate_pct ? m.win_rate_pct.toFixed(1) + '%' : '--';
+    document.getElementById('bt-trades').textContent = m.total_trades || '--';
+    document.getElementById('bt-pf').textContent = m.profit_factor?.toFixed(2) || '--';
+    document.getElementById('bt-avgdays').textContent = m.avg_trade_days ? m.avg_trade_days.toFixed(1) + 'd' : '--';
+    document.getElementById('bt-costs').textContent = m.total_costs_pct ? m.total_costs_pct.toFixed(1) + '%' : '--';
+    document.getElementById('bt-timestamp').textContent = bt.timestamp ? 'Backtest: ' + fmtTime(bt.timestamp) : '';
+
+    // Walk-Forward table
+    if (bt.in_sample && bt.out_of_sample) {
+        document.getElementById('bt-walkforward-card').style.display = 'block';
+        const wfBody = document.getElementById('bt-wf-table');
+        wfBody.innerHTML = '';
+        const is = bt.in_sample.metrics || {};
+        const os = bt.out_of_sample.metrics || {};
+        const rows = [
+            ['Zeitraum', bt.in_sample.period || '--', bt.out_of_sample.period || '--'],
+            ['Rendite', fmtPct(is.total_return_pct), fmtPct(os.total_return_pct)],
+            ['Sharpe', is.sharpe_ratio?.toFixed(2) || '--', os.sharpe_ratio?.toFixed(2) || '--'],
+            ['Max DD', is.max_drawdown_pct ? '-' + is.max_drawdown_pct.toFixed(1) + '%' : '--', os.max_drawdown_pct ? '-' + os.max_drawdown_pct.toFixed(1) + '%' : '--'],
+            ['Win Rate', is.win_rate_pct ? is.win_rate_pct.toFixed(1) + '%' : '--', os.win_rate_pct ? os.win_rate_pct.toFixed(1) + '%' : '--'],
+            ['Trades', is.total_trades || '--', os.total_trades || '--'],
+            ['Profit Factor', is.profit_factor?.toFixed(2) || '--', os.profit_factor?.toFixed(2) || '--'],
+        ];
+        rows.forEach(([label, isVal, osVal]) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td style="font-weight:600">${label}</td><td>${isVal}</td><td>${osVal}</td>`;
+            wfBody.appendChild(tr);
+        });
+    }
+
+    // Equity Curve SVG
+    const curve = fp.equity_curve || [];
+    if (curve.length > 2) {
+        document.getElementById('bt-equity-card').style.display = 'block';
+        document.getElementById('bt-equity-chart').innerHTML = renderEquityCurveSVG(curve);
+    }
+
+    // Monthly Returns
+    const monthly = bt.monthly_returns || {};
+    if (Object.keys(monthly).length > 0) {
+        document.getElementById('bt-monthly-card').style.display = 'block';
+        document.getElementById('bt-monthly-table').innerHTML = renderMonthlyHeatmap(monthly);
+    }
+
+    // Best / Worst trades
+    if (bt.best_trades || bt.worst_trades) {
+        document.getElementById('bt-trades-cards').style.display = 'grid';
+        renderTradeTable('bt-best-table', bt.best_trades || []);
+        renderTradeTable('bt-worst-table', bt.worst_trades || []);
+    }
+}
+
+function renderTradeTable(id, trades) {
+    const tbody = document.getElementById(id);
+    tbody.innerHTML = '';
+    trades.forEach(t => {
+        const tr = document.createElement('tr');
+        const color = t.pnl_net_pct >= 0 ? 'var(--green)' : 'var(--red)';
+        tr.innerHTML = `
+            <td style="font-weight:600">${t.symbol}</td>
+            <td style="color:${color};font-weight:700">${fmtPct(t.pnl_net_pct)}</td>
+            <td>${t.days_held}d</td>
+            <td style="font-size:11px">${t.exit_reason}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderEquityCurveSVG(curve) {
+    const W = 700, H = 250, PAD = 40;
+    const values = curve.map(c => c[1]);
+    const minV = Math.min(...values) * 0.98;
+    const maxV = Math.max(...values) * 1.02;
+    const rangeV = maxV - minV || 1;
+
+    const scaleX = (i) => PAD + (i / (values.length - 1)) * (W - PAD * 2);
+    const scaleY = (v) => H - PAD - ((v - minV) / rangeV) * (H - PAD * 2);
+
+    let path = `M ${scaleX(0)} ${scaleY(values[0])}`;
+    for (let i = 1; i < values.length; i++) {
+        path += ` L ${scaleX(i)} ${scaleY(values[i])}`;
+    }
+
+    // Start value line
+    const startY = scaleY(10000);
+
+    // Grid lines
+    let gridLines = '';
+    const steps = 5;
+    for (let i = 0; i <= steps; i++) {
+        const v = minV + (rangeV / steps) * i;
+        const y = scaleY(v);
+        gridLines += `<line x1="${PAD}" y1="${y}" x2="${W - PAD}" y2="${y}" stroke="#252839" stroke-width="1"/>`;
+        gridLines += `<text x="${PAD - 5}" y="${y + 4}" fill="#94a3b8" font-size="10" text-anchor="end">${Math.round(v).toLocaleString()}</text>`;
+    }
+
+    // Date labels
+    let dateLabels = '';
+    const labelCount = Math.min(6, curve.length);
+    for (let i = 0; i < labelCount; i++) {
+        const idx = Math.floor(i * (curve.length - 1) / (labelCount - 1));
+        const x = scaleX(idx);
+        const date = curve[idx][0];
+        dateLabels += `<text x="${x}" y="${H - 5}" fill="#94a3b8" font-size="10" text-anchor="middle">${date.substring(0, 7)}</text>`;
+    }
+
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:300px">
+        ${gridLines}
+        <line x1="${PAD}" y1="${startY}" x2="${W - PAD}" y2="${startY}" stroke="#60a5fa" stroke-width="1" stroke-dasharray="4,4" opacity="0.5"/>
+        <path d="${path}" fill="none" stroke="#60a5fa" stroke-width="2"/>
+        ${dateLabels}
+        <text x="${PAD}" y="15" fill="#94a3b8" font-size="11">Equity ($)</text>
+    </svg>`;
+}
+
+function renderMonthlyHeatmap(monthly) {
+    const months = Object.keys(monthly).sort();
+    if (months.length === 0) return '';
+
+    // Group by year
+    const years = {};
+    months.forEach(m => {
+        const [y, mo] = m.split('-');
+        if (!years[y]) years[y] = {};
+        years[y][parseInt(mo)] = monthly[m];
+    });
+
+    const moNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+
+    let html = '<thead><tr><th></th>';
+    moNames.forEach(n => html += `<th style="padding:4px 6px;font-size:11px">${n}</th>`);
+    html += '<th style="padding:4px 6px;font-weight:700">Jahr</th></tr></thead><tbody>';
+
+    Object.keys(years).sort().forEach(year => {
+        html += `<tr><td style="font-weight:700;padding:4px 8px">${year}</td>`;
+        let yearTotal = 0;
+        for (let m = 1; m <= 12; m++) {
+            const val = years[year][m];
+            if (val !== undefined) {
+                yearTotal += val;
+                const bg = val >= 0 ? `rgba(16,185,129,${Math.min(Math.abs(val) / 10, 0.8)})` :
+                                       `rgba(239,68,68,${Math.min(Math.abs(val) / 10, 0.8)})`;
+                const color = Math.abs(val) > 3 ? '#fff' : 'var(--text)';
+                html += `<td style="padding:4px 6px;text-align:center;background:${bg};color:${color};border-radius:4px">${val.toFixed(1)}</td>`;
+            } else {
+                html += '<td style="padding:4px 6px;text-align:center;color:var(--text-dim)">-</td>';
+            }
+        }
+        const ybg = yearTotal >= 0 ? 'var(--green)' : 'var(--red)';
+        html += `<td style="padding:4px 8px;font-weight:700;color:${ybg}">${yearTotal.toFixed(1)}%</td></tr>`;
+    });
+
+    html += '</tbody>';
+    return html;
+}
+
+function renderMLModel(ml) {
+    if (ml.error && !ml.test_accuracy) return;
+
+    document.getElementById('bt-ml-card').style.display = 'block';
+    document.getElementById('ml-accuracy').textContent = ml.test_accuracy ? ml.test_accuracy.toFixed(1) + '%' : '--';
+    document.getElementById('ml-precision').textContent = ml.test_precision ? ml.test_precision.toFixed(1) + '%' : '--';
+    document.getElementById('ml-recall').textContent = ml.test_recall ? ml.test_recall.toFixed(1) + '%' : '--';
+    document.getElementById('ml-f1').textContent = ml.test_f1 ? ml.test_f1.toFixed(1) + '%' : '--';
+    document.getElementById('ml-trained-at').textContent = ml.trained ? 'Trainiert: ' + fmtTime(ml.trained) : '';
+
+    // Feature importances bar chart (SVG)
+    const fi = ml.feature_importances || {};
+    const entries = Object.entries(fi).slice(0, 10);
+    if (entries.length > 0) {
+        const maxVal = Math.max(...entries.map(e => e[1]));
+        const barH = 22, gap = 4;
+        const svgH = entries.length * (barH + gap) + 10;
+
+        let bars = '';
+        entries.forEach(([name, val], i) => {
+            const y = i * (barH + gap);
+            const w = maxVal > 0 ? (val / maxVal) * 400 : 0;
+            bars += `
+                <text x="120" y="${y + 15}" fill="#94a3b8" font-size="11" text-anchor="end">${name}</text>
+                <rect x="130" y="${y + 2}" width="${w}" height="${barH - 4}" fill="#60a5fa" rx="3"/>
+                <text x="${135 + w}" y="${y + 15}" fill="#e2e8f0" font-size="10">${(val * 100).toFixed(1)}%</text>
+            `;
+        });
+
+        document.getElementById('ml-features-chart').innerHTML =
+            `<svg viewBox="0 0 600 ${svgH}" style="width:100%;height:auto">${bars}</svg>`;
+    }
+}
+
+async function runBacktest() {
+    const btn = document.getElementById('btn-run-backtest');
+    btn.disabled = true;
+    btn.textContent = 'Backtest laeuft...';
+    showToast('Backtest gestartet (kann 1-3 Minuten dauern)...');
+
+    try {
+        const res = await apiFetch('/api/backtest/run', { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            showToast('Backtest abgeschlossen!');
+            if (data.results) renderBacktestResults(data.results);
+        } else {
+            const err = await res?.json();
+            showToast('Backtest Fehler: ' + (err?.detail || 'Unbekannt'));
+        }
+    } catch (e) {
+        showToast('Backtest Fehler: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run Backtest';
+    }
+}
+
+async function trainML() {
+    const btn = document.getElementById('btn-train-ml');
+    btn.disabled = true;
+    btn.textContent = 'Training laeuft...';
+    showToast('ML-Modell wird trainiert...');
+
+    try {
+        const res = await apiFetch('/api/ml-model/train', { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            showToast('ML-Modell trainiert!');
+            if (data.model_info) renderMLModel(data.model_info);
+        } else {
+            const err = await res?.json();
+            showToast('ML Training Fehler: ' + (err?.detail || 'Unbekannt'));
+        }
+    } catch (e) {
+        showToast('ML Training Fehler: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Train ML Model';
     }
 }
 

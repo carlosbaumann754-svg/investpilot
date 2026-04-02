@@ -194,6 +194,12 @@ body {
     gap: 12px;
 }
 
+.grid-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 12px;
+}
+
 /* === POSITIONS TABLE === */
 .table-wrap {
     overflow-x: auto;
@@ -397,6 +403,7 @@ tr:hover {
 /* === RESPONSIVE === */
 @media (max-width: 480px) {
     .grid-3 { grid-template-columns: 1fr 1fr; }
+    .grid-4 { grid-template-columns: 1fr 1fr; }
     .card-value { font-size: 22px; }
     .header h1 { font-size: 16px; }
 }

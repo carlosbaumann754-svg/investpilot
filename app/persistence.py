@@ -36,6 +36,8 @@ BACKUP_FILES = [
     "market_context.json",
     "discovery_result.json",
     "weekly_report.json",
+    "backtest_results.json",
+    "ml_model.json",
 ]
 
 

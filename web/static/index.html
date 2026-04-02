@@ -27,6 +27,7 @@
     <button class="tab" onclick="switchTab('trades')">Trades</button>
     <button class="tab" onclick="switchTab('brain')">Brain</button>
     <button class="tab" onclick="switchTab('reports')">Reports</button>
+    <button class="tab" onclick="switchTab('backtest')">Backtest</button>
     <button class="tab" onclick="switchTab('settings')">Settings</button>
     <button class="tab" onclick="switchTab('logs')">Logs</button>
 </div>
@@ -224,6 +225,142 @@
         <div class="card" id="pdf-list-card" style="display:none">
             <div class="card-title">Gespeicherte Berichte</div>
             <div id="pdf-list" style="font-size:13px"></div>
+        </div>
+    </div>
+
+    <!-- === BACKTEST TAB === -->
+    <div id="tab-backtest" class="tab-content">
+        <!-- Actions -->
+        <div class="grid-2">
+            <div class="card" style="text-align:center">
+                <div class="card-title">Backtest starten</div>
+                <div class="card-sub">5 Jahre Historie, Walk-Forward Validation</div>
+                <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-run-backtest" onclick="runBacktest()">Run Backtest</button>
+            </div>
+            <div class="card" style="text-align:center">
+                <div class="card-title">ML-Modell trainieren</div>
+                <div class="card-sub">Gradient Boosting auf historischen Daten</div>
+                <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-train-ml" onclick="trainML()">Train ML Model</button>
+            </div>
+        </div>
+
+        <!-- Backtest Metrics (full period) -->
+        <div class="card" id="bt-metrics-card" style="display:none">
+            <div class="card-title">Backtest Ergebnisse (Gesamtzeitraum)</div>
+            <div class="grid-4" id="bt-metrics-grid">
+                <div>
+                    <div class="card-sub">Rendite</div>
+                    <div class="card-value" style="font-size:20px" id="bt-return">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Sharpe Ratio</div>
+                    <div class="card-value" style="font-size:20px" id="bt-sharpe">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Max Drawdown</div>
+                    <div class="card-value" style="font-size:20px" id="bt-maxdd">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Win Rate</div>
+                    <div class="card-value" style="font-size:20px" id="bt-winrate">--</div>
+                </div>
+            </div>
+            <div class="grid-4" style="margin-top:12px">
+                <div>
+                    <div class="card-sub">Trades</div>
+                    <div class="card-value" style="font-size:16px" id="bt-trades">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Profit Factor</div>
+                    <div class="card-value" style="font-size:16px" id="bt-pf">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Avg Dauer</div>
+                    <div class="card-value" style="font-size:16px" id="bt-avgdays">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Kosten</div>
+                    <div class="card-value" style="font-size:16px" id="bt-costs">--</div>
+                </div>
+            </div>
+            <div class="card-sub" style="margin-top:8px;font-size:11px;color:var(--text-dim)" id="bt-timestamp">--</div>
+        </div>
+
+        <!-- Walk-Forward Comparison -->
+        <div class="card" id="bt-walkforward-card" style="display:none">
+            <div class="card-title">Walk-Forward Validation (In-Sample vs Out-of-Sample)</div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Metrik</th><th>In-Sample</th><th>Out-of-Sample</th></tr>
+                    </thead>
+                    <tbody id="bt-wf-table"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Equity Curve (SVG) -->
+        <div class="card" id="bt-equity-card" style="display:none">
+            <div class="card-title">Equity Curve</div>
+            <div id="bt-equity-chart" style="width:100%;overflow-x:auto"></div>
+        </div>
+
+        <!-- Monthly Returns Heatmap -->
+        <div class="card" id="bt-monthly-card" style="display:none">
+            <div class="card-title">Monatliche Renditen (%)</div>
+            <div class="table-wrap">
+                <table id="bt-monthly-table" style="font-size:12px"></table>
+            </div>
+        </div>
+
+        <!-- Best / Worst Trades -->
+        <div class="grid-2" id="bt-trades-cards" style="display:none">
+            <div class="card">
+                <div class="card-title" style="color:var(--green)">Top 5 Trades</div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Symbol</th><th>P/L%</th><th>Tage</th><th>Exit</th></tr></thead>
+                        <tbody id="bt-best-table"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title" style="color:var(--red)">Worst 5 Trades</div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Symbol</th><th>P/L%</th><th>Tage</th><th>Exit</th></tr></thead>
+                        <tbody id="bt-worst-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ML Model Info -->
+        <div class="card" id="bt-ml-card" style="display:none">
+            <div class="card-title">ML-Modell Status</div>
+            <div class="grid-4" id="bt-ml-metrics">
+                <div>
+                    <div class="card-sub">Accuracy</div>
+                    <div class="card-value" style="font-size:18px" id="ml-accuracy">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Precision</div>
+                    <div class="card-value" style="font-size:18px" id="ml-precision">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Recall</div>
+                    <div class="card-value" style="font-size:18px" id="ml-recall">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">F1 Score</div>
+                    <div class="card-value" style="font-size:18px" id="ml-f1">--</div>
+                </div>
+            </div>
+            <div style="margin-top:16px">
+                <div class="card-sub" style="font-weight:bold;margin-bottom:8px">Feature Importances</div>
+                <div id="ml-features-chart" style="width:100%"></div>
+            </div>
+            <div class="card-sub" style="margin-top:8px;font-size:11px" id="ml-trained-at">--</div>
         </div>
     </div>
 
