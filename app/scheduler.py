@@ -87,6 +87,24 @@ def scheduler_loop():
     ka.start()
     log.info("Keep-Alive Thread gestartet")
 
+    # Watchdog Thread starten
+    try:
+        from app.alerts import start_watchdog
+        start_watchdog()
+        log.info("Watchdog Thread gestartet")
+    except ImportError:
+        log.info("Watchdog nicht verfuegbar (alerts Modul fehlt)")
+
+    # Market Context initial laden
+    try:
+        from app.market_context import update_full_context
+        update_full_context()
+        log.info("Market Context initialisiert")
+    except ImportError:
+        log.info("Market Context nicht verfuegbar")
+    except Exception as e:
+        log.warning(f"Market Context Init Fehler: {e}")
+
     while True:
         try:
             if not is_trading_enabled():

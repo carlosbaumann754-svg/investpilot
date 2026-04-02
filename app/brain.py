@@ -337,7 +337,8 @@ def optimize_strategy():
             sym = rule.get("symbol")
             if sym in targets:
                 old = targets[sym]["allocation_pct"]
-                new = min(old + rule["suggested_change_pct"], 25)
+                max_cap = dt.get("max_allocation_per_instrument_pct", 25)
+                new = min(old + rule["suggested_change_pct"], max_cap)
                 if new != old:
                     targets[sym]["allocation_pct"] = new
                     changed = True
@@ -471,33 +472,176 @@ def generate_performance_report():
 # MAIN: Kompletter Brain-Zyklus
 # ============================================================
 
+def walk_forward_validate(proposed_changes, brain):
+    """Walk-Forward-Validierung: Teste Regelaenderungen auf Out-of-Sample Daten.
+
+    Teile Snapshots in Training (80%) und Test (20%).
+    Aenderung wird nur akzeptiert wenn sie auch auf Test-Daten positiv ist.
+    """
+    snapshots = brain.get("performance_snapshots", [])
+    if len(snapshots) < 20:
+        return True, "Zu wenig Daten fuer Walk-Forward (akzeptiert)"
+
+    split = int(len(snapshots) * 0.8)
+    train = snapshots[:split]
+    test = snapshots[split:]
+
+    # Berechne Performance auf Test-Set
+    test_values = [s["total_value"] for s in test]
+    if len(test_values) < 2 or test_values[0] <= 0:
+        return True, "Test-Set zu klein"
+
+    test_return = (test_values[-1] - test_values[0]) / test_values[0] * 100
+
+    # Wenn Test-Performance negativ und wir wollen aggressiver werden: ablehnen
+    for change in proposed_changes:
+        if change.get("type") == "INCREASE_ALLOCATION" and test_return < -2:
+            log.info(f"  Walk-Forward REJECT: {change.get('symbol')} Erhoehung "
+                     f"(Test-Return: {test_return:+.1f}%)")
+            return False, f"Test-Set negativ ({test_return:+.1f}%)"
+
+    return True, f"Walk-Forward OK (Test-Return: {test_return:+.1f}%)"
+
+
+def log_trade_decision_context(action, symbol, brain):
+    """Logge vollstaendigen Kontext fuer Trade-Entscheid."""
+    context = {
+        "timestamp": datetime.now().isoformat(),
+        "action": action,
+        "symbol": symbol,
+        "market_regime": brain.get("market_regime", "unknown"),
+        "total_runs": brain.get("total_runs", 0),
+        "win_rate": brain.get("win_rate", 0),
+        "sharpe": brain.get("sharpe_estimate", 0),
+        "active_rules": len(brain.get("learned_rules", [])),
+    }
+
+    # Instrument Score
+    scores = brain.get("instrument_scores", {})
+    for iid, score_data in scores.items():
+        if symbol and symbol.upper() in str(score_data):
+            context["instrument_score"] = score_data
+            break
+
+    # Market Context (wenn verfuegbar)
+    try:
+        from app.market_context import get_current_context
+        ctx = get_current_context()
+        context["vix"] = ctx.get("vix_level")
+        context["fear_greed"] = ctx.get("fear_greed_index")
+        context["macro_events"] = len(ctx.get("macro_events_today", []))
+    except ImportError:
+        pass
+
+    decision_log = load_json("decision_log.json") or []
+    decision_log.append(context)
+    if len(decision_log) > 500:
+        decision_log = decision_log[-500:]
+    save_json("decision_log.json", decision_log)
+
+    return context
+
+
+def analyze_parameter_performance():
+    """Analysiere welche Parameter-Kombinationen in welchen Marktphasen am besten performten."""
+    brain = load_brain()
+    opt_log = brain.get("optimization_log", [])
+    snapshots = brain.get("performance_snapshots", [])
+
+    if len(opt_log) < 3 or len(snapshots) < 10:
+        return {}
+
+    # Gruppiere Performance nach Regime
+    regime_perf = {}
+    for snap in snapshots:
+        date = snap.get("date", "")
+        regime = brain.get("market_regime", "unknown")
+        if regime not in regime_perf:
+            regime_perf[regime] = []
+
+        if len(regime_perf[regime]) > 0:
+            prev = regime_perf[regime][-1]
+            if prev > 0:
+                change = (snap["total_value"] - prev) / prev * 100
+                regime_perf[regime].append(change)
+            else:
+                regime_perf[regime].append(0)
+        else:
+            regime_perf[regime].append(snap["total_value"])
+
+    analysis = {}
+    for regime, values in regime_perf.items():
+        if len(values) > 1:
+            returns = values[1:]  # Skip first (absolute value)
+            if returns:
+                analysis[regime] = {
+                    "avg_return": round(statistics.mean(returns), 3) if returns else 0,
+                    "win_rate": round(sum(1 for r in returns if r > 0) / len(returns) * 100, 1),
+                    "count": len(returns),
+                }
+
+    return analysis
+
+
 def run_brain_cycle(portfolio):
-    """Fuehre kompletten Brain-Zyklus aus."""
+    """Fuehre kompletten Brain-Zyklus aus (v2 mit Walk-Forward)."""
     log.info("")
     log.info("=" * 55)
     log.info("TRADE BRAIN - Analyse & Optimierung")
     log.info("=" * 55)
 
-    log.info("\n[1/5] Snapshot aufzeichnen...")
+    log.info("\n[1/7] Snapshot aufzeichnen...")
     record_snapshot(portfolio)
 
-    log.info("\n[2/5] Performance analysieren...")
+    log.info("\n[2/7] Performance analysieren...")
     analyze_instrument_performance()
 
-    log.info("\n[3/5] Marktregime erkennen...")
+    log.info("\n[3/7] Marktregime erkennen...")
     detect_market_regime()
 
-    log.info("\n[4/5] Regeln ableiten...")
-    learn_rules()
+    log.info("\n[4/7] Regeln ableiten...")
+    new_rules = learn_rules()
 
-    log.info("\n[5/5] Strategie optimieren...")
-    changed = optimize_strategy()
-    if changed:
-        log.info("  -> Strategie wurde angepasst!")
+    log.info("\n[5/7] Walk-Forward Validierung...")
+    brain = load_brain()
+    wf_ok, wf_reason = walk_forward_validate(new_rules, brain)
+    log.info(f"  {wf_reason}")
+
+    log.info("\n[6/7] Strategie optimieren...")
+    if wf_ok:
+        changed = optimize_strategy()
+        if changed:
+            log.info("  -> Strategie wurde angepasst!")
+        else:
+            log.info("  -> Keine Anpassung noetig")
     else:
-        log.info("  -> Keine Anpassung noetig")
+        log.info("  -> Walk-Forward hat Aenderungen abgelehnt")
+
+    log.info("\n[7/7] Parameter-Analyse...")
+    param_analysis = analyze_parameter_performance()
+    if param_analysis:
+        for regime, perf in param_analysis.items():
+            log.info(f"    {regime}: Avg={perf['avg_return']:+.3f}%, "
+                     f"Win={perf['win_rate']}%, N={perf['count']}")
 
     report = generate_performance_report()
+
+    # Sortino Ratio ergaenzen
+    try:
+        from app.execution import calculate_sortino_ratio
+        snapshots = brain.get("performance_snapshots", [])
+        if len(snapshots) > 2:
+            daily_returns = []
+            for i in range(1, len(snapshots)):
+                prev = snapshots[i-1]["total_value"]
+                curr = snapshots[i]["total_value"]
+                if prev > 0:
+                    daily_returns.append((curr - prev) / prev * 100)
+            report["sortino_ratio"] = calculate_sortino_ratio(daily_returns)
+    except ImportError:
+        pass
+
+    report["parameter_analysis"] = param_analysis
 
     # Cloud-Backup nach jedem Brain-Zyklus
     log.info("\n[+] Cloud-Backup der Learnings...")

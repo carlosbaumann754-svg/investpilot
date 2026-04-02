@@ -395,6 +395,143 @@ async def api_weekly_report_pdf(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=f"PDF-Erstellung fehlgeschlagen: {e}")
 
 
+# ============================================================
+# KILL SWITCH & RISK ENDPOINTS
+# ============================================================
+
+@app.post("/api/trading/killswitch")
+async def api_killswitch(user=Depends(require_auth)):
+    """EMERGENCY: Alle Positionen sofort schliessen, Trading deaktivieren."""
+    try:
+        from app.risk_manager import emergency_close_all
+        from app.etoro_client import EtoroClient
+        from app.config_manager import load_config
+
+        config = load_config()
+        client = EtoroClient(config)
+        result = emergency_close_all(client, f"Dashboard Kill Switch von {user}")
+
+        try:
+            from web.security import log_audit
+            await log_audit(user, "KILL_SWITCH", f"Emergency Close: {result}")
+        except Exception:
+            pass
+
+        try:
+            from app.alerts import alert_emergency
+            alert_emergency(f"Dashboard Kill Switch von {user}", result.get("closed", 0))
+        except Exception:
+            pass
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/risk")
+async def api_risk(user=Depends(require_auth)):
+    """Aktuelle Risiko-Zusammenfassung."""
+    try:
+        from app.risk_manager import get_risk_summary, calculate_exposure, check_margin_safety
+        from app.etoro_client import EtoroClient
+        from app.config_manager import load_config
+
+        summary = get_risk_summary()
+
+        config = load_config()
+        client = EtoroClient(config)
+        if client.configured:
+            portfolio = client.get_portfolio()
+            if portfolio:
+                from app.etoro_client import EtoroClient as EC
+                positions = [EC.parse_position(p) for p in portfolio.get("positions", [])]
+                credit = portfolio.get("credit", 0)
+                total = credit + sum(p["invested"] for p in positions)
+
+                exposure = calculate_exposure(positions)
+                margin_ok, margin_reason, exposure_detail = check_margin_safety(total, positions, config)
+
+                summary["exposure"] = exposure_detail
+                summary["margin_ok"] = margin_ok
+                summary["margin_reason"] = margin_reason
+
+        return summary
+    except ImportError:
+        return {"error": "Risk Manager nicht verfuegbar"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/exposure")
+async def api_exposure(user=Depends(require_auth)):
+    """Effektive Marktexposure (Kapital x Hebel) je Asset-Klasse."""
+    try:
+        from app.risk_manager import calculate_exposure
+        from app.leverage_manager import get_leverage_summary
+        from app.etoro_client import EtoroClient
+        from app.config_manager import load_config
+
+        config = load_config()
+        client = EtoroClient(config)
+        if not client.configured:
+            return {"error": "eToro nicht konfiguriert"}
+
+        portfolio = client.get_portfolio()
+        if not portfolio:
+            return {"error": "Portfolio nicht verfuegbar"}
+
+        from app.etoro_client import EtoroClient as EC
+        positions = [EC.parse_position(p) for p in portfolio.get("positions", [])]
+
+        exposure = calculate_exposure(positions)
+        leverage = get_leverage_summary(positions)
+
+        return {
+            "exposure": exposure,
+            "leverage": leverage,
+            "portfolio_value": portfolio.get("credit", 0) + sum(p["invested"] for p in positions),
+        }
+    except ImportError:
+        return {"error": "Module nicht verfuegbar"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/market-context")
+async def api_market_context(user=Depends(require_auth)):
+    """Aktueller Marktkontext (VIX, Fear&Greed, Makro-Events)."""
+    try:
+        from app.market_context import get_current_context
+        return get_current_context()
+    except ImportError:
+        return {"error": "Market Context nicht verfuegbar"}
+
+
+@app.get("/api/execution-stats")
+async def api_execution_stats(days: int = 7, user=Depends(require_auth)):
+    """Execution-Qualitaets-Statistiken (Slippage, Latenz)."""
+    try:
+        from app.execution import get_execution_stats
+        return get_execution_stats(days)
+    except ImportError:
+        return {"error": "Execution Tracker nicht verfuegbar"}
+
+
+@app.get("/api/performance-breakdown")
+async def api_performance_breakdown(days: int = 30, user=Depends(require_auth)):
+    """Performance-Breakdown nach Zeit, Tag, Asset, Strategie."""
+    try:
+        from app.execution import get_performance_breakdown
+        history = read_json_safe("trade_history.json") or []
+        return get_performance_breakdown(history, days)
+    except ImportError:
+        return {"error": "Execution Tracker nicht verfuegbar"}
+
+
+# ============================================================
+# PDF REPORTS
+# ============================================================
+
 @app.get("/api/weekly-report/pdfs")
 async def api_list_pdfs(user=Depends(require_auth)):
     """Liste aller verfuegbaren PDF-Reports."""

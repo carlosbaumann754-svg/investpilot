@@ -441,3 +441,110 @@ def get_top_opportunities(results, top_n=10):
 def get_sell_candidates(results):
     """Extrahiere Verkaufs-Kandidaten."""
     return [r for r in results if r["signal"] in ("SELL", "STRONG_SELL")]
+
+
+# ============================================================
+# MULTI-TIMEFRAME ANALYSE
+# ============================================================
+
+def analyze_multi_timeframe(symbol, asset_info):
+    """Multi-Timeframe-Analyse: 1h Trend + 15min Entry + 5min SL.
+
+    1-Stunden-Chart: Uebergeordnete Trendrichtung
+    15-Minuten-Chart: Praeziser Einstiegspunkt
+    5-Minuten-Chart: Stop-Loss-Feinabstimmung
+
+    Hinweis: yfinance hat begrenzte Intraday-Daten. Wir verwenden:
+    - 1mo mit 1h Interval fuer Trendrichtung
+    - 5d mit 15m Interval fuer Entry
+    - 1d mit 5m Interval fuer SL
+    """
+    if yf is None:
+        return None
+
+    yf_symbol = asset_info.get("yf", symbol)
+
+    try:
+        ticker = yf.Ticker(yf_symbol)
+
+        # 1H Chart: Trend-Richtung (letzte 2 Wochen)
+        h1 = ticker.history(period="1mo", interval="1h")
+        trend_direction = "neutral"
+        if not h1.empty and len(h1) >= 20:
+            closes_1h = h1["Close"].tolist()
+            sma_short = sum(closes_1h[-10:]) / 10
+            sma_long = sum(closes_1h[-20:]) / 20
+            if sma_short > sma_long * 1.005:
+                trend_direction = "up"
+            elif sma_short < sma_long * 0.995:
+                trend_direction = "down"
+
+            # 1H RSI
+            rsi_1h = calc_rsi(closes_1h)
+        else:
+            rsi_1h = 50
+
+        # 15M Chart: Entry Signal (letzte 5 Tage)
+        m15 = ticker.history(period="5d", interval="15m")
+        entry_signal = "neutral"
+        rsi_15m = 50
+        if not m15.empty and len(m15) >= 20:
+            closes_15m = m15["Close"].tolist()
+            rsi_15m = calc_rsi(closes_15m)
+            macd_val, signal_val, hist = calc_macd(closes_15m)
+
+            if rsi_15m < 35 and hist > 0:
+                entry_signal = "buy"
+            elif rsi_15m > 65 and hist < 0:
+                entry_signal = "sell"
+
+        # 5M Chart: SL Bestimmung (letzter Tag)
+        m5 = ticker.history(period="1d", interval="5m")
+        suggested_sl = None
+        if not m5.empty and len(m5) >= 10:
+            closes_5m = m5["Close"].tolist()
+            lows = m5["Low"].tolist()
+            current = closes_5m[-1]
+            recent_low = min(lows[-12:])  # Letztes Stunden-Tief
+            if current > 0:
+                suggested_sl = round((recent_low - current) / current * 100, 2)
+
+        return {
+            "trend_1h": trend_direction,
+            "rsi_1h": round(rsi_1h, 1),
+            "entry_15m": entry_signal,
+            "rsi_15m": round(rsi_15m, 1),
+            "suggested_sl_pct": suggested_sl,
+            "mtf_aligned": (trend_direction == "up" and entry_signal == "buy") or
+                           (trend_direction == "down" and entry_signal == "sell"),
+        }
+
+    except Exception as e:
+        log.debug(f"  MTF Fehler bei {symbol}: {e}")
+        return None
+
+
+def enrich_with_mtf(scan_results, top_n=20):
+    """Ergaenze die Top-N Scanner-Ergebnisse mit Multi-Timeframe-Daten."""
+    enriched = 0
+    for result in scan_results[:top_n]:
+        if result["signal"] not in ("BUY", "STRONG_BUY", "SELL", "STRONG_SELL"):
+            continue
+
+        asset_info = ASSET_UNIVERSE.get(result["symbol"])
+        if not asset_info:
+            continue
+
+        mtf = analyze_multi_timeframe(result["symbol"], asset_info)
+        if mtf:
+            result["mtf"] = mtf
+            # Score-Bonus wenn alle Timeframes aligned sind
+            if mtf["mtf_aligned"]:
+                result["score"] = round(result["score"] * 1.15, 1)  # 15% Bonus
+                log.info(f"    MTF ALIGNED: {result['symbol']} -> Score {result['score']:+.1f}")
+            enriched += 1
+
+        time.sleep(0.5)  # Rate limiting
+
+    log.info(f"  MTF: {enriched} Assets mit Multi-Timeframe angereichert")
+    return scan_results

@@ -164,7 +164,7 @@ class EtoroClient:
     def close_position(self, position_id):
         """Position schliessen."""
         log.info(f"  CLOSE: PositionID={position_id}")
-        return self._post(f"/trading/execution/market-close-orders/positions/{position_id}", {})
+        return self._post(f"/trading/execution/{self.env}/market-close-orders/positions/{position_id}", {})
 
     # --- Instruments ---
 

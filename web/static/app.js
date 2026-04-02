@@ -145,6 +145,38 @@ async function toggleTrading(enabled) {
     showToast(enabled ? 'Trading aktiviert' : 'Trading gestoppt');
 }
 
+// === KILL SWITCH ===
+async function killSwitch() {
+    const confirmed = confirm(
+        'ACHTUNG: Kill Switch aktivieren?\n\n' +
+        'Dies schliesst ALLE offenen Positionen sofort\n' +
+        'und stoppt den Trading-Bot komplett.\n\n' +
+        'Bist du sicher?'
+    );
+    if (!confirmed) return;
+
+    showToast('Kill Switch wird aktiviert...');
+    try {
+        const res = await apiFetch('/api/trading/killswitch', { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            const closed = data.closed_positions || 0;
+            showToast(`KILL SWITCH AKTIV - ${closed} Positionen geschlossen`);
+            document.getElementById('trading-toggle').checked = false;
+            document.getElementById('toggle-label').textContent = 'OFF';
+            const badge = document.getElementById('trading-status-badge');
+            badge.className = 'badge badge-red';
+            badge.textContent = 'GESTOPPT';
+            loadDashboard();
+        } else {
+            const err = await res?.json();
+            showToast('Kill Switch Fehler: ' + (err?.detail || 'Unbekannt'));
+        }
+    } catch (e) {
+        showToast('Kill Switch Fehler: ' + e.message);
+    }
+}
+
 // === TRADES ===
 async function loadTrades(reset = false) {
     if (reset) tradesOffset = 0;
