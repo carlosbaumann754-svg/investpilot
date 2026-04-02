@@ -28,6 +28,14 @@ BACKUP_FILES = [
     "trade_history.json",
     "scanner_state.json",
     "config.json",
+    "risk_state.json",
+    "execution_log.json",
+    "trailing_sl_state.json",
+    "decision_log.json",
+    "alert_state.json",
+    "market_context.json",
+    "discovery_result.json",
+    "weekly_report.json",
 ]
 
 
