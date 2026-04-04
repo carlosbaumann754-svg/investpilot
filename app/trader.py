@@ -956,6 +956,13 @@ def run_trading_cycle():
                 total, risk["daily_pnl_pct"], risk["daily_pnl_usd"],
                 trades_today, brain_state.get("market_regime", "?"))
 
+    # Cloud-Backup nach jedem Zyklus
+    try:
+        from app.persistence import backup_to_cloud
+        backup_to_cloud()
+    except Exception as e:
+        log.warning(f"Cloud-Backup fehlgeschlagen: {e}")
+
     log.info("")
     log.info("Trading-Zyklus beendet.")
     log.info("=" * 55)

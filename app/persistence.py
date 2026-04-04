@@ -171,9 +171,16 @@ def restore_from_cloud():
             if filename in gist_data.get("files", {}):
                 content = gist_data["files"][filename].get("content", "")
                 if content:
-                    # Nur wiederherstellen wenn lokal keine Daten vorhanden
+                    # Wiederherstellen wenn lokal keine/leere Daten
                     local_data = load_json(filename)
-                    if local_data is None or (isinstance(local_data, dict) and local_data.get("total_runs", 0) == 0):
+                    is_empty = (
+                        local_data is None
+                        or local_data == []
+                        or local_data == {}
+                        or (isinstance(local_data, dict) and local_data.get("total_runs", 0) == 0
+                            and len(local_data) <= 1)
+                    )
+                    if is_empty:
                         data = json.loads(content)
                         save_json(filename, data)
                         files_restored += 1
