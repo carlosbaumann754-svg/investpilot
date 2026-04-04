@@ -128,11 +128,16 @@ def ask_question(question, context_data, config=None):
         "Verwende Zahlen und konkrete Werte aus den Daten."
     )
 
+    cfg = config or {}
+    ask_cfg = cfg.get("ask", {})
+    model = ask_cfg.get("model", "claude-sonnet-4-6")
+    max_tokens = ask_cfg.get("max_tokens", 1024)
+
     try:
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
+            model=model,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[
                 {"role": "user", "content": f"Bot-Daten:\n{context}\n\nFrage: {question}"}
