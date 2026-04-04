@@ -30,6 +30,7 @@
     <button class="tab" onclick="switchTab('backtest')">Backtest</button>
     <button class="tab" onclick="switchTab('settings')">Settings</button>
     <button class="tab" onclick="switchTab('logs')">Logs</button>
+    <button class="tab" onclick="switchTab('ask')">Ask</button>
 </div>
 
 <!-- CONTENT -->
@@ -74,6 +75,15 @@
         <div class="card">
             <div class="card-title">Regime Status</div>
             <div id="regime-status" style="display:flex;gap:8px;flex-wrap:wrap;">--</div>
+        </div>
+
+        <!-- WATCHDOG STATUS -->
+        <div class="card" id="watchdog-card">
+            <div class="card-title">Bot-Gesundheit (Watchdog)</div>
+            <div id="watchdog-status" style="display:flex;gap:8px;align-items:center;">
+                <div class="badge badge-blue" id="watchdog-badge">Prüfe...</div>
+            </div>
+            <div id="watchdog-details" class="card-sub" style="margin-top:8px;">--</div>
         </div>
 
         <!-- KILL SWITCH -->
@@ -487,6 +497,21 @@
             <div class="card-title">Trading Log (Live)</div>
             <div class="log-viewer" id="log-viewer">Lade Logs...</div>
         </div>
+    </div>
+
+    <!-- === ASK TAB === -->
+    <div id="tab-ask" class="tab-content">
+        <div class="card">
+            <div class="card-title">Frag den Bot</div>
+            <div class="card-sub" style="margin-bottom:12px;">Stelle Fragen zu Trades, Performance, Entscheidungen</div>
+            <div style="display:flex;gap:8px;">
+                <input type="text" id="ask-input" placeholder="z.B. Warum wurde NVDA verkauft?"
+                    style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--card-bg);color:var(--text);font-size:14px;"
+                    onkeydown="if(event.key==='Enter')askQuestion()">
+                <button class="btn" onclick="askQuestion()" id="ask-btn" style="white-space:nowrap;">Fragen</button>
+            </div>
+        </div>
+        <div id="ask-history" style="display:flex;flex-direction:column;gap:12px;"></div>
     </div>
 
 </div>

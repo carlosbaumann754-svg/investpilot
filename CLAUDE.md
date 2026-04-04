@@ -6,6 +6,7 @@ Inkl. Risk Management, Leverage Management, Asset-Filters, Market Context, Execu
 Inkl. Backtesting Engine, ML Scoring (Gradient Boosting), Walk-Forward Validation.
 Inkl. Self-Improvement Optimizer (woechentlich, Grid-Search, Auto-ML, Rollback).
 Inkl. v5 Profitabilitaets-Upgrade: Regime Filter, Trailing SL, Dynamic Sizing, MTF Confluence, Sector Rotation, Recovery Mode.
+Inkl. v6 Monitoring & Q&A: Watchdog Diagnostics (3-Ebenen Health Check, Telegram Alerts), Q&A Chat (Claude API).
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
@@ -26,6 +27,8 @@ investpilot/
 │   ├── risk_manager.py         # Risikomanagement: Position Sizing, Drawdown, Margin, Korrelation
 │   ├── leverage_manager.py     # Dynamischer Hebel, eToro-Limits, Trailing SL, TP-Staffelung
 │   ├── alerts.py               # Telegram/Discord Notifications, Watchdog, Kill Switch
+│   ├── watchdog.py             # [v6] Bot-Diagnostics: 5 Health-Checks, Telegram Alerts
+│   ├── ask.py                  # [v6] Q&A Chat: Claude API, Bot-Context, natuerliche Antworten
 │   ├── market_context.py       # VIX, Fear&Greed, Makro-Events, Earnings, Saisonalitaet
 │   ├── asset_filters.py        # Asset-Klassen-Filter: Zeitfenster, Crypto, Forex, Rohstoffe
 │   ├── execution.py            # Slippage-Tracking, Latenz, Performance-Breakdown, Sortino
@@ -36,7 +39,7 @@ investpilot/
 │   ├── report_pdf.py           # PDF-Generierung via ReportLab
 │   └── config_manager.py       # Config/Pfad-Management (Docker + lokal)
 ├── web/                        # FastAPI Dashboard
-│   ├── app.py                  # 34 REST Endpoints inkl. Kill Switch, Risk, Backtest, ML
+│   ├── app.py                  # 37 REST Endpoints inkl. Kill Switch, Risk, Backtest, ML, Ask, Diagnostics
 │   ├── auth.py                 # Login, bcrypt, Sessions
 │   ├── security.py             # Rate Limiting, Audit Log, Failed Login Tracking
 │   ├── data_access.py          # JSON Read/Write, Log Tailing
@@ -178,6 +181,28 @@ investpilot/
 - Regime Status Card: VIX Level, Halt, Recovery Mode Badges
 - API: `/api/regime`, `/api/trailing-sl`, `/api/sectors`
 
+## Neue Features (v6 — Monitoring & Q&A)
+
+### Watchdog Diagnostics (`app/watchdog.py`)
+- **5 Health-Checks**: Zyklen-Aktivitaet, Trade-Erfolgsrate, Error-Patterns, Margin-Gesundheit, Drawdown
+- **Zyklen-Check**: Alert wenn letzter Zyklus >30 Min her (Bot haengt/abgestuerzt)
+- **Trade-Erfolg**: Erkennt wenn >50% der CLOSE-Calls fehlschlagen (haette close_position-Bug gefangen)
+- **Error-Pattern**: Erkennt wiederholte Fehlermuster in Logs (>3x gleicher Fehler)
+- **Margin-Check**: Warnung bei <20%, Kritisch bei <10%
+- **Drawdown-Check**: Ueberwacht Tages/Wochen-Drawdown vs Limits
+- **Telegram-Alert**: Automatisch bei Problemen via `/api/diagnostics/alert` (kein Auth, fuer cron-job.org)
+- **Dashboard-Widget**: Watchdog-Card im Dashboard-Tab mit Status-Badge + Details
+- Config: `watchdog.enabled`, `check_interval_minutes`, `max_cycle_silence_minutes`, `close_error_threshold_pct`
+
+### Q&A Chat (`app/ask.py`)
+- **Claude API Integration**: Fragen zum Bot in natuerlicher Sprache beantworten
+- **Context-Sammlung**: Portfolio (live), Trade-History, Decision-Log, Brain-State, Scanner, Risk-State
+- **Modell**: Claude Haiku (schnell, guenstig: ~$0.01/Anfrage)
+- **Dashboard-Tab**: "Ask" Tab mit Chat-Interface (Frage + Antwort-History)
+- **Beispielfragen**: "Warum wurde NVDA verkauft?", "Welcher Trade hat am meisten verloren?", "Warum kauft der Bot nichts?"
+- Config: `ask.enabled`, `ask.model`, `ask.max_tokens`
+- Env: `ANTHROPIC_API_KEY` (Pflicht)
+
 ## Kern-Module (v1, aktualisiert)
 
 ### eToro Client (`app/etoro_client.py`)
@@ -240,6 +265,9 @@ investpilot/
 - **`GET /api/regime`** — [NEU v5] VIX-Level, Marktregime, Recovery Mode, Trading Halt
 - **`GET /api/trailing-sl`** — [NEU v5] Aktive Trailing Stop-Loss Levels
 - **`GET /api/sectors`** — [NEU v5] Sektor-Staerke Daten
+- **`GET /api/diagnostics`** — [NEU v6] Bot-Gesundheitspruefung (5 Checks, Auth)
+- **`GET /api/diagnostics/alert`** — [NEU v6] Watchdog mit Telegram-Alert (kein Auth, fuer cron-job.org)
+- **`POST /api/ask`** — [NEU v6] Q&A Chat via Claude API (Auth)
 - `GET /api/logs` — Scheduler Logs
 - `GET/POST /api/weekly-report` — Weekly Report
 - `GET /api/weekly-report/pdf|pdfs` — PDF Reports
@@ -264,6 +292,8 @@ investpilot/
 - **risk_management.dynamic_sizing_enabled**: [NEU v5] Score-basierte Positionsgroesse
 - **risk_management.recovery_mode_***: [NEU v5] Recovery Mode Thresholds
 - **alerts**: Telegram/Discord Config, Email
+- **watchdog**: [NEU v6] Enabled, Check-Intervall, Silence-Threshold, Error-Rate-Threshold
+- **ask**: [NEU v6] Enabled, Modell, Max Tokens
 - **strategies**: Core/Growth/Dividend/Tactical Targets
 
 ### Umgebungsvariablen
@@ -272,6 +302,7 @@ investpilot/
 - `GITHUB_TOKEN` (Cloud Backup)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (Alerts)
 - `DISCORD_WEBHOOK_URL` (Alerts)
+- `ANTHROPIC_API_KEY` [NEU v6] (Q&A Chat)
 
 ## Deployment
 - **Docker:** `docker-compose up -d` (Port 8443)

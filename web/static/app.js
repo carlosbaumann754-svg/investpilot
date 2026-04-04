@@ -43,6 +43,7 @@ function switchTab(name) {
     if (name === 'backtest') { loadBacktest(); loadOptimizer(); }
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
+    if (name === 'ask') document.getElementById('ask-input').focus();
 }
 
 // === TOAST ===
@@ -929,6 +930,93 @@ async function rollbackOptimizer() {
     }
 }
 
+// === WATCHDOG ===
+async function loadWatchdog() {
+    try {
+        const res = await apiFetch('/api/diagnostics');
+        if (!res) return;
+        const data = await res.json();
+
+        const badge = document.getElementById('watchdog-badge');
+        const details = document.getElementById('watchdog-details');
+
+        if (data.status === 'healthy') {
+            badge.textContent = 'HEALTHY';
+            badge.className = 'badge badge-green';
+        } else if (data.status === 'warning') {
+            badge.textContent = 'WARNING';
+            badge.className = 'badge badge-orange';
+        } else {
+            badge.textContent = 'ERROR';
+            badge.className = 'badge badge-red';
+        }
+
+        if (data.issues && data.issues.length > 0) {
+            details.innerHTML = data.issues.map(i => '• ' + i).join('<br>');
+        } else {
+            details.textContent = 'Alle Checks bestanden';
+        }
+    } catch (e) {
+        document.getElementById('watchdog-badge').textContent = 'OFFLINE';
+        document.getElementById('watchdog-badge').className = 'badge badge-red';
+    }
+}
+
+// === ASK (Q&A Chat) ===
+async function askQuestion() {
+    const input = document.getElementById('ask-input');
+    const question = input.value.trim();
+    if (!question) return;
+
+    const btn = document.getElementById('ask-btn');
+    btn.disabled = true;
+    btn.textContent = 'Denke...';
+    input.disabled = true;
+
+    // Frage anzeigen
+    const history = document.getElementById('ask-history');
+    const qCard = document.createElement('div');
+    qCard.className = 'card';
+    qCard.style.borderLeft = '3px solid var(--blue)';
+    qCard.innerHTML = '<div class="card-sub" style="color:var(--blue);margin-bottom:4px;">Deine Frage</div>' +
+        '<div>' + question.replace(/</g, '&lt;') + '</div>';
+    history.appendChild(qCard);
+
+    input.value = '';
+
+    try {
+        const res = await apiFetch('/api/ask', {
+            method: 'POST',
+            body: JSON.stringify({ question }),
+        });
+
+        const data = await res.json();
+        const aCard = document.createElement('div');
+        aCard.className = 'card';
+        aCard.style.borderLeft = '3px solid var(--green)';
+
+        if (data.error) {
+            aCard.style.borderLeftColor = 'var(--red)';
+            aCard.innerHTML = '<div class="card-sub" style="color:var(--red);margin-bottom:4px;">Fehler</div>' +
+                '<div>' + data.error + '</div>';
+        } else {
+            const answer = (data.answer || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
+            const tokens = data.tokens_used ? ' (' + data.tokens_used + ' Tokens)' : '';
+            aCard.innerHTML = '<div class="card-sub" style="color:var(--green);margin-bottom:4px;">Antwort' + tokens + '</div>' +
+                '<div style="line-height:1.6;">' + answer + '</div>';
+        }
+        history.appendChild(aCard);
+        aCard.scrollIntoView({ behavior: 'smooth' });
+    } catch (e) {
+        showToast('Fehler: ' + e.message);
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Fragen';
+    input.disabled = false;
+    input.focus();
+}
+
 // === INIT ===
 (function init() {
     if (!getToken()) {
@@ -937,9 +1025,11 @@ async function rollbackOptimizer() {
     }
 
     loadDashboard();
+    loadWatchdog();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
+    setInterval(loadWatchdog, 300000); // Watchdog alle 5 Min
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();

@@ -736,3 +736,119 @@ async def api_sectors(user=Depends(require_auth)):
         return {"sectors": strength}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ============================================================
+# WATCHDOG / DIAGNOSTICS
+# ============================================================
+
+@app.get("/api/diagnostics")
+async def api_diagnostics(user=Depends(require_auth)):
+    """Bot-Gesundheitspruefung: Zyklen, Trade-Erfolg, Error-Patterns."""
+    try:
+        from app.watchdog import run_diagnostics
+
+        brain = read_json_safe("brain_state.json") or {}
+        trades = read_json_safe("trade_history.json") or []
+        risk = read_json_safe("risk_state.json") or {}
+        log_lines = read_log_tail(200)
+
+        result = run_diagnostics(
+            trade_history=trades,
+            brain_state=brain,
+            risk_state=risk,
+            log_lines=log_lines,
+        )
+        return result
+    except Exception as ex:
+        log.error(f"Diagnostics Fehler: {ex}")
+        return {"status": "error", "error": str(ex), "checks": {}, "issues": [str(ex)]}
+
+
+@app.get("/api/diagnostics/alert")
+async def api_diagnostics_alert():
+    """Watchdog-Check mit Telegram-Alert bei Problemen (kein Auth - fuer cron-job.org)."""
+    try:
+        from app.watchdog import run_diagnostics, format_telegram_alert
+        from app.alerts import send_alert
+
+        brain = read_json_safe("brain_state.json") or {}
+        trades = read_json_safe("trade_history.json") or []
+        risk = read_json_safe("risk_state.json") or {}
+        log_lines = read_log_tail(200)
+
+        result = run_diagnostics(
+            trade_history=trades,
+            brain_state=brain,
+            risk_state=risk,
+            log_lines=log_lines,
+        )
+
+        # Nur bei Problemen Telegram senden
+        if result["status"] in ("error", "warning"):
+            config = load_config()
+            msg = format_telegram_alert(result)
+            try:
+                send_alert(msg, level="WARNING" if result["status"] == "warning" else "ERROR",
+                           config=config)
+            except Exception as alert_err:
+                log.warning(f"Diagnostics Alert senden fehlgeschlagen: {alert_err}")
+
+        return {"status": result["status"], "issues_count": len(result["issues"])}
+    except Exception as ex:
+        log.error(f"Diagnostics Alert Fehler: {ex}")
+        return {"status": "error", "error": str(ex)}
+
+
+# ============================================================
+# Q&A ASK
+# ============================================================
+
+class AskRequest(BaseModel):
+    question: str
+
+
+@app.post("/api/ask")
+async def api_ask(req: AskRequest, user=Depends(require_auth)):
+    """Beantworte Fragen zum Bot mit Claude API."""
+    if not req.question or len(req.question.strip()) < 3:
+        raise HTTPException(400, "Frage zu kurz")
+
+    try:
+        from app.ask import ask_question
+
+        config = load_config()
+
+        # Daten sammeln
+        context_data = {
+            "trade_history": read_json_safe("trade_history.json") or [],
+            "decision_log": read_json_safe("decision_log.json") or [],
+            "brain_state": read_json_safe("brain_state.json") or {},
+            "risk_state": read_json_safe("risk_state.json") or {},
+            "scanner_state": read_json_safe("scanner_state.json") or {},
+        }
+
+        # Portfolio live abfragen
+        try:
+            client = EtoroClient(config)
+            credit = client.get_credit()
+            positions = client.get_portfolio()
+            parsed = [EtoroClient.parse_position(p) for p in positions]
+            total_invested = sum(p["invested"] for p in parsed)
+            unrealized = sum(p["pnl"] for p in parsed)
+            context_data["portfolio"] = {
+                "total_value": round(credit + total_invested + unrealized, 2),
+                "credit": round(credit, 2),
+                "invested": round(total_invested, 2),
+                "unrealized_pnl": round(unrealized, 2),
+                "num_positions": len(positions),
+                "positions": parsed,
+            }
+        except Exception:
+            context_data["portfolio"] = None
+
+        result = ask_question(req.question, context_data, config)
+        return result
+    except Exception as ex:
+        log.error(f"Ask Fehler: {ex}")
+        return {"error": f"Fehler: {str(ex)}"}
