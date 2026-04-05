@@ -61,6 +61,18 @@ def run_diagnostics(trade_history=None, brain_state=None, risk_state=None,
     }
 
 
+def _is_market_hours():
+    """Prüfe ob aktuell Handelszeiten sind (Mo-Fr, grob 08-22 Uhr MEZ)."""
+    now = datetime.now()
+    # Wochenende: Sa=5, So=6
+    if now.weekday() >= 5:
+        return False
+    # Ausserhalb Handelszeiten (vor 08:00 oder nach 22:00)
+    if now.hour < 8 or now.hour >= 22:
+        return False
+    return True
+
+
 def _check_cycle_activity(brain_state):
     """Prüfe ob Trading-Zyklen regelmässig laufen."""
     if not brain_state:
@@ -77,6 +89,15 @@ def _check_cycle_activity(brain_state):
     try:
         last_dt = datetime.strptime(f"{last_date} {last_time}", "%Y-%m-%d %H:%M")
         minutes_ago = (datetime.now() - last_dt).total_seconds() / 60
+
+        # Ausserhalb Handelszeiten: kein Alarm
+        if not _is_market_hours():
+            return {
+                "status": "ok",
+                "message": f"Ausserhalb Handelszeiten — letzter Zyklus vor {int(minutes_ago)} Min",
+                "last_cycle": last_dt.isoformat(),
+                "minutes_ago": round(minutes_ago),
+            }
 
         if minutes_ago > 30:
             return {
