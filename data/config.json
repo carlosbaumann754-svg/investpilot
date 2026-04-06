@@ -10,7 +10,7 @@
     "max_single_trade_usd": 3000,
     "default_leverage": 2,
     "max_positions": 20,
-    "min_scanner_score": 20,
+    "min_scanner_score": 40,
     "scan_interval_cycles": 6,
     "enabled_asset_classes": [
       "stocks",
@@ -65,8 +65,8 @@
       }
     },
     "rebalance_threshold_pct": 2,
-    "stop_loss_pct": -12,
-    "take_profit_pct": 15,
+    "stop_loss_pct": -3,
+    "take_profit_pct": 12,
     "use_ml_scoring": false
   },
   "backtest": {
@@ -82,34 +82,34 @@
   },
   "asset_class_params": {
     "stocks": {
-      "sl_pct": -2.8,
-      "tp_pct": 5.6,
-      "avg_volatility": 29.79
+      "sl_pct": -3.7,
+      "tp_pct": 7.4,
+      "avg_volatility": 39.54
     },
     "etf": {
-      "sl_pct": -2.4,
-      "tp_pct": 4.8,
-      "avg_volatility": 24.91
+      "sl_pct": -2.5,
+      "tp_pct": 5.0,
+      "avg_volatility": 26.93
     },
     "crypto": {
-      "sl_pct": -5.8,
-      "tp_pct": 11.6,
-      "avg_volatility": 61.22
+      "sl_pct": -5.9,
+      "tp_pct": 11.8,
+      "avg_volatility": 61.93
     },
     "commodities": {
-      "sl_pct": -5.1,
-      "tp_pct": 10.2,
-      "avg_volatility": 54.46
+      "sl_pct": -7.6,
+      "tp_pct": 15.2,
+      "avg_volatility": 79.93
     },
     "forex": {
       "sl_pct": -2,
       "tp_pct": 4,
-      "avg_volatility": 7.59
+      "avg_volatility": 9.06
     },
     "indices": {
-      "sl_pct": -3,
-      "tp_pct": 6,
-      "avg_volatility": 1.8
+      "sl_pct": -2,
+      "tp_pct": 4,
+      "avg_volatility": 16.74
     }
   },
   "risk_management": {
