@@ -77,11 +77,13 @@ function fmtTime(iso) {
 // === DASHBOARD ===
 async function loadDashboard() {
     try {
-        const [portfolioRes, brainRes, statusRes, regimeRes] = await Promise.all([
+        const [portfolioRes, brainRes, statusRes, regimeRes, trailRes, sectorRes] = await Promise.all([
             apiFetch('/api/portfolio'),
             apiFetch('/api/brain'),
             apiFetch('/api/trading/status'),
             apiFetch('/api/regime'),
+            apiFetch('/api/trailing-sl'),
+            apiFetch('/api/sectors'),
         ]);
 
         if (portfolioRes) {
@@ -95,9 +97,22 @@ async function loadDashboard() {
                 document.getElementById('invested-value').textContent = fmtUsd(p.invested);
                 document.getElementById('num-positions').textContent = p.num_positions;
 
+                // Parse trailing SL data for position enrichment
+                let trailData = {};
+                if (trailRes) {
+                    try {
+                        const td = await trailRes.json();
+                        (td.active || []).forEach(t => { trailData[t.position_id] = t; });
+                    } catch(e) {}
+                }
+
                 const tbody = document.getElementById('positions-table');
                 tbody.innerHTML = '';
                 (p.positions || []).forEach(pos => {
+                    const trail = trailData[pos.position_id];
+                    const trailTd = trail
+                        ? `<td class="badge-green" style="font-size:11px;">${fmtUsd(trail.sl_level)}</td>`
+                        : '<td style="color:#666;">--</td>';
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>#${pos.instrument_id}</td>
@@ -105,6 +120,7 @@ async function loadDashboard() {
                         <td class="${pnlClass(pos.pnl)}">${fmtUsd(pos.pnl)}</td>
                         <td class="${pnlClass(pos.pnl_pct)}">${fmtPct(pos.pnl_pct)}</td>
                         <td>${pos.leverage}x</td>
+                        ${trailTd}
                     `;
                     tbody.appendChild(tr);
                 });
@@ -156,7 +172,43 @@ async function loadDashboard() {
                     html += '<span class="badge badge-green">NORMAL</span>';
                 }
                 el.innerHTML = html;
+
+                // Regime Detail Fields
+                const det = document.getElementById('regime-details');
+                if (det) {
+                    det.style.display = 'block';
+                    const setVal = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+                    const setBadge = (id, val, cls) => { const e = document.getElementById(id); if (e) { e.textContent = val; e.className = 'badge ' + cls; } };
+                    setVal('regime-vix-value', r.vix_level != null ? r.vix_level.toFixed(1) : '--');
+                    setBadge('regime-market-value', r.brain_regime || '--',
+                        r.brain_regime === 'bear' ? 'badge-red' : r.brain_regime === 'bull' ? 'badge-green' : 'badge-orange');
+                    setVal('regime-fg-value', r.fear_greed != null ? r.fear_greed : '--');
+                    setBadge('regime-recovery-value', r.recovery_mode ? 'AKTIV' : 'Nein',
+                        r.recovery_mode ? 'badge-orange' : 'badge-green');
+                    setBadge('regime-halt-value', r.trading_halted ? 'JA' : 'Nein',
+                        r.trading_halted ? 'badge-red' : 'badge-green');
+                    setBadge('regime-filter-value', r.buy_allowed === false ? 'BLOCKIERT' : 'OK',
+                        r.buy_allowed === false ? 'badge-red' : 'badge-green');
+                }
             }
+        }
+
+        // Sector Strength
+        if (sectorRes) {
+            try {
+                const s = await sectorRes.json();
+                const card = document.getElementById('sector-card');
+                const badges = document.getElementById('sector-badges');
+                if (card && badges && s.sectors) {
+                    card.style.display = 'block';
+                    badges.innerHTML = Object.entries(s.sectors)
+                        .map(([name, data]) => {
+                            const pct = data.allocation_pct || 0;
+                            const cls = pct > 30 ? 'badge-red' : pct > 20 ? 'badge-orange' : 'badge-blue';
+                            return `<span class="badge ${cls}">${name} ${pct.toFixed(0)}% (${data.count})</span>`;
+                        }).join('');
+                }
+            } catch(e) {}
         }
     } catch (err) {
         console.error('Dashboard load error:', err);

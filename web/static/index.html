@@ -75,6 +75,40 @@
         <div class="card">
             <div class="card-title">Regime Status</div>
             <div id="regime-status" style="display:flex;gap:8px;flex-wrap:wrap;">--</div>
+            <div id="regime-details" style="margin-top:12px;display:none;">
+                <div class="grid-2" style="gap:8px;">
+                    <div class="regime-detail-item">
+                        <span class="card-sub">VIX Level</span>
+                        <span id="regime-vix-value" style="font-weight:700;font-size:16px;">--</span>
+                    </div>
+                    <div class="regime-detail-item">
+                        <span class="card-sub">Market Regime</span>
+                        <span id="regime-market-value" class="badge badge-blue">--</span>
+                    </div>
+                    <div class="regime-detail-item">
+                        <span class="card-sub">Fear &amp; Greed</span>
+                        <span id="regime-fg-value" style="font-weight:700;font-size:16px;">--</span>
+                    </div>
+                    <div class="regime-detail-item">
+                        <span class="card-sub">Recovery Mode</span>
+                        <span id="regime-recovery-value" class="badge badge-blue">--</span>
+                    </div>
+                    <div class="regime-detail-item">
+                        <span class="card-sub">Trading Halted</span>
+                        <span id="regime-halt-value" class="badge badge-blue">--</span>
+                    </div>
+                    <div class="regime-detail-item">
+                        <span class="card-sub">Regime Filter</span>
+                        <span id="regime-filter-value" class="badge badge-blue">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECTOR STRENGTH -->
+        <div class="card" id="sector-card" style="display:none;">
+            <div class="card-title">Sektor-Staerke</div>
+            <div id="sector-badges" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
         </div>
 
         <!-- WATCHDOG STATUS -->
@@ -100,7 +134,7 @@
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>ID</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th></tr>
+                        <tr><th>ID</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th><th>Trail SL</th></tr>
                     </thead>
                     <tbody id="positions-table"></tbody>
                 </table>

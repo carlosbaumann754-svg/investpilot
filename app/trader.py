@@ -74,6 +74,14 @@ def _import_alerts():
         log.debug("Alerts nicht verfuegbar")
         return None
 
+def _import_events_calendar():
+    try:
+        from app import events_calendar
+        return events_calendar
+    except ImportError:
+        log.debug("Events Calendar nicht verfuegbar")
+        return None
+
 
 # ============================================================
 # PORTFOLIO STATUS
@@ -435,6 +443,7 @@ def execute_scanner_trades(client, config, scan_results):
     mc = _import_market_context()
     ex = _import_execution()
     al = _import_alerts()
+    ec = _import_events_calendar()
 
     portfolio = client.get_portfolio()
     if not portfolio:
@@ -571,12 +580,11 @@ def execute_scanner_trades(client, config, scan_results):
                         log.info(f"  SKIP {symbol}: {'; '.join(filter_reasons)}")
                         continue
 
-                # Earnings Check (Aktien)
-                if asset_class == "stocks" and mc:
-                    in_earnings, earnings_date = mc.check_earnings_window(
-                        analysis.get("symbol", symbol))
-                    if in_earnings:
-                        log.info(f"  SKIP {symbol}: Earnings-Fenster ({earnings_date})")
+                # Earnings Blackout Check (Aktien)
+                if asset_class == "stocks" and ec:
+                    blackout, blackout_reason = ec.is_earnings_blackout(symbol, config)
+                    if blackout:
+                        log.info(f"  EARNINGS BLACKOUT: {symbol} — {blackout_reason}")
                         continue
 
                 # Betrag nach Score-Gewichtung

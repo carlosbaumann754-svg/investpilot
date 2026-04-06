@@ -247,6 +247,35 @@ tr:hover {
 .badge-orange { background: rgba(245, 158, 11, 0.15); color: var(--orange); }
 .badge-purple { background: rgba(168, 85, 247, 0.15); color: var(--purple); }
 
+/* === REGIME DETAIL === */
+.regime-detail-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border-radius: 8px;
+}
+
+/* === SECTOR BAR === */
+.sector-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--bg-input);
+    border-radius: 8px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.sector-bar-fill {
+    height: 6px;
+    border-radius: 3px;
+    min-width: 8px;
+    transition: width 0.3s ease;
+}
+
 /* === FORMS (Settings) === */
 .form-group {
     margin-bottom: 16px;
