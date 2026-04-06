@@ -727,13 +727,29 @@ async def api_trailing_sl(user=Depends(require_auth)):
 @app.get("/api/sectors")
 async def api_sectors(user=Depends(require_auth)):
     """Sektor-Staerke basierend auf letztem Scan."""
-    scan_results = read_json_safe("last_scan.json")
+    scanner_state = read_json_safe("scanner_state.json")
+    scan_results = scanner_state.get("last_results", []) if scanner_state else []
     if not scan_results:
         return {"sectors": {}, "message": "Kein Scan verfuegbar"}
     try:
         from app.market_scanner import calculate_sector_strength, ASSET_UNIVERSE
         strength = calculate_sector_strength(scan_results)
-        return {"sectors": strength}
+        # Enrich with count and allocation_pct for dashboard
+        sector_count = {}
+        for r in scan_results:
+            sec = ASSET_UNIVERSE.get(r.get("symbol", ""), {}).get("sector")
+            if sec:
+                sector_count[sec] = sector_count.get(sec, 0) + 1
+        total = sum(sector_count.values()) or 1
+        sectors = {}
+        for sec, avg_score in strength.items():
+            cnt = sector_count.get(sec, 0)
+            sectors[sec] = {
+                "avg_score": round(avg_score, 1),
+                "count": cnt,
+                "allocation_pct": round(cnt / total * 100, 1),
+            }
+        return {"sectors": sectors}
     except Exception as e:
         return {"error": str(e)}
 
