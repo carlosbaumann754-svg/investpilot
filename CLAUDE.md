@@ -7,10 +7,13 @@ Inkl. Backtesting Engine, ML Scoring (Gradient Boosting), Walk-Forward Validatio
 Inkl. Self-Improvement Optimizer (woechentlich, Grid-Search, Auto-ML, Rollback).
 Inkl. v5 Profitabilitaets-Upgrade: Regime Filter, Trailing SL, Dynamic Sizing, MTF Confluence, Sector Rotation, Recovery Mode.
 Inkl. v6 Monitoring & Q&A: Watchdog Diagnostics (3-Ebenen Health Check, Telegram Alerts), Q&A Chat (Claude API).
+Inkl. v7 Intelligence-Upgrade: Sentiment-Analyse, Portfolio Hedging, ML Trade-History Training, Google Drive Backup, Enhanced Telegram Alerts, Backtester mit realistischen Filtern.
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
-**Deployment:** Render (Free Tier) + Synology NAS
+**Deployment:** Render (Paid $7/mo) + Synology NAS
+**Render URL:** https://investpilot-2dp2.onrender.com
+**Deploy Hook:** `curl -s "https://api.render.com/deploy/srv-d76i772dbo4c73bkmfc0?key=PiRVjLwLjNc"`
 
 ## Architektur
 
@@ -34,7 +37,11 @@ investpilot/
 │   ├── execution.py            # Slippage-Tracking, Latenz, Performance-Breakdown, Sortino
 │   ├── asset_discovery.py      # Woechentliche neue Asset-Suche (40+ Queries)
 │   ├── scheduler.py            # Daemon Loop (5 Min Intervall, Watchdog, Market Context)
-│   ├── persistence.py          # GitHub Gist Cloud Backup/Restore (15 Dateien)
+│   ├── sentiment.py            # [v7] Sentiment-Analyse: yfinance News keyword-basiert
+│   ├── hedging.py              # [v7] Portfolio Hedging: Bear-Regime Schutz, Defensive Sektoren
+│   ├── events_calendar.py      # [v5+v7] Earnings Blackout + Earnings Surprise Scoring
+│   ├── gdrive_backup.py        # [v7] Google Drive Backup via Service Account
+│   ├── persistence.py          # GitHub Gist Cloud Backup/Restore + GDrive Fallback
 │   ├── weekly_report.py        # Freitag-Reports (JSON + HTML + PDF) inkl. Backtest-Sektion
 │   ├── report_pdf.py           # PDF-Generierung via ReportLab
 │   └── config_manager.py       # Config/Pfad-Management (Docker + lokal)
@@ -77,9 +84,14 @@ investpilot/
 
 ### Alerts (`app/alerts.py`)
 - **Telegram/Discord**: Trade-Notifications, Fehler, Drawdown-Warnungen
+- **Granulare Telegram-Steuerung**: notify_trades, notify_stop_loss, notify_regime_change, notify_daily_summary, notify_weekly_report, notify_optimizer
+- **Regime Halt Alerts**: Telegram-Benachrichtigung wenn Regime-Filter Trading stoppt/freigibt
+- **Weekly Report Summary**: Telegram-Zusammenfassung nach Weekly Report Erstellung
+- **Optimizer Alerts**: Telegram-Benachrichtigung bei Optimizer-Ergebnis (Aenderungen, Rollback, No Change)
 - **Daily Summary**: Automatisch um 21:00
-- **Watchdog**: Ueberwacht Bot-Aktivitaet, Alert bei Ausfall
+- **Watchdog**: Ueberwacht Bot-Aktivitaet, Alert bei Ausfall (Critical Alert via Telegram)
 - **Telegram Commands**: /killswitch, /status, /start remote ausfuehrbar
+- **Graceful Degradation**: Wenn TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID nicht gesetzt, werden Alerts still uebersprungen
 
 ### Market Context (`app/market_context.py`)
 - **VIX-Monitoring**: Low/Normal/Elevated/High Fear, Position-Reduktion
@@ -303,6 +315,8 @@ investpilot/
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (Alerts)
 - `DISCORD_WEBHOOK_URL` (Alerts)
 - `ANTHROPIC_API_KEY` [NEU v6] (Q&A Chat)
+- `GDRIVE_SERVICE_ACCOUNT_JSON` [NEU v7] (Google Drive Backup — JSON-Key)
+- `GDRIVE_FOLDER_ID` [NEU v7] (Google Drive Backup — Ziel-Ordner)
 
 ## Deployment
 - **Docker:** `docker-compose up -d` (Port 8443)
@@ -325,6 +339,59 @@ investpilot/
 - `discovery_result.json` — Letzte Asset-Discovery
 - `weekly_report.json` — Letzter Weekly Report
 - `audit.db` — SQLite Security Database
+
+## Neue Features (v7 — Intelligence-Upgrade)
+
+### Sentiment-Analyse (`app/sentiment.py`)
+- **yfinance News**: Keyword-basierte Sentiment-Bewertung (positiv/negativ/neutral)
+- **Score-Range**: -1.0 bis +1.0, konfigurierbar Threshold (-0.5 default)
+- **4h Cache**: Vermeidet ueberfluessige API-Calls
+- **Integration**: Sentiment < Threshold → Trade wird uebersprungen
+- Config: `market_context.use_sentiment_filter`, `sentiment_block_threshold`
+
+### Portfolio Hedging (`app/hedging.py`)
+- **Bear-Regime Schutz**: Positionsgroessen automatisch reduziert (default x0.5)
+- **Defensive Sektoren**: health, consumer, bonds, commodities bevorzugt
+- **Integration**: Multiplikator auf ctx_multiplier in trader.py
+- Config: `hedging.enabled`, `bear_position_multiplier`, `defensive_sectors`
+
+### ML Trade-History Training (`app/ml_scorer.py`)
+- **Eigene Trades als Trainingsdaten**: RandomForest auf 11 Features (Scanner Score, RSI, MACD, Sektor, VIX, F&G)
+- **predict_score()**: Gibt Wahrscheinlichkeit 0-1 zurueck, multipliziert Scanner-Score
+- **Auto-Training**: Im Optimizer ab 50+ abgeschlossenen Trades
+- **Dual-Model Support**: Erkennt automatisch Price-History (18 dim) vs Trade-History (11 dim) Modell
+- Config: `demo_trading.use_ml_scoring: true` aktiviert ML-Scoring
+
+### Google Drive Backup (`app/gdrive_backup.py`)
+- **Service Account**: Kein OAuth noetig, nur JSON-Key + Folder-ID
+- **Inkrementell**: SHA256-Hash Vergleich, nur geaenderte Dateien hochladen
+- **Restore**: Automatisch beim Start als Fallback nach GitHub Gist
+- **Dateien**: brain_state, trade_history, config, risk_state, ml_model etc.
+- Env: `GDRIVE_SERVICE_ACCOUNT_JSON`, `GDRIVE_FOLDER_ID`
+
+### Enhanced Telegram Alerts (`app/alerts.py`)
+- **Granulare Steuerung**: notify_trades, notify_stop_loss, notify_regime_change, notify_daily_summary, notify_weekly_report, notify_optimizer
+- **Regime Halt/Resume**: Automatische Benachrichtigung bei Regime-Wechsel
+- **Stop-Loss Details**: Unterscheidet STOP_LOSS vs TRAILING_SL mit P/L-Details
+- **Weekly Report Summary**: Kompakte Zusammenfassung nach Report-Erstellung
+- **Optimizer Results**: Aenderungen, Rollback, No Change Benachrichtigung
+- Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+
+### Backtester mit realistischen Filtern (`app/backtester.py`)
+- **VIX Regime Filter**: Historische VIX-Daten → Score-Penalties + Halt in Backtest
+- **Earnings Blackout**: Historische Earnings-Termine → kein Trading im Blackout-Fenster
+- **Sektor Konzentration**: Max Positionen/Sektor auch im Backtest simuliert
+- **Verbesserter Trailing SL**: Intraday Highs fuer realistischere Simulation
+- **Walk-Forward**: Alle Filter durchgereicht an simulate_trades()
+
+### Events Calendar Enhanced (`app/events_calendar.py`)
+- **Earnings Surprise Scoring**: `adjust_score_for_earnings()` — Score-Boost/Penalty basierend auf letztem Earnings-Ergebnis
+- **Historische Earnings-Daten**: Fuer Backtester verfuegbar
+
+### Optimizer Enhanced (`app/optimizer.py`)
+- **Realistische Filter**: VIX + Earnings Blackout Daten automatisch heruntergeladen
+- **ML Trade-History**: Auto-Training ab 50 Trades im Optimizer-Lauf
+- **Telegram Integration**: Ergebnis-Benachrichtigung nach jedem Lauf
 
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
