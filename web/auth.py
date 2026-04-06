@@ -4,6 +4,7 @@ JWT-basiertes Login mit bcrypt Passwort-Hashing.
 """
 
 import os
+import secrets
 import logging
 from datetime import datetime, timedelta
 
@@ -16,7 +17,16 @@ log = logging.getLogger("Auth")
 # Config aus Umgebungsvariablen
 DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
-JWT_SECRET = os.environ.get("JWT_SECRET", "CHANGE_THIS_DEFAULT_SECRET_KEY_NOW")
+
+# JWT Secret: Env-Variable verwenden oder sicheren Fallback generieren
+_jwt_env = os.environ.get("JWT_SECRET", "")
+if _jwt_env and _jwt_env != "CHANGE_THIS_DEFAULT_SECRET_KEY_NOW":
+    JWT_SECRET = _jwt_env
+else:
+    JWT_SECRET = secrets.token_hex(32)
+    log.warning("SICHERHEITSWARNUNG: JWT_SECRET nicht gesetzt! "
+                "Verwende zufaellig generierten Key (Sessions ueberleben keinen Restart). "
+                "Setze JWT_SECRET als Umgebungsvariable fuer Production!")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
 

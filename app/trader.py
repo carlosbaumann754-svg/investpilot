@@ -356,9 +356,28 @@ def check_stop_loss_take_profit(client, config):
                                  f"Tranche {tranche_idx+1}: {close_pct}% bei +{target_pct}% "
                                  f"(PnL: {p['pnl_pct']:+.1f}%, Betrag: ${close_amount:,.2f})")
 
+                        # Tranche als ausgeloest markieren
+                        if pid_key not in partial_state:
+                            partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
+                        partial_state[pid_key]["triggered"].append(tranche_idx)
+                        new_total = partial_state[pid_key].get("total_closed_pct", 0) + close_pct
+                        partial_state[pid_key]["total_closed_pct"] = new_total
+
+                        # eToro API unterstuetzt kein partielles Schliessen.
+                        # Wenn kumulierte Tranchen >= 100%: GANZE Position schliessen.
+                        if new_total >= 100:
+                            log.info(f"  PROFIT_LOCK_CLOSE: Alle Tranchen erreicht "
+                                     f"({new_total}%) — schliesse Position komplett")
+                            result = client.close_position(p["position_id"], p["instrument_id"])
+                            trade_status = "executed" if result else "failed"
+                        else:
+                            log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} erreicht "
+                                     f"(kumuliert {new_total}% — eToro erlaubt nur Full Close)")
+                            trade_status = "signal_logged"
+
                         trade_entry = {
                             "timestamp": datetime.now().isoformat(),
-                            "action": "PARTIAL_CLOSE",
+                            "action": "PROFIT_LOCK_CLOSE" if new_total >= 100 else "PARTIAL_SIGNAL",
                             "instrument_id": p["instrument_id"],
                             "position_id": p["position_id"],
                             "pnl_pct": p["pnl_pct"],
@@ -368,18 +387,16 @@ def check_stop_loss_take_profit(client, config):
                             "tranche_close_pct": close_pct,
                             "tranche_target_pct": target_pct,
                             "close_amount_usd": close_amount,
-                            "status": "logged",
+                            "total_closed_pct": new_total,
+                            "status": trade_status,
                         }
                         save_trade(trade_entry)
-                        actions.append("PARTIAL_CLOSE")
-
-                        # Tranche als ausgeloest markieren
-                        if pid_key not in partial_state:
-                            partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
-                        partial_state[pid_key]["triggered"].append(tranche_idx)
-                        partial_state[pid_key]["total_closed_pct"] = (
-                            partial_state[pid_key].get("total_closed_pct", 0) + close_pct)
+                        actions.append(trade_entry["action"])
                         save_json("partial_close_state.json", partial_state)
+
+                        # Bei voller Schliessung: Rest der Tranchen-Pruefung ueberspringen
+                        if new_total >= 100:
+                            break
 
                         if al:
                             al.alert_trade_executed(trade_entry)
@@ -704,9 +721,14 @@ def execute_scanner_trades(client, config, scan_results):
                     })
                     if ml_prob is not None:
                         original = cand["score"]
-                        cand["score"] = round(cand["score"] * ml_prob, 1)
+                        # Additive Anpassung: ml_prob=0.5 ist neutral (kein Effekt),
+                        # ml_prob=0.8 gibt +15 Bonus, ml_prob=0.2 gibt -15 Malus.
+                        # Verhindert systematische Score-Reduktion durch Multiplikation.
+                        ml_bonus = round((ml_prob - 0.5) * 50, 1)
+                        cand["score"] = round(original + ml_bonus, 1)
                         log.info(f"  ML Score: {cand['symbol']} "
-                                 f"{original:.1f} x {ml_prob:.2f} = {cand['score']:.1f}")
+                                 f"{original:.1f} + {ml_bonus:+.1f} = {cand['score']:.1f} "
+                                 f"(prob={ml_prob:.2f})")
                 # Re-sort and re-filter after ML adjustment
                 buy_candidates = [c for c in buy_candidates if c["score"] >= min_score]
                 buy_candidates.sort(key=lambda x: x["score"], reverse=True)

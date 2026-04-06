@@ -7,12 +7,26 @@ API Keys werden NIE auf Disk geschrieben.
 import json
 import os
 import logging
+import threading
 from pathlib import Path
 
 log = logging.getLogger("ConfigManager")
 
 # Data-Verzeichnis: im Docker /app/data, lokal relativ zum Projekt
 DATA_DIR = Path(os.environ.get("INVESTPILOT_DATA_DIR", Path(__file__).parent.parent / "data"))
+
+# Thread-Lock fuer JSON-Dateizugriffe (verhindert Race Conditions
+# zwischen Scheduler-Thread und Web-API)
+_file_locks = {}
+_file_locks_lock = threading.Lock()
+
+
+def _get_file_lock(filename):
+    """Hole oder erstelle einen Lock fuer eine bestimmte Datei."""
+    with _file_locks_lock:
+        if filename not in _file_locks:
+            _file_locks[filename] = threading.Lock()
+        return _file_locks[filename]
 
 
 def get_data_path(filename):
@@ -74,18 +88,22 @@ def save_config(config):
 
 
 def load_json(filename):
-    """Lade eine JSON-Datei aus dem Data-Verzeichnis."""
-    path = get_data_path(filename)
-    if not path.exists():
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Lade eine JSON-Datei aus dem Data-Verzeichnis (thread-safe)."""
+    lock = _get_file_lock(filename)
+    with lock:
+        path = get_data_path(filename)
+        if not path.exists():
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 
 def save_json(filename, data):
-    """Speichere eine JSON-Datei ins Data-Verzeichnis (atomic write)."""
-    path = get_data_path(filename)
-    tmp_path = path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-    os.replace(str(tmp_path), str(path))
+    """Speichere eine JSON-Datei ins Data-Verzeichnis (atomic write, thread-safe)."""
+    lock = _get_file_lock(filename)
+    with lock:
+        path = get_data_path(filename)
+        tmp_path = path.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        os.replace(str(tmp_path), str(path))
