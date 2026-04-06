@@ -119,6 +119,38 @@ def _find_existing_file(service, folder_id, filename):
         return None
 
 
+def _get_owner_email():
+    """Get the Google account email to transfer file ownership to.
+
+    Without ownership transfer, Service Accounts hit storageQuotaExceeded
+    because they have 0 GB storage. Transferring ownership to a real
+    Google account uses that account's storage quota instead.
+    """
+    return os.environ.get("GDRIVE_OWNER_EMAIL", "")
+
+
+def _transfer_ownership(service, file_id, owner_email):
+    """Transfer file ownership to a real Google account.
+
+    This is required because Service Accounts have no storage quota.
+    Files owned by the SA count against its 0 GB limit.
+    """
+    if not owner_email:
+        return
+    try:
+        service.permissions().create(
+            fileId=file_id,
+            transferOwnership=True,
+            body={
+                "type": "user",
+                "role": "owner",
+                "emailAddress": owner_email,
+            },
+        ).execute()
+    except Exception as e:
+        log.debug(f"  Ownership-Transfer fehlgeschlagen: {e}")
+
+
 def _upload_file(service, folder_id, filepath, filename):
     """Upload or update a file on Google Drive.
 
@@ -135,6 +167,7 @@ def _upload_file(service, folder_id, filepath, filename):
     media = MediaFileUpload(str(filepath), resumable=True)
 
     existing_id = _find_existing_file(service, folder_id, filename)
+    owner_email = _get_owner_email()
 
     try:
         if existing_id:
@@ -149,10 +182,16 @@ def _upload_file(service, folder_id, filepath, filename):
                 "name": filename,
                 "parents": [folder_id],
             }
-            service.files().create(
+            created = service.files().create(
                 body=file_metadata,
                 media_body=media,
+                fields="id",
             ).execute()
+
+            # Transfer ownership so file counts against user's quota
+            # (Service Accounts have 0 GB storage)
+            if owner_email:
+                _transfer_ownership(service, created["id"], owner_email)
 
         # Update cache on success
         if current_hash:
