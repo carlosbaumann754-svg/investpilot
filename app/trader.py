@@ -1101,13 +1101,6 @@ def run_trading_cycle():
     except Exception as e:
         log.warning(f"Cloud-Backup fehlgeschlagen: {e}")
 
-    # Google Drive Backup (zusaetzlich, falls konfiguriert)
-    try:
-        from app.gdrive_backup import backup_to_gdrive
-        backup_to_gdrive()
-    except Exception as e:
-        log.warning(f"GDrive-Backup fehlgeschlagen: {e}")
-
     log.info("")
     log.info("Trading-Zyklus beendet.")
     log.info("=" * 55)
