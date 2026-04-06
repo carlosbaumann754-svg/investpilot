@@ -34,6 +34,25 @@ def _save_alert_state(state):
     save_json(ALERT_STATE_FILE, state)
 
 
+def _tg_config(config=None):
+    """Lade Telegram-Konfiguration (Helper)."""
+    if config is None:
+        config = load_config()
+    return config.get("alerts", {}).get("telegram", {})
+
+
+def _tg_notify_enabled(event_type, config=None):
+    """Pruefe ob ein bestimmter Telegram-Benachrichtigungstyp aktiviert ist.
+
+    event_type: 'trades', 'stop_loss', 'regime_change', 'daily_summary',
+                'weekly_report', 'optimizer'
+    """
+    tg_cfg = _tg_config(config)
+    if not tg_cfg.get("enabled", False):
+        return False
+    return tg_cfg.get(f"notify_{event_type}", True)
+
+
 # ============================================================
 # TELEGRAM
 # ============================================================
@@ -135,6 +154,9 @@ def send_alert(message, level="INFO", config=None):
 
 def alert_trade_executed(trade_entry, config=None):
     """Sende Notification fuer ausgefuehrten Trade."""
+    if config is None:
+        config = load_config()
+
     action = trade_entry.get("action", "?")
     symbol = trade_entry.get("symbol", "?")
     amount = trade_entry.get("amount_usd", 0)
@@ -142,14 +164,38 @@ def alert_trade_executed(trade_entry, config=None):
     score = trade_entry.get("scanner_score", "")
     pnl = trade_entry.get("pnl_pct", "")
 
+    # Bestimme ob Stop-Loss oder normaler Trade
+    is_stop_loss = action in ("STOP_LOSS_CLOSE", "TRAILING_SL_CLOSE")
+
+    # Pruefe granulare Telegram-Einstellung
+    if is_stop_loss and not _tg_notify_enabled("stop_loss", config):
+        return
+    if not is_stop_loss and not _tg_notify_enabled("trades", config):
+        return
+
     if "CLOSE" in action or "SELL" in action:
         pnl_str = f"\nP/L: {pnl:+.1f}%" if pnl else ""
         msg = f"<b>{action}</b>: {symbol}{pnl_str}"
+
+        # Detailliertere Stop-Loss Nachrichten
+        if action == "STOP_LOSS_CLOSE":
+            msg = f"\U0001f6d1 <b>STOP-LOSS</b>: {symbol}{pnl_str}"
+            if trade_entry.get("pnl_usd"):
+                msg += f"\nVerlust: ${trade_entry['pnl_usd']:+,.2f}"
+        elif action == "TRAILING_SL_CLOSE":
+            sl_level = trade_entry.get("trailing_sl_level", "?")
+            msg = f"\U0001f4c9 <b>TRAILING SL</b>: {symbol}{pnl_str}"
+            msg += f"\nSL-Level: {sl_level}"
+            if trade_entry.get("pnl_usd"):
+                msg += f"\nP/L: ${trade_entry['pnl_usd']:+,.2f}"
+
         level = "PROFIT" if isinstance(pnl, (int, float)) and pnl > 0 else "LOSS"
     else:
         score_str = f" (Score: {score:+.1f})" if score else ""
         lev_str = f" {leverage}x" if leverage > 1 else ""
-        msg = f"<b>{action}</b>: {symbol} ${amount:,.2f}{lev_str}{score_str}"
+        asset_class = trade_entry.get("asset_class", "")
+        class_str = f" [{asset_class}]" if asset_class else ""
+        msg = f"<b>{action}</b>: {symbol}{class_str} ${amount:,.2f}{lev_str}{score_str}"
         level = "TRADE"
 
     send_alert(msg, level, config)
@@ -183,12 +229,122 @@ def alert_emergency(reason, closed_count=0, config=None):
 
 
 # ============================================================
+# REGIME CHANGE NOTIFICATIONS
+# ============================================================
+
+def alert_regime_halt(regime_reason, regime_data=None, config=None):
+    """Sende Notification wenn Regime-Filter Trading stoppt."""
+    if config is None:
+        config = load_config()
+    if not _tg_notify_enabled("regime_change", config):
+        return
+
+    msg = f"\U0001f6ab <b>REGIME HALT AKTIVIERT</b>\n{regime_reason}"
+    if regime_data:
+        if "vix" in regime_data:
+            msg += f"\nVIX: {regime_data['vix']:.1f}"
+        if "fear_greed" in regime_data:
+            msg += f"\nFear&Greed: {regime_data['fear_greed']}"
+        if "regime" in regime_data:
+            msg += f"\nRegime: {regime_data['regime']}"
+    send_alert(msg, "WARNING", config)
+
+
+def alert_regime_resumed(config=None):
+    """Sende Notification wenn Regime-Filter Trading wieder erlaubt."""
+    if config is None:
+        config = load_config()
+    if not _tg_notify_enabled("regime_change", config):
+        return
+
+    msg = "\u2705 <b>REGIME HALT AUFGEHOBEN</b>\nTrading wieder aktiv."
+    send_alert(msg, "INFO", config)
+
+
+# ============================================================
+# WEEKLY REPORT NOTIFICATION
+# ============================================================
+
+def alert_weekly_report(report, config=None):
+    """Sende Zusammenfassung des Weekly Reports via Telegram."""
+    if config is None:
+        config = load_config()
+    if not _tg_notify_enabled("weekly_report", config):
+        return
+
+    perf = report.get("performance", {})
+    trades = report.get("weekly_trades", {})
+    suggestions = report.get("suggestions", [])
+
+    total_return = perf.get("total_return_pct", 0)
+    portfolio_value = perf.get("portfolio_value", 0)
+
+    msg = (f"\U0001f4ca <b>WEEKLY REPORT</b> (KW {datetime.now().isocalendar()[1]})\n\n"
+           f"Portfolio: ${portfolio_value:,.2f}\n"
+           f"Gesamt-Rendite: {total_return:+.2f}%\n"
+           f"Trades diese Woche: {trades.get('total_trades', 0)}\n"
+           f"  Kaeufe: {trades.get('buys', 0)} | Verkaeufe: {trades.get('sells', 0)}\n"
+           f"  SL: {trades.get('sl_closes', 0)} | TP: {trades.get('tp_closes', 0)}\n"
+           f"Volumen: ${trades.get('total_volume_usd', 0):,.0f}")
+
+    if suggestions:
+        msg += f"\n\n\u26a0\ufe0f {len(suggestions)} Verbesserungsvorschlaege"
+        for s in suggestions[:3]:
+            msg += f"\n  - [{s.get('prioritaet', '?')}] {s.get('vorschlag', '')[:80]}"
+
+    send_alert(msg, "INFO", config)
+
+
+# ============================================================
+# OPTIMIZER NOTIFICATION
+# ============================================================
+
+def alert_optimizer_completed(result, config=None):
+    """Sende Notification wenn Optimizer abgeschlossen ist."""
+    if config is None:
+        config = load_config()
+    if not _tg_notify_enabled("optimizer", config):
+        return
+
+    action = result.get("action", "unknown")
+    changes = result.get("changes", {})
+
+    if action == "rollback":
+        msg = (f"\u21a9\ufe0f <b>OPTIMIZER ROLLBACK</b>\n"
+               f"Grund: {result.get('reason', '?')}")
+    elif action == "optimized":
+        msg = f"\u2699\ufe0f <b>OPTIMIZER ABGESCHLOSSEN</b>\nAenderungen:"
+        for key, val in changes.items():
+            msg += f"\n  {key}: {val['old']} \u2192 {val['new']}"
+        grid = result.get("grid_search", {})
+        if grid.get("best_oos_sharpe") is not None:
+            msg += f"\nBester OOS-Sharpe: {grid['best_oos_sharpe']:.2f}"
+        msg += f"\nGetestet: {grid.get('total_tested', 0)} Kombinationen"
+    elif action == "no_change":
+        msg = ("\u2705 <b>OPTIMIZER ABGESCHLOSSEN</b>\n"
+               "Keine Aenderungen - aktuelle Parameter sind optimal.")
+    else:
+        msg = f"\u2699\ufe0f <b>OPTIMIZER</b>: {action}"
+        if result.get("error"):
+            msg += f"\nFehler: {result['error']}"
+
+    send_alert(msg, "INFO", config)
+
+
+# ============================================================
 # DAILY SUMMARY
 # ============================================================
 
 def send_daily_summary(portfolio_value, daily_pnl_pct, daily_pnl_usd,
                        trades_today, brain_regime, config=None):
     """Sende taegliche Zusammenfassung (abends)."""
+    if config is None:
+        config = load_config()
+
+    # Pruefe granulare Einstellung
+    if not _tg_notify_enabled("daily_summary", config):
+        return
+
     msg = (f"<b>Tages-Zusammenfassung</b>\n"
            f"Portfolio: ${portfolio_value:,.2f}\n"
            f"Tages-P/L: {daily_pnl_pct:+.1f}% (${daily_pnl_usd:+,.2f})\n"

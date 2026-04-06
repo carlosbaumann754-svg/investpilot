@@ -136,7 +136,18 @@
   "alerts": {
     "price_change_threshold_percent": 3.0,
     "daily_loss_alert_percent": -2.0,
-    "daily_gain_alert_percent": 5.0
+    "daily_gain_alert_percent": 5.0,
+    "telegram": {
+      "enabled": true,
+      "bot_token": "",
+      "chat_id": "",
+      "notify_trades": true,
+      "notify_stop_loss": true,
+      "notify_regime_change": true,
+      "notify_daily_summary": true,
+      "notify_weekly_report": true,
+      "notify_optimizer": true
+    }
   },
   "market_indices": [
     {
@@ -160,5 +171,21 @@
       "name": "EURO STOXX 50"
     }
   ],
-  "monthly_budget_chf": 1500
+  "monthly_budget_chf": 1500,
+  "market_context": {
+    "vix_reduce_threshold": 25,
+    "vix_halt_threshold": 35,
+    "use_fear_greed": true,
+    "use_earnings_filter": true,
+    "earnings_buffer_days_before": 3,
+    "earnings_buffer_days_after": 1,
+    "manual_events": [],
+    "use_sentiment_filter": true,
+    "sentiment_block_threshold": -0.5
+  },
+  "hedging": {
+    "enabled": true,
+    "bear_position_multiplier": 0.5,
+    "defensive_sectors": ["health", "consumer", "bonds", "commodities"]
+  }
 }

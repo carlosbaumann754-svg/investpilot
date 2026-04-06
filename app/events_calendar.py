@@ -160,3 +160,140 @@ def get_upcoming_earnings(symbols):
             log.debug(f"Earnings-Datum fuer {symbol} nicht abrufbar: {e}")
             result[symbol] = None
     return result
+
+
+# Module-level cache for earnings surprise data
+_surprise_cache = {}
+_SURPRISE_CACHE_TTL = 24 * 60 * 60  # 24 hours
+
+
+def get_earnings_surprise(symbol):
+    """Check last earnings: did company beat or miss expectations?
+
+    Uses yfinance earnings_history or quarterly_earnings to compare
+    expected vs actual EPS.
+
+    Args:
+        symbol: Ticker symbol (e.g. 'AAPL')
+
+    Returns:
+        dict with keys:
+            surprise_pct: float (positive = beat, negative = miss)
+            beat: bool or None
+            actual_eps: float or None
+            expected_eps: float or None
+            available: bool
+    """
+    now = time.time()
+
+    # Check cache
+    if symbol in _surprise_cache:
+        entry = _surprise_cache[symbol]
+        if now - entry["fetched_at"] < _SURPRISE_CACHE_TTL:
+            return entry["result"]
+
+    no_data = {
+        "surprise_pct": 0.0,
+        "beat": None,
+        "actual_eps": None,
+        "expected_eps": None,
+        "available": False,
+    }
+
+    if yf is None:
+        _surprise_cache[symbol] = {"result": no_data, "fetched_at": now}
+        return no_data
+
+    try:
+        ticker = yf.Ticker(symbol)
+
+        # Try earnings_history first (has expected vs actual)
+        surprise_pct = None
+        actual_eps = None
+        expected_eps = None
+
+        # Method 1: earnings_history (newer yfinance)
+        try:
+            eh = getattr(ticker, "earnings_history", None)
+            if eh is not None and hasattr(eh, 'empty') and not eh.empty:
+                last_row = eh.iloc[-1]
+                actual_eps = float(last_row.get("epsActual", 0) or 0)
+                expected_eps = float(last_row.get("epsEstimate", 0) or 0)
+                if expected_eps != 0:
+                    surprise_pct = ((actual_eps - expected_eps) / abs(expected_eps)) * 100
+        except Exception:
+            pass
+
+        # Method 2: quarterly_earnings fallback
+        if surprise_pct is None:
+            try:
+                qe = getattr(ticker, "quarterly_earnings", None)
+                if qe is not None and hasattr(qe, 'empty') and not qe.empty:
+                    last_row = qe.iloc[-1]
+                    revenue = float(last_row.get("Revenue", 0) or 0)
+                    earnings = float(last_row.get("Earnings", 0) or 0)
+                    if revenue > 0:
+                        # Approximate: use earnings margin as proxy
+                        actual_eps = earnings
+                        # No expected data in this format, mark as limited
+            except Exception:
+                pass
+
+        if surprise_pct is not None:
+            result = {
+                "surprise_pct": round(surprise_pct, 2),
+                "beat": surprise_pct > 0,
+                "actual_eps": actual_eps,
+                "expected_eps": expected_eps,
+                "available": True,
+            }
+        else:
+            result = no_data
+
+        _surprise_cache[symbol] = {"result": result, "fetched_at": now}
+        return result
+
+    except Exception as e:
+        log.warning(f"Earnings-Surprise Abruf fehlgeschlagen fuer {symbol}: {e}")
+        _surprise_cache[symbol] = {"result": no_data, "fetched_at": now}
+        return no_data
+
+
+def adjust_score_for_earnings(symbol, base_score):
+    """Adjust a scanner score based on last earnings surprise.
+
+    Big beat (>10% above expected): +5 bonus
+    Big miss (>10% below expected): -5 penalty
+
+    Args:
+        symbol: Ticker symbol
+        base_score: float original scanner score
+
+    Returns:
+        float adjusted score
+    """
+    try:
+        surprise = get_earnings_surprise(symbol)
+        if not surprise.get("available", False):
+            return base_score
+
+        surprise_pct = surprise.get("surprise_pct", 0)
+
+        if surprise_pct > 10:
+            adjustment = 5
+            log.info(f"  EARNINGS BEAT: {symbol} +{surprise_pct:.1f}% -> Score +{adjustment}")
+        elif surprise_pct < -10:
+            adjustment = -5
+            log.info(f"  EARNINGS MISS: {symbol} {surprise_pct:.1f}% -> Score {adjustment}")
+        elif surprise_pct > 5:
+            adjustment = 2
+        elif surprise_pct < -5:
+            adjustment = -2
+        else:
+            adjustment = 0
+
+        return base_score + adjustment
+
+    except Exception as e:
+        log.debug(f"Earnings-Score Anpassung fehlgeschlagen fuer {symbol}: {e}")
+        return base_score

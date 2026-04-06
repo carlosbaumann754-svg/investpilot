@@ -70,11 +70,11 @@ def scheduler_loop():
     log.info(f"Trading Flag: {TRADING_FLAG}")
     log.info("=" * 55)
 
-    # Cloud-Restore: Brain-Daten aus letztem Backup wiederherstellen
+    # Cloud-Restore: Brain-Daten aus letztem Backup wiederherstellen (GitHub Gist + GDrive)
     log.info("Cloud-Restore: Pruefe ob Backup vorhanden...")
     try:
-        from app.persistence import restore_from_cloud
-        restored = restore_from_cloud()
+        from app.persistence import restore_from_cloud_with_gdrive
+        restored = restore_from_cloud_with_gdrive()
         if restored:
             log.info("Cloud-Restore: Learnings erfolgreich wiederhergestellt!")
         else:

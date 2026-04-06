@@ -126,8 +126,15 @@ def calculate_volatility_sl_tp(histories):
 # PARAMETER GRID SEARCH
 # ============================================================
 
-def run_grid_search(histories, base_config=None):
+def run_grid_search(histories, base_config=None,
+                    vix_history=None, earnings_blackouts=None):
     """Teste verschiedene Parameter-Kombinationen per Walk-Forward Backtest.
+
+    Args:
+        histories: dict of DataFrames
+        base_config: strategy config
+        vix_history: pre-downloaded VIX data for realistic filters
+        earnings_blackouts: pre-built earnings blackout sets
 
     Returns:
         dict mit best_params, all_results sortiert nach OOS Sharpe
@@ -137,6 +144,9 @@ def run_grid_search(histories, base_config=None):
     if base_config is None:
         base_config = load_config()
 
+    # Determine if realistic filters should be used
+    use_filters = bool(vix_history or earnings_blackouts)
+
     results = []
     total_combos = (len(PARAM_GRID["min_scanner_score"]) *
                     len(PARAM_GRID["stop_loss_pct"]) *
@@ -144,7 +154,8 @@ def run_grid_search(histories, base_config=None):
                     len(PARAM_GRID["trailing_sl_pct"]) *
                     len(PARAM_GRID["trailing_sl_activation_pct"]))
 
-    log.info(f"Grid-Search: {total_combos} Kombinationen testen...")
+    log.info(f"Grid-Search: {total_combos} Kombinationen testen... "
+             f"(realistic_filters={'ON' if use_filters else 'OFF'})")
     combo_num = 0
 
     for min_score in PARAM_GRID["min_scanner_score"]:
@@ -167,7 +178,12 @@ def run_grid_search(histories, base_config=None):
                         test_config["leverage"]["trailing_sl_activation_pct"] = trail_act
 
                         try:
-                            wf = walk_forward_validate(histories, test_config)
+                            wf = walk_forward_validate(
+                                histories, test_config,
+                                use_realistic_filters=use_filters,
+                                vix_history=vix_history,
+                                earnings_blackouts=earnings_blackouts,
+                            )
                             if not wf:
                                 continue
 
@@ -221,7 +237,8 @@ def run_grid_search(histories, base_config=None):
 # ML AUTO-COMPARE
 # ============================================================
 
-def compare_ml_vs_fixed(histories, config=None):
+def compare_ml_vs_fixed(histories, config=None,
+                        vix_history=None, earnings_blackouts=None):
     """Vergleiche ML Scoring vs Fixed Weights auf Out-of-Sample Daten.
 
     Returns dict mit Empfehlung ob ML aktiviert werden soll.
@@ -231,10 +248,17 @@ def compare_ml_vs_fixed(histories, config=None):
     if config is None:
         config = load_config()
 
+    use_filters = bool(vix_history or earnings_blackouts)
+    filter_kwargs = {
+        "use_realistic_filters": use_filters,
+        "vix_history": vix_history,
+        "earnings_blackouts": earnings_blackouts,
+    }
+
     # 1. Fixed Weights Backtest
     fixed_config = copy.deepcopy(config)
     fixed_config["demo_trading"]["use_ml_scoring"] = False
-    fixed_wf = walk_forward_validate(histories, fixed_config)
+    fixed_wf = walk_forward_validate(histories, fixed_config, **filter_kwargs)
 
     # 2. ML trainieren und testen
     ml_result = None
@@ -245,7 +269,7 @@ def compare_ml_vs_fixed(histories, config=None):
         if is_model_trained():
             ml_config = copy.deepcopy(config)
             ml_config["demo_trading"]["use_ml_scoring"] = True
-            ml_wf = walk_forward_validate(histories, ml_config)
+            ml_wf = walk_forward_validate(histories, ml_config, **filter_kwargs)
             ml_result = ml_wf
     except Exception as e:
         log.warning(f"ML Training/Vergleich Fehler: {e}")
@@ -389,15 +413,46 @@ def run_weekly_optimization():
         log.warning(f"Rollback: {msg}")
         _save_optimization_run("rollback", current_params, current_params,
                                {"reason": rollback_reason})
-        return {"action": "rollback", "reason": rollback_reason}
+        rollback_result = {"action": "rollback", "reason": rollback_reason}
+        try:
+            from app.alerts import alert_optimizer_completed
+            alert_optimizer_completed(rollback_result)
+        except Exception:
+            pass
+        return rollback_result
 
     # 2. Daten herunterladen
     log.info("Downloading historical data...")
-    from app.backtester import download_history
+    from app.backtester import (download_history, download_vix_history,
+                                _fetch_historical_earnings_dates,
+                                _build_earnings_blackout_set)
+    from app.market_scanner import ASSET_UNIVERSE as _AU
     histories = download_history(years=5)
     if not histories:
         log.error("Keine Daten — Optimierung abgebrochen")
         return {"error": "Keine historischen Daten"}
+
+    # 2b. Download realistic filter data (VIX + Earnings)
+    log.info("Downloading VIX + Earnings data for realistic filters...")
+    vix_history = download_vix_history(years=5)
+    earnings_blackouts = {}
+    mc_cfg = config.get("market_context", {})
+    buf_before = mc_cfg.get("earnings_buffer_days_before", 3)
+    buf_after = mc_cfg.get("earnings_buffer_days_after", 1)
+    for sym in histories.keys():
+        info = _AU.get(sym, {})
+        if info.get("class", "") in ("crypto", "forex", "commodities", "indices"):
+            continue
+        edates = _fetch_historical_earnings_dates(sym)
+        if edates:
+            earnings_blackouts[sym] = _build_earnings_blackout_set(
+                sym, edates, buf_before, buf_after)
+    log.info(f"  VIX: {len(vix_history)} days, Earnings: {len(earnings_blackouts)} symbols")
+
+    filter_kwargs = {
+        "vix_history": vix_history,
+        "earnings_blackouts": earnings_blackouts,
+    }
 
     # 3. Volatilitaets-basierte SL/TP
     log.info("Berechne Asset-Klassen SL/TP...")
@@ -406,13 +461,33 @@ def run_weekly_optimization():
     log.info(f"  Asset-Klassen Parameter: {list(asset_params.keys())}")
 
     # 4. Grid-Search
-    log.info("Starte Parameter Grid-Search...")
-    grid_result = run_grid_search(histories, config)
+    log.info("Starte Parameter Grid-Search (mit realistischen Filtern)...")
+    grid_result = run_grid_search(histories, config, **filter_kwargs)
     best = grid_result.get("best")
+
+    # 4b. ML Training auf eigener Trade-History (wenn genug Daten)
+    ml_trade_training = None
+    try:
+        from app.ml_scorer import train_from_trade_history, MIN_TRADES_FOR_TRAINING
+        trade_history = load_json("trade_history.json") or []
+        if len(trade_history) >= MIN_TRADES_FOR_TRAINING:
+            log.info(f"ML Training auf {len(trade_history)} eigenen Trades...")
+            ml_trade_training = train_from_trade_history(trade_history)
+            if "error" not in ml_trade_training:
+                log.info(f"  ML Trade-History Model: "
+                         f"Acc={ml_trade_training.get('test_accuracy', 0):.1f}%, "
+                         f"F1={ml_trade_training.get('test_f1', 0):.1f}%")
+            else:
+                log.info(f"  ML Trade-History: {ml_trade_training['error']}")
+        else:
+            log.info(f"ML Trade-History: {len(trade_history)}/{MIN_TRADES_FOR_TRAINING} "
+                     f"Trades — noch nicht genug, uebersprungen")
+    except Exception as e:
+        log.warning(f"ML Trade-History Training Fehler: {e}")
 
     # 5. ML vs Fixed Vergleich
     log.info("Vergleiche ML vs Fixed Weights...")
-    ml_comparison = compare_ml_vs_fixed(histories, config)
+    ml_comparison = compare_ml_vs_fixed(histories, config, **filter_kwargs)
 
     # 6. Kosten-Filter berechnen
     min_return = calculate_min_expected_return()
@@ -480,6 +555,7 @@ def run_weekly_optimization():
             "total_tested": grid_result.get("total_tested", 0),
         },
         "ml_comparison": ml_comparison,
+        "ml_trade_training": ml_trade_training,
         "asset_class_params": asset_params,
         "min_expected_return_pct": min_return,
         "current_params": current_params,
@@ -495,6 +571,13 @@ def run_weekly_optimization():
         for key, val in changes_made.items():
             log.info(f"  {key}: {val['old']} -> {val['new']}")
     log.info("=" * 55)
+
+    # Telegram: Optimizer-Ergebnis senden
+    try:
+        from app.alerts import alert_optimizer_completed
+        alert_optimizer_completed(result)
+    except Exception as e:
+        log.debug(f"Telegram Optimizer Alert fehlgeschlagen: {e}")
 
     return result
 

@@ -470,6 +470,14 @@ def send_weekly_report():
     except Exception as e:
         log.error(f"PDF-Erstellung fehlgeschlagen: {e}")
 
+    # Telegram-Zusammenfassung senden
+    try:
+        from app.alerts import alert_weekly_report
+        alert_weekly_report(report)
+        log.info("Weekly Report Telegram-Zusammenfassung gesendet")
+    except Exception as e:
+        log.debug(f"Telegram Weekly Report fehlgeschlagen: {e}")
+
     # Per E-Mail senden
     if not SMTP_EMAIL or not SMTP_PASSWORD or not ALERT_RECIPIENT:
         log.info("E-Mail nicht konfiguriert - Report nur lokal gespeichert und geloggt")

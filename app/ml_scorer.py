@@ -413,6 +413,286 @@ def score_asset_ml(analysis):
         return None
 
 
+# Sector encoding for feature vector
+_SECTOR_MAP = {
+    "tech": 0, "finance": 1, "health": 2, "consumer": 3,
+    "growth": 4, "energy": 5, "crypto_major": 6,
+    "broad_market": 7, "commodities": 8, "bonds": 9,
+    "real_estate": 10,
+}
+
+TRADE_FEATURE_NAMES = [
+    "scanner_score", "rsi", "macd_hist", "volume_trend",
+    "volatility", "momentum_5d", "momentum_20d", "bollinger_pos",
+    "sector", "vix_level", "fear_greed",
+]
+
+
+def predict_score(features_dict):
+    """Return probability of a profitable trade (0.0 - 1.0).
+
+    Automatically detects whether the loaded model was trained on
+    price-based features (18 dims, GradientBoosting) or trade-history
+    features (11 dims, RandomForest) and builds the correct feature vector.
+
+    Args:
+        features_dict: dict with feature keys and numeric values.
+                       Missing keys default to neutral values.
+
+    Returns:
+        float 0-1, or None if model not available
+    """
+    global _model, _model_info
+    if _model is None or not HAS_ML:
+        return None
+
+    # Determine which feature set the model expects
+    training_source = (_model_info or {}).get("training_source", "price_history")
+    n_features = getattr(_model, "n_features_in_", None)
+
+    if training_source == "trade_history" or n_features == len(TRADE_FEATURE_NAMES):
+        # Trade-history model (11 features)
+        defaults = {
+            "scanner_score": 0, "rsi": 50, "macd_hist": 0,
+            "volume_trend": 1.0, "volatility": 5.0,
+            "momentum_5d": 0, "momentum_20d": 0, "bollinger_pos": 0.5,
+            "sector": len(_SECTOR_MAP), "vix_level": 20, "fear_greed": 50,
+        }
+        # Encode sector string if provided
+        sector_val = features_dict.get("sector", defaults["sector"])
+        if isinstance(sector_val, str):
+            sector_val = _SECTOR_MAP.get(sector_val, len(_SECTOR_MAP))
+        features_dict = dict(features_dict)
+        features_dict["sector"] = sector_val
+        row = [features_dict.get(f, defaults.get(f, 0)) for f in TRADE_FEATURE_NAMES]
+    else:
+        # Price-history model (18 features)
+        defaults = {
+            "rsi": 50, "macd_val": 0, "macd_signal": 0, "macd_hist": 0,
+            "bollinger_pos": 0.5, "momentum_5d": 0, "momentum_20d": 0,
+            "volatility": 5, "volume_trend": 1,
+            "above_sma20": 0.5, "above_sma50": 0.5, "golden_cross": 0.5,
+            "rsi_slope": 0, "price_vs_sma20_pct": 0,
+            "atr_pct": 0, "adx": 50, "obv_slope": 0, "vwap_deviation_pct": 0,
+        }
+        row = [features_dict.get(f, defaults.get(f, 0)) for f in FEATURE_NAMES]
+
+    try:
+        proba = _model.predict_proba(np.array([row]))[0]
+        return float(proba[1]) if len(proba) == 2 else 0.5
+    except Exception as e:
+        log.warning(f"predict_score Fehler: {e}")
+        return None
+
+
+# ============================================================
+# TRADE-HISTORY BASED TRAINING
+# ============================================================
+
+MIN_TRADES_FOR_TRAINING = 50
+
+
+def train_from_trade_history(trade_history=None):
+    """Train a RandomForest model from the bot's own completed trades.
+
+    Uses trade_history.json entries which contain scanner_score and analysis
+    data recorded at entry time.  Target: trade was profitable (pnl_net_pct > 0).
+
+    Features: scanner_score, RSI, MACD histogram, volume_trend,
+              sector (encoded), VIX level, Fear&Greed index,
+              volatility, momentum_5d, momentum_20d, bollinger_pos.
+
+    The model is saved to data/ml_model.pkl (pickle) and metadata to
+    data/ml_model.json.  Falls back to the existing GradientBoosting
+    price-based training if not enough trade data.
+
+    Returns:
+        dict with training metrics or error info
+    """
+    if not HAS_ML:
+        log.error("scikit-learn nicht installiert — ML Training uebersprungen")
+        return {"error": "scikit-learn nicht installiert"}
+
+    # Load trade history
+    if trade_history is None:
+        trade_history = load_json("trade_history.json") or []
+
+    # Filter to completed trades that have the fields we need
+    usable = []
+    for t in trade_history:
+        # Need at least a pnl and some entry features
+        if "pnl_net_pct" not in t and "pnl_pct" not in t:
+            continue
+        usable.append(t)
+
+    if len(usable) < MIN_TRADES_FOR_TRAINING:
+        msg = (f"Zu wenig eigene Trades: {len(usable)}/{MIN_TRADES_FOR_TRAINING}. "
+               f"ML Training uebersprungen.")
+        log.info(msg)
+        return {"error": msg, "trades_available": len(usable),
+                "min_required": MIN_TRADES_FOR_TRAINING}
+
+    log.info(f"Training ML model from {len(usable)} own trades...")
+
+    # Build feature matrix
+    X_rows = []
+    y_labels = []
+
+    for t in usable:
+        analysis = t.get("analysis", {})
+        scanner_score = t.get("scanner_score", analysis.get("score", 0))
+
+        rsi = analysis.get("rsi", 50)
+        macd_hist = analysis.get("macd_histogram", 0)
+        vol_trend = analysis.get("volume_trend", 1.0)
+        volatility = analysis.get("volatility", 5.0)
+        momentum_5d = analysis.get("momentum_5d", 0)
+        momentum_20d = analysis.get("momentum_20d", 0)
+        boll_pos = analysis.get("bollinger_pos", 0.5)
+
+        # Sector encoding
+        sector_str = t.get("sector", analysis.get("sector", "unknown"))
+        sector_code = _SECTOR_MAP.get(sector_str, len(_SECTOR_MAP))
+
+        # Market context at entry (may not always be recorded)
+        vix_level = t.get("vix_level", analysis.get("vix_level", 20))
+        fear_greed = t.get("fear_greed", analysis.get("fear_greed", 50))
+
+        row = [
+            scanner_score, rsi, macd_hist, vol_trend,
+            volatility, momentum_5d, momentum_20d, boll_pos,
+            sector_code, vix_level, fear_greed,
+        ]
+        X_rows.append(row)
+
+        pnl = t.get("pnl_net_pct", t.get("pnl_pct", 0))
+        y_labels.append(1 if pnl > 0 else 0)
+
+    X = np.array(X_rows)
+    y = np.array(y_labels)
+
+    # Train/test split (chronological)
+    split = int(len(X) * 0.8)
+    X_train, X_test = X[:split], X[split:]
+    y_train, y_test = y[:split], y[split:]
+
+    if len(X_test) < 5:
+        log.warning("Zu wenig Test-Daten, verwende 70/30 Split")
+        split = int(len(X) * 0.7)
+        X_train, X_test = X[:split], X[split:]
+        y_train, y_test = y[:split], y[split:]
+
+    log.info(f"  Train: {len(X_train)}, Test: {len(X_test)}, "
+             f"Positiv: {sum(y_train)}/{len(y_train)} ({sum(y_train)/max(len(y_train),1)*100:.0f}%)")
+
+    from sklearn.ensemble import RandomForestClassifier
+
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=5,
+        min_samples_leaf=3,
+        random_state=42,
+        class_weight="balanced",
+    )
+    model.fit(X_train, y_train)
+
+    # Evaluate
+    train_pred = model.predict(X_train)
+    test_pred = model.predict(X_test)
+
+    train_acc = accuracy_score(y_train, train_pred)
+    test_acc = accuracy_score(y_test, test_pred)
+    test_prec = precision_score(y_test, test_pred, zero_division=0)
+    test_rec = recall_score(y_test, test_pred, zero_division=0)
+    test_f1 = f1_score(y_test, test_pred, zero_division=0)
+
+    trade_feature_names = [
+        "scanner_score", "rsi", "macd_hist", "volume_trend",
+        "volatility", "momentum_5d", "momentum_20d", "bollinger_pos",
+        "sector", "vix_level", "fear_greed",
+    ]
+    importances = dict(zip(trade_feature_names, model.feature_importances_.tolist()))
+
+    log.info(f"  Trade-History ML: Train Acc={train_acc:.1%}, Test Acc={test_acc:.1%}, "
+             f"F1={test_f1:.1%}")
+    log.info(f"  Feature Importances (Top 5):")
+    sorted_imp = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+    for fname, imp in sorted_imp[:5]:
+        log.info(f"    {fname}: {imp:.4f}")
+
+    # Cache model globally (overrides the price-based model)
+    global _model, _model_info
+    _model = model
+    _model_info = {
+        "trained": datetime.now().isoformat(),
+        "training_source": "trade_history",
+        "trades_used": len(usable),
+        "samples_train": len(X_train),
+        "samples_test": len(X_test),
+        "label_balance_pct": round(sum(y_train) / max(len(y_train), 1) * 100, 1),
+        "train_accuracy": round(train_acc * 100, 1),
+        "test_accuracy": round(test_acc * 100, 1),
+        "test_precision": round(test_prec * 100, 1),
+        "test_recall": round(test_rec * 100, 1),
+        "test_f1": round(test_f1 * 100, 1),
+        "feature_importances": {k: round(v, 4) for k, v in sorted_imp},
+        "model_type": "RandomForest",
+        "model_params": {
+            "n_estimators": 200,
+            "max_depth": 5,
+            "min_samples_leaf": 3,
+            "class_weight": "balanced",
+        },
+    }
+
+    # Persist model to pkl
+    try:
+        import pickle
+        import os
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        pkl_path = os.path.join(data_dir, "ml_model.pkl")
+        with open(pkl_path, "wb") as f:
+            pickle.dump(model, f)
+        log.info(f"  Model gespeichert: {pkl_path}")
+    except Exception as e:
+        log.warning(f"  Model pkl speichern fehlgeschlagen: {e}")
+
+    # Persist metadata
+    save_json("ml_model.json", _model_info)
+
+    return _model_info
+
+
+def load_persisted_model():
+    """Load a previously saved pkl model from disk.
+
+    Called on startup so the bot can use ML scoring without retraining.
+    Returns True if model was loaded, False otherwise.
+    """
+    global _model, _model_info
+    if _model is not None:
+        return True  # already loaded
+
+    if not HAS_ML:
+        return False
+
+    try:
+        import pickle
+        import os
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        pkl_path = os.path.join(data_dir, "ml_model.pkl")
+        if not os.path.exists(pkl_path):
+            return False
+        with open(pkl_path, "rb") as f:
+            _model = pickle.load(f)
+        _model_info = load_json("ml_model.json")
+        log.info(f"ML Model geladen von {pkl_path}")
+        return True
+    except Exception as e:
+        log.warning(f"ML Model laden fehlgeschlagen: {e}")
+        return False
+
+
 def get_model_info():
     """Return current model info, or load from disk."""
     global _model_info

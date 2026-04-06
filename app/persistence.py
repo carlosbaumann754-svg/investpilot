@@ -204,3 +204,18 @@ def restore_from_cloud():
     except Exception as e:
         log.warning(f"  Cloud-Restore Fehler: {e}")
         return False
+
+
+def restore_from_cloud_with_gdrive():
+    """Restore from GitHub Gist first, then try Google Drive as fallback."""
+    gist_restored = restore_from_cloud()
+
+    # Try Google Drive as additional fallback
+    try:
+        from app.gdrive_backup import restore_from_gdrive
+        gdrive_restored = restore_from_gdrive()
+    except Exception as e:
+        log.warning(f"  GDrive-Restore Fehler: {e}")
+        gdrive_restored = False
+
+    return gist_restored or gdrive_restored

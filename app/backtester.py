@@ -3,6 +3,12 @@ InvestPilot - Backtesting Engine
 Replayed die Scanner-Scoring-Logik auf 5+ Jahren historischen Daten.
 Simuliert Trades mit realistischen Transaktionskosten (Spread, Overnight).
 Walk-Forward-Validierung: Train 80% / Test 20%.
+
+Realistic Filters (v2):
+  - VIX Regime Filter: blocks/reduces trades when VIX is elevated
+  - Earnings Blackout: skips trades near earnings dates
+  - Sector Concentration: limits positions per sector
+  - Improved Trailing Stop-Loss: uses intraday highs
 """
 
 import logging
@@ -90,6 +96,113 @@ def download_history(symbols=None, years=5):
 
     log.info(f"Download fertig: {len(histories)} OK, {errors} Fehler")
     return histories
+
+
+# ============================================================
+# VIX HISTORY DOWNLOAD (for regime filter in backtest)
+# ============================================================
+
+def download_vix_history(years=5):
+    """Download VIX history for backtesting regime filter.
+
+    Returns:
+        dict {date -> vix_close} mapping trading dates to VIX closing values,
+        or empty dict if download fails.
+    """
+    if yf is None:
+        log.warning("yfinance nicht installiert — VIX-History nicht verfuegbar")
+        return {}
+
+    try:
+        period = f"{years}y"
+        ticker = yf.Ticker("^VIX")
+        hist = ticker.history(period=period, interval="1d")
+        if hist.empty:
+            log.warning("VIX-History leer")
+            return {}
+
+        vix_data = {}
+        for date, row in hist.iterrows():
+            # Normalize date to match symbol history dates
+            vix_data[date] = float(row["Close"])
+
+        log.info(f"VIX-History geladen: {len(vix_data)} Tage")
+        return vix_data
+    except Exception as e:
+        log.warning(f"VIX-History Download fehlgeschlagen: {e}")
+        return {}
+
+
+# ============================================================
+# EARNINGS HISTORY (for backtest earnings blackout)
+# ============================================================
+
+def _fetch_historical_earnings_dates(symbol):
+    """Fetch historical earnings dates for a symbol via yfinance.
+
+    Returns list of datetime objects (earnings dates), or empty list.
+    Uses the earnings_dates attribute which provides historical data.
+    """
+    if yf is None:
+        return []
+
+    try:
+        info = ASSET_UNIVERSE.get(symbol)
+        if not info:
+            return []
+        yf_sym = info["yf"]
+
+        # Only stocks have earnings — skip crypto, forex, commodities, indices
+        asset_class = info.get("class", "")
+        if asset_class in ("crypto", "forex", "commodities", "indices"):
+            return []
+
+        ticker = yf.Ticker(yf_sym)
+
+        # yfinance >= 0.2: ticker.earnings_dates returns a DataFrame with index = date
+        earnings_dates_df = getattr(ticker, "earnings_dates", None)
+        if earnings_dates_df is not None and hasattr(earnings_dates_df, "index") and len(earnings_dates_df) > 0:
+            dates = []
+            for dt in earnings_dates_df.index:
+                if hasattr(dt, "to_pydatetime"):
+                    dates.append(dt.to_pydatetime().replace(tzinfo=None))
+                elif isinstance(dt, datetime):
+                    dates.append(dt.replace(tzinfo=None))
+            return dates
+
+        # Fallback: quarterly earnings
+        qe = getattr(ticker, "quarterly_earnings", None)
+        if qe is not None and hasattr(qe, "index") and len(qe) > 0:
+            dates = []
+            for dt in qe.index:
+                if hasattr(dt, "to_pydatetime"):
+                    dates.append(dt.to_pydatetime().replace(tzinfo=None))
+            return dates
+
+        return []
+    except Exception as e:
+        log.debug(f"Earnings-History fuer {symbol} nicht abrufbar: {e}")
+        return []
+
+
+def _build_earnings_blackout_set(symbol, earnings_dates, buffer_before=3, buffer_after=1):
+    """Build a set of dates that are in the earnings blackout window.
+
+    Args:
+        symbol: ticker symbol (for logging)
+        earnings_dates: list of datetime objects
+        buffer_before: days before earnings to block
+        buffer_after: days after earnings to block
+
+    Returns:
+        set of date objects (date only, no time) that are blacked out
+    """
+    blackout_dates = set()
+    for ed in earnings_dates:
+        ed_date = ed.date() if hasattr(ed, "date") else ed
+        for offset in range(-buffer_after, buffer_before + 1):
+            blackout_dates.add(ed_date + timedelta(days=offset))
+    return blackout_dates
 
 
 # ============================================================
@@ -202,11 +315,24 @@ def _score_at_bar(closes, volumes, idx, lookback=60):
 # TRADE SIMULATION
 # ============================================================
 
-def simulate_trades(histories, config=None):
+def simulate_trades(histories, config=None, use_realistic_filters=True,
+                    vix_history=None, earnings_blackouts=None):
     """Simulate trades on historical data using scanner scoring logic.
 
     For each day, scores all assets. Opens BUY positions when score >= threshold.
     Manages SL/TP. Closes positions based on signals.
+
+    Args:
+        histories: dict {symbol: DataFrame} with OHLCV data
+        config: strategy config dict
+        use_realistic_filters: if True, apply VIX regime, earnings blackout,
+                               and sector concentration filters (default True)
+        vix_history: dict {date -> vix_close}, pre-downloaded VIX data.
+                     If None and use_realistic_filters=True, filters that need
+                     VIX are skipped gracefully.
+        earnings_blackouts: dict {symbol -> set of blackout dates}.
+                            If None and use_realistic_filters=True, earnings
+                            filter is skipped gracefully.
 
     Returns:
         list of trade dicts with entry/exit prices, pnl, costs, etc.
@@ -225,9 +351,37 @@ def simulate_trades(histories, config=None):
     trailing_sl_pct = lev_cfg.get("trailing_sl_pct", 2.0) / 100
     trailing_activation_pct = lev_cfg.get("trailing_sl_activation_pct", 1.0) / 100
 
+    # --- Realistic filter parameters ---
+    rf_cfg = config.get("regime_filter", {})
+    vix_crisis_threshold = rf_cfg.get("vix_crisis_threshold", 35)
+    vix_caution_threshold = rf_cfg.get("vix_caution_threshold", 25)
+
+    mc_cfg = config.get("market_context", {})
+    earnings_buffer_before = mc_cfg.get("earnings_buffer_days_before", 3)
+    earnings_buffer_after = mc_cfg.get("earnings_buffer_days_after", 1)
+
+    risk_cfg = config.get("risk_management", {})
+    max_positions_per_sector = risk_cfg.get("max_positions_per_sector", 4)
+    max_sector_allocation_pct = risk_cfg.get("max_sector_allocation_pct", 35)
+
+    # Fallback: if no data provided, disable individual filters gracefully
+    if vix_history is None:
+        vix_history = {}
+    if earnings_blackouts is None:
+        earnings_blackouts = {}
+
+    # Stats for filter reporting
+    filter_stats = {
+        "vix_blocked": 0,
+        "vix_reduced": 0,
+        "earnings_blocked": 0,
+        "sector_blocked": 0,
+    }
+
     trades = []          # completed trades
-    open_positions = {}  # symbol -> {entry_price, entry_date, entry_idx, score}
-    trailing_sl = {}     # symbol -> highest trailing SL level
+    open_positions = {}  # symbol -> {entry_price, entry_date, score, sector}
+    trailing_highs = {}  # symbol -> highest price since entry (uses intraday highs)
+    trailing_sl = {}     # symbol -> trailing SL price level
 
     # We need all symbols to have aligned date indices
     # Get the common date range
@@ -236,9 +390,15 @@ def simulate_trades(histories, config=None):
 
     for sym, hist in histories.items():
         closes = hist["Close"].values.tolist()
+        highs = hist["High"].values.tolist() if "High" in hist.columns else closes[:]
         volumes = hist["Volume"].values.tolist()
         dates = hist.index.tolist()
-        symbol_data[sym] = {"closes": closes, "volumes": volumes, "dates": dates}
+        symbol_data[sym] = {
+            "closes": closes,
+            "highs": highs,
+            "volumes": volumes,
+            "dates": dates,
+        }
 
         if all_dates is None:
             all_dates = set(hist.index)
@@ -250,6 +410,89 @@ def simulate_trades(histories, config=None):
 
     sorted_dates = sorted(all_dates)
     start_idx = 60  # need lookback
+
+    # Pre-build a date -> VIX lookup using normalized dates
+    vix_by_date = {}
+    if use_realistic_filters and vix_history:
+        for vix_date, vix_val in vix_history.items():
+            # Normalize: strip time/tz to compare with symbol dates
+            if hasattr(vix_date, "normalize"):
+                vix_by_date[vix_date.normalize()] = vix_val
+            elif hasattr(vix_date, "date"):
+                vix_by_date[vix_date] = vix_val
+            else:
+                vix_by_date[vix_date] = vix_val
+
+    def _get_vix_for_date(dt_val):
+        """Look up VIX for a given date, trying multiple key formats."""
+        if not vix_by_date:
+            return None
+        # Direct lookup
+        if dt_val in vix_by_date:
+            return vix_by_date[dt_val]
+        # Try normalized
+        if hasattr(dt_val, "normalize"):
+            norm = dt_val.normalize()
+            if norm in vix_by_date:
+                return vix_by_date[norm]
+        # Try matching by date() part
+        dt_date = dt_val.date() if hasattr(dt_val, "date") else dt_val
+        for k, v in vix_by_date.items():
+            k_date = k.date() if hasattr(k, "date") else k
+            if k_date == dt_date:
+                return v
+        return None
+
+    def _get_sector(sym):
+        """Get sector for a symbol from ASSET_UNIVERSE."""
+        info = ASSET_UNIVERSE.get(sym, {})
+        return info.get("sector", "unknown")
+
+    def _check_sector_concentration(new_sym):
+        """Check if adding new_sym would violate sector limits.
+
+        Returns True if allowed, False if blocked.
+        """
+        new_sector = _get_sector(new_sym)
+        if not new_sector or new_sector == "unknown":
+            return True
+
+        sector_count = defaultdict(int)
+        sector_value = defaultdict(float)
+        total_value = 0.0
+
+        for sym, pos in open_positions.items():
+            sec = pos.get("sector", "unknown")
+            sector_count[sec] += 1
+            # Use entry price as proxy for position value (equal weight assumed)
+            val = pos.get("entry_price", 1.0)
+            sector_value[sec] += val
+            total_value += val
+
+        # Check count limit
+        if sector_count[new_sector] >= max_positions_per_sector:
+            return False
+
+        # Check allocation limit
+        if total_value > 0:
+            # Estimate new position value as average of existing
+            avg_val = total_value / max(len(open_positions), 1)
+            new_sector_val = sector_value[new_sector] + avg_val
+            new_total = total_value + avg_val
+            if new_total > 0 and (new_sector_val / new_total * 100) > max_sector_allocation_pct:
+                return False
+
+        return True
+
+    def _is_earnings_blackout(sym, current_date):
+        """Check if symbol is in earnings blackout on current_date."""
+        if sym not in earnings_blackouts:
+            return False
+        blackout_set = earnings_blackouts[sym]
+        if not blackout_set:
+            return False
+        check_date = current_date.date() if hasattr(current_date, "date") else current_date
+        return check_date in blackout_set
 
     for day_i in range(start_idx, len(sorted_dates)):
         current_date = sorted_dates[day_i]
@@ -267,12 +510,18 @@ def simulate_trades(histories, config=None):
 
             pos = open_positions[sym]
             current_price = sd["closes"][sym_idx]
+            intraday_high = sd["highs"][sym_idx]
             entry_price = pos["entry_price"]
             pnl_pct = (current_price - entry_price) / entry_price
 
-            # Trailing SL Update + Check
-            if pnl_pct >= trailing_activation_pct:
-                trail_level = current_price * (1 - trailing_sl_pct)
+            # Improved Trailing SL: track intraday highs, not just close
+            high_pnl_pct = (intraday_high - entry_price) / entry_price
+            if high_pnl_pct >= trailing_activation_pct:
+                # Update trailing high using intraday high
+                if sym not in trailing_highs or intraday_high > trailing_highs[sym]:
+                    trailing_highs[sym] = intraday_high
+                # Compute trailing SL level from the tracked high
+                trail_level = trailing_highs[sym] * (1 - trailing_sl_pct)
                 if sym not in trailing_sl or trail_level > trailing_sl[sym]:
                     trailing_sl[sym] = trail_level
 
@@ -293,6 +542,7 @@ def simulate_trades(histories, config=None):
                     "entry_score": pos["score"],
                 })
                 del open_positions[sym]
+                trailing_highs.pop(sym, None)
                 del trailing_sl[sym]
                 continue
 
@@ -314,6 +564,7 @@ def simulate_trades(histories, config=None):
                     "entry_score": pos["score"],
                 })
                 del open_positions[sym]
+                trailing_highs.pop(sym, None)
                 if sym in trailing_sl:
                     del trailing_sl[sym]
                 continue
@@ -336,6 +587,7 @@ def simulate_trades(histories, config=None):
                     "entry_score": pos["score"],
                 })
                 del open_positions[sym]
+                trailing_highs.pop(sym, None)
                 if sym in trailing_sl:
                     del trailing_sl[sym]
                 continue
@@ -343,6 +595,22 @@ def simulate_trades(histories, config=None):
         # 2. Score all assets and look for new entries
         if len(open_positions) >= max_positions:
             continue
+
+        # --- VIX Regime Filter ---
+        vix_block = False
+        vix_reduce_size = False
+        if use_realistic_filters and vix_by_date:
+            vix_val = _get_vix_for_date(current_date)
+            if vix_val is not None:
+                if vix_val > vix_crisis_threshold:
+                    vix_block = True
+                    filter_stats["vix_blocked"] += 1
+                elif vix_val > vix_caution_threshold:
+                    vix_reduce_size = True
+                    filter_stats["vix_reduced"] += 1
+
+        if vix_block:
+            continue  # Skip all new entries on this day
 
         scored = []
         for sym, sd in symbol_data.items():
@@ -358,14 +626,37 @@ def simulate_trades(histories, config=None):
 
         # Sort by score, take best
         scored.sort(key=lambda x: x[1], reverse=True)
-        slots = max_positions - len(open_positions)
 
-        for sym, score, price, date in scored[:slots]:
+        # VIX caution: reduce available slots by 50%
+        if vix_reduce_size:
+            slots = max(1, (max_positions - len(open_positions)) // 2)
+        else:
+            slots = max_positions - len(open_positions)
+
+        opened_today = 0
+        for sym, score, price, date in scored:
+            if opened_today >= slots:
+                break
+
+            # --- Earnings Blackout Filter ---
+            if use_realistic_filters and earnings_blackouts:
+                if _is_earnings_blackout(sym, current_date):
+                    filter_stats["earnings_blocked"] += 1
+                    continue
+
+            # --- Sector Concentration Filter ---
+            if use_realistic_filters:
+                if not _check_sector_concentration(sym):
+                    filter_stats["sector_blocked"] += 1
+                    continue
+
             open_positions[sym] = {
                 "entry_price": price,
                 "entry_date": date,
                 "score": score,
+                "sector": _get_sector(sym),
             }
+            opened_today += 1
 
     # Close remaining open positions at last available price
     for sym, pos in open_positions.items():
@@ -391,7 +682,14 @@ def simulate_trades(histories, config=None):
             "entry_score": pos["score"],
         })
 
-    log.info(f"Simulation fertig: {len(trades)} Trades")
+    if use_realistic_filters:
+        log.info(f"Simulation fertig: {len(trades)} Trades | "
+                 f"Filter-Stats: VIX blocked={filter_stats['vix_blocked']} days, "
+                 f"VIX reduced={filter_stats['vix_reduced']} days, "
+                 f"Earnings blocked={filter_stats['earnings_blocked']}, "
+                 f"Sector blocked={filter_stats['sector_blocked']}")
+    else:
+        log.info(f"Simulation fertig: {len(trades)} Trades (no realistic filters)")
     return trades
 
 
@@ -564,13 +862,18 @@ def calc_monthly_returns(trades):
 # WALK-FORWARD VALIDATION
 # ============================================================
 
-def walk_forward_validate(histories, config=None, train_pct=0.8):
+def walk_forward_validate(histories, config=None, train_pct=0.8,
+                          use_realistic_filters=True,
+                          vix_history=None, earnings_blackouts=None):
     """Split history into train/test, run backtest on each.
 
     Args:
         histories: dict of DataFrames
         config: trading config
         train_pct: fraction for in-sample (default 0.80)
+        use_realistic_filters: pass through to simulate_trades
+        vix_history: pass through to simulate_trades
+        earnings_blackouts: pass through to simulate_trades
 
     Returns:
         dict with in_sample and out_of_sample results
@@ -607,8 +910,13 @@ def walk_forward_validate(histories, config=None, train_pct=0.8):
     log.info(f"Walk-Forward: Train {train_start} - {train_end}, Test {test_start} - {test_end}")
 
     # Run backtest on each
-    train_trades = simulate_trades(train_histories, config)
-    test_trades = simulate_trades(test_histories, config)
+    sim_kwargs = {
+        "use_realistic_filters": use_realistic_filters,
+        "vix_history": vix_history,
+        "earnings_blackouts": earnings_blackouts,
+    }
+    train_trades = simulate_trades(train_histories, config, **sim_kwargs)
+    test_trades = simulate_trades(test_histories, config, **sim_kwargs)
 
     train_metrics = calculate_metrics(train_trades)
     test_metrics = calculate_metrics(test_trades)
@@ -636,7 +944,8 @@ def walk_forward_validate(histories, config=None, train_pct=0.8):
 # ORCHESTRATOR
 # ============================================================
 
-def quick_walk_forward(histories, config):
+def quick_walk_forward(histories, config, use_realistic_filters=True,
+                       vix_history=None, earnings_blackouts=None):
     """Schneller Walk-Forward nur fuer Optimizer Grid-Search (ohne Equity Curve/Monthly)."""
     train_histories = {}
     test_histories = {}
@@ -652,10 +961,15 @@ def quick_walk_forward(histories, config):
     if not train_histories or not test_histories:
         return None
 
-    test_trades = simulate_trades(test_histories, config)
+    sim_kwargs = {
+        "use_realistic_filters": use_realistic_filters,
+        "vix_history": vix_history,
+        "earnings_blackouts": earnings_blackouts,
+    }
+    test_trades = simulate_trades(test_histories, config, **sim_kwargs)
     test_metrics = calculate_metrics(test_trades)
 
-    train_trades = simulate_trades(train_histories, config)
+    train_trades = simulate_trades(train_histories, config, **sim_kwargs)
     train_metrics = calculate_metrics(train_trades)
 
     return {
@@ -664,16 +978,25 @@ def quick_walk_forward(histories, config):
     }
 
 
-def run_full_backtest(config=None, symbols=None, years=5):
+def run_full_backtest(config=None, symbols=None, years=5,
+                      use_realistic_filters=True):
     """Full backtest pipeline: download -> simulate -> metrics -> walk-forward.
 
     Saves results to backtest_results.json.
+
+    Args:
+        config: strategy config dict
+        symbols: list of symbols to test
+        years: years of history to download
+        use_realistic_filters: apply VIX regime, earnings blackout,
+                               and sector concentration filters
 
     Returns:
         dict with all results
     """
     log.info("=" * 55)
     log.info("FULL BACKTEST START")
+    log.info(f"  Realistic Filters: {'ON' if use_realistic_filters else 'OFF'}")
     log.info("=" * 55)
 
     if config is None:
@@ -685,14 +1008,48 @@ def run_full_backtest(config=None, symbols=None, years=5):
         log.error("Keine historischen Daten verfuegbar")
         return {"error": "Keine historischen Daten"}
 
+    # 1b. Download VIX history for regime filter
+    vix_history = {}
+    earnings_blackouts = {}
+    if use_realistic_filters:
+        log.info("Downloading realistic filter data...")
+        vix_history = download_vix_history(years=years)
+
+        # Fetch earnings dates for all stock/ETF symbols
+        mc_cfg = config.get("market_context", {})
+        buf_before = mc_cfg.get("earnings_buffer_days_before", 3)
+        buf_after = mc_cfg.get("earnings_buffer_days_after", 1)
+
+        for sym in histories.keys():
+            info = ASSET_UNIVERSE.get(sym, {})
+            asset_class = info.get("class", "")
+            if asset_class in ("crypto", "forex", "commodities", "indices"):
+                continue  # No earnings for these
+            edates = _fetch_historical_earnings_dates(sym)
+            if edates:
+                earnings_blackouts[sym] = _build_earnings_blackout_set(
+                    sym, edates, buf_before, buf_after)
+                log.debug(f"  {sym}: {len(edates)} earnings dates, "
+                          f"{len(earnings_blackouts[sym])} blackout days")
+
+        log.info(f"Filter data ready: VIX={len(vix_history)} days, "
+                 f"Earnings blackouts for {len(earnings_blackouts)} symbols")
+
+    # Common kwargs for simulate_trades
+    sim_kwargs = {
+        "use_realistic_filters": use_realistic_filters,
+        "vix_history": vix_history,
+        "earnings_blackouts": earnings_blackouts,
+    }
+
     # 2. Full simulation
-    all_trades = simulate_trades(histories, config)
+    all_trades = simulate_trades(histories, config, **sim_kwargs)
     all_metrics = calculate_metrics(all_trades)
     equity_curve = build_equity_curve(all_trades)
     monthly_returns = calc_monthly_returns(all_trades)
 
     # 3. Walk-forward validation
-    wf = walk_forward_validate(histories, config)
+    wf = walk_forward_validate(histories, config, **sim_kwargs)
 
     # 4. Best/Worst trades
     sorted_by_pnl = sorted(all_trades, key=lambda t: t["pnl_net_pct"], reverse=True)
@@ -708,6 +1065,7 @@ def run_full_backtest(config=None, symbols=None, years=5):
             "take_profit_pct": config.get("demo_trading", {}).get("take_profit_pct", 5),
             "min_scanner_score": config.get("demo_trading", {}).get("min_scanner_score", 15),
             "max_positions": config.get("demo_trading", {}).get("max_positions", 20),
+            "use_realistic_filters": use_realistic_filters,
         },
         "symbols_tested": list(histories.keys()),
         "years": years,
@@ -725,6 +1083,11 @@ def run_full_backtest(config=None, symbols=None, years=5):
             "spread_pct": SPREAD_PCT * 100,
             "overnight_fee_pct": OVERNIGHT_FEE_PCT * 100,
             "slippage_pct": SLIPPAGE_PCT * 100,
+        },
+        "realistic_filters": {
+            "enabled": use_realistic_filters,
+            "vix_data_points": len(vix_history),
+            "earnings_symbols_covered": len(earnings_blackouts),
         },
     }
 

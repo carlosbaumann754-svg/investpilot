@@ -82,6 +82,22 @@ def _import_events_calendar():
         log.debug("Events Calendar nicht verfuegbar")
         return None
 
+def _import_sentiment():
+    try:
+        from app import sentiment
+        return sentiment
+    except ImportError:
+        log.debug("Sentiment-Analyse nicht verfuegbar")
+        return None
+
+def _import_hedging():
+    try:
+        from app import hedging
+        return hedging
+    except ImportError:
+        log.debug("Hedging nicht verfuegbar")
+        return None
+
 
 # ============================================================
 # PORTFOLIO STATUS
@@ -444,6 +460,8 @@ def execute_scanner_trades(client, config, scan_results):
     ex = _import_execution()
     al = _import_alerts()
     ec = _import_events_calendar()
+    sent = _import_sentiment()
+    hdg = _import_hedging()
 
     portfolio = client.get_portfolio()
     if not portfolio:
@@ -470,6 +488,7 @@ def execute_scanner_trades(client, config, scan_results):
     # Market Context: Positionsgroessen-Multiplikator + Regime Gate
     ctx_multiplier = 1.0
     regime_halt = False
+    regime_data = {}
     if mc:
         ctx = mc.get_current_context()
         ctx_multiplier = ctx.get("position_size_multiplier", 1.0)
@@ -482,6 +501,19 @@ def execute_scanner_trades(client, config, scan_results):
         if not buy_allowed:
             log.warning(f"  REGIME FILTER: {regime_reason}")
             regime_halt = True
+            # Telegram: Regime Halt Notification
+            if al:
+                al.alert_regime_halt(regime_reason, regime_data)
+
+    # Hedging: Bear-Regime Schutz
+    hedge_result = {"hedge_needed": False}
+    if hdg:
+        hedge_result = hdg.check_hedge_needed(regime_data, parsed_positions, config)
+        if hedge_result.get("hedge_needed"):
+            hedge_mult = hedge_result.get("bear_position_multiplier", 0.5)
+            ctx_multiplier *= hedge_mult
+            log.info(f"  HEDGING AKTIV: Positionsgroessen x{hedge_mult} "
+                     f"(effektiv x{ctx_multiplier:.2f})")
 
     # Risk Manager: Margin Safety Check
     if rm:
@@ -554,6 +586,39 @@ def execute_scanner_trades(client, config, scan_results):
                       and r["score"] >= min_score
                       and r["etoro_id"] not in existing_ids]
 
+    # ML Confidence: multiply scanner score by ML probability if enabled
+    use_ml = dt_config.get("use_ml_scoring", False)
+    if use_ml:
+        try:
+            from app.ml_scorer import is_model_trained, predict_score, load_persisted_model
+            if not is_model_trained():
+                load_persisted_model()
+            if is_model_trained():
+                for cand in buy_candidates:
+                    analysis = cand.get("analysis", {})
+                    ml_prob = predict_score({
+                        "scanner_score": cand["score"],
+                        "rsi": analysis.get("rsi", 50),
+                        "macd_hist": analysis.get("macd_histogram", 0),
+                        "volume_trend": analysis.get("volume_trend", 1.0),
+                        "volatility": analysis.get("volatility", 5.0),
+                        "momentum_5d": analysis.get("momentum_5d", 0),
+                        "momentum_20d": analysis.get("momentum_20d", 0),
+                        "bollinger_pos": analysis.get("bollinger_pos", 0.5),
+                    })
+                    if ml_prob is not None:
+                        original = cand["score"]
+                        cand["score"] = round(cand["score"] * ml_prob, 1)
+                        log.info(f"  ML Score: {cand['symbol']} "
+                                 f"{original:.1f} x {ml_prob:.2f} = {cand['score']:.1f}")
+                # Re-sort and re-filter after ML adjustment
+                buy_candidates = [c for c in buy_candidates if c["score"] >= min_score]
+                buy_candidates.sort(key=lambda x: x["score"], reverse=True)
+            else:
+                log.debug("  ML Scoring: Model nicht trainiert, verwende fixe Scores")
+        except Exception as e:
+            log.debug(f"  ML Scoring nicht verfuegbar: {e}")
+
     available_slots = max_positions - len(positions) + len(
         [t for t in trades_executed if t["action"] == "SCANNER_SELL"])
     if available_slots <= 0 or credit < 100:
@@ -586,6 +651,37 @@ def execute_scanner_trades(client, config, scan_results):
                     if blackout:
                         log.info(f"  EARNINGS BLACKOUT: {symbol} — {blackout_reason}")
                         continue
+
+                # Sentiment Filter
+                mc_config = config.get("market_context", {})
+                if sent and mc_config.get("use_sentiment_filter", False):
+                    sent_result = sent.get_sentiment(symbol)
+                    sent_threshold = mc_config.get("sentiment_block_threshold", -0.5)
+                    if sent_result["score"] < sent_threshold:
+                        log.info(f"  NEGATIVE SENTIMENT: {symbol} "
+                                 f"(Score={sent_result['score']:+.2f}, "
+                                 f"Threshold={sent_threshold})")
+                        continue
+
+                # Earnings Surprise Score Adjustment
+                if asset_class == "stocks" and ec:
+                    from app.events_calendar import adjust_score_for_earnings
+                    adjusted_score = adjust_score_for_earnings(symbol, candidate["score"])
+                    if adjusted_score != candidate["score"]:
+                        log.info(f"  Earnings-Anpassung {symbol}: "
+                                 f"{candidate['score']:+.1f} -> {adjusted_score:+.1f}")
+                        candidate["score"] = adjusted_score
+                        if candidate["score"] < min_score:
+                            log.info(f"  SKIP {symbol}: Score nach Earnings-Anpassung "
+                                     f"unter Minimum ({candidate['score']:.1f} < {min_score})")
+                            continue
+
+                # Hedging: Defensive Sektoren bevorzugen
+                if hdg and hedge_result.get("hedge_needed"):
+                    candidate_sector = analysis.get("sector", "")
+                    if candidate_sector and not hdg.is_defensive_sector(candidate_sector, config):
+                        # Non-defensive sectors get extra reduction in bear regime
+                        log.info(f"  Hedging: {symbol} nicht-defensiver Sektor '{candidate_sector}'")
 
                 # Betrag nach Score-Gewichtung
                 weight = max(candidate["score"], 1) / total_score
@@ -1004,6 +1100,13 @@ def run_trading_cycle():
         backup_to_cloud()
     except Exception as e:
         log.warning(f"Cloud-Backup fehlgeschlagen: {e}")
+
+    # Google Drive Backup (zusaetzlich, falls konfiguriert)
+    try:
+        from app.gdrive_backup import backup_to_gdrive
+        backup_to_gdrive()
+    except Exception as e:
+        log.warning(f"GDrive-Backup fehlgeschlagen: {e}")
 
     log.info("")
     log.info("Trading-Zyklus beendet.")
