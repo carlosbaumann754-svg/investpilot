@@ -35,14 +35,16 @@ def get_data_path(filename):
 
 
 def load_config():
-    """Lade Strategie-Config aus config.json und merge mit Secrets aus .env."""
-    config_path = get_data_path("config.json")
-    if not config_path.exists():
-        log.error(f"config.json nicht gefunden: {config_path}")
-        raise FileNotFoundError(f"config.json nicht gefunden: {config_path}")
+    """Lade Strategie-Config aus config.json und merge mit Secrets aus .env (thread-safe)."""
+    lock = _get_file_lock("config.json")
+    with lock:
+        config_path = get_data_path("config.json")
+        if not config_path.exists():
+            log.error(f"config.json nicht gefunden: {config_path}")
+            raise FileNotFoundError(f"config.json nicht gefunden: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
 
     # Secrets aus Umgebungsvariablen laden (ueberschreiben config.json)
     etoro = config.setdefault("etoro", {})
@@ -70,21 +72,23 @@ def load_config():
 
 
 def save_config(config):
-    """Speichere Config OHNE Secrets. Brain-Optimierung schreibt nur Strategie-Params."""
-    config_path = get_data_path("config.json")
+    """Speichere Config OHNE Secrets. Brain-Optimierung schreibt nur Strategie-Params (thread-safe)."""
+    lock = _get_file_lock("config.json")
+    with lock:
+        config_path = get_data_path("config.json")
 
-    # Kopie erstellen, Secrets entfernen
-    safe_config = json.loads(json.dumps(config))
-    etoro = safe_config.get("etoro", {})
-    for secret_key in ["public_key", "private_key", "demo_private_key"]:
-        if secret_key in etoro:
-            del etoro[secret_key]
+        # Kopie erstellen, Secrets entfernen
+        safe_config = json.loads(json.dumps(config))
+        etoro = safe_config.get("etoro", {})
+        for secret_key in ["public_key", "private_key", "demo_private_key"]:
+            if secret_key in etoro:
+                del etoro[secret_key]
 
-    # Atomic write: erst temp-file, dann umbenennen
-    tmp_path = config_path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(safe_config, f, indent=2, ensure_ascii=False)
-    os.replace(str(tmp_path), str(config_path))
+        # Atomic write: erst temp-file, dann umbenennen
+        tmp_path = config_path.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(safe_config, f, indent=2, ensure_ascii=False)
+        os.replace(str(tmp_path), str(config_path))
 
 
 def load_json(filename):

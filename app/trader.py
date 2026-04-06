@@ -356,12 +356,9 @@ def check_stop_loss_take_profit(client, config):
                                  f"Tranche {tranche_idx+1}: {close_pct}% bei +{target_pct}% "
                                  f"(PnL: {p['pnl_pct']:+.1f}%, Betrag: ${close_amount:,.2f})")
 
-                        # Tranche als ausgeloest markieren
-                        if pid_key not in partial_state:
-                            partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
-                        partial_state[pid_key]["triggered"].append(tranche_idx)
-                        new_total = partial_state[pid_key].get("total_closed_pct", 0) + close_pct
-                        partial_state[pid_key]["total_closed_pct"] = new_total
+                        # Berechne neue kumulierte Summe (noch nicht persistiert!)
+                        prev_total = partial_state.get(pid_key, {}).get("total_closed_pct", 0)
+                        new_total = prev_total + close_pct
 
                         # eToro API unterstuetzt kein partielles Schliessen.
                         # Wenn kumulierte Tranchen >= 100%: GANZE Position schliessen.
@@ -370,10 +367,23 @@ def check_stop_loss_take_profit(client, config):
                                      f"({new_total}%) — schliesse Position komplett")
                             result = client.close_position(p["position_id"], p["instrument_id"])
                             trade_status = "executed" if result else "failed"
+                            if not result:
+                                log.warning(f"  PROFIT_LOCK_CLOSE FEHLGESCHLAGEN — "
+                                            f"Tranche wird NICHT als erledigt markiert")
                         else:
                             log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} erreicht "
                                      f"(kumuliert {new_total}% — eToro erlaubt nur Full Close)")
                             trade_status = "signal_logged"
+                            result = True  # Signals werden immer als "erfolgreich" gewertet
+
+                        # Tranche NUR bei Erfolg als ausgeloest markieren
+                        # (bei API-Fehler bleibt Tranche offen fuer naechsten Zyklus)
+                        if result:
+                            if pid_key not in partial_state:
+                                partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
+                            partial_state[pid_key]["triggered"].append(tranche_idx)
+                            partial_state[pid_key]["total_closed_pct"] = new_total
+                            save_json("partial_close_state.json", partial_state)
 
                         trade_entry = {
                             "timestamp": datetime.now().isoformat(),
@@ -392,10 +402,9 @@ def check_stop_loss_take_profit(client, config):
                         }
                         save_trade(trade_entry)
                         actions.append(trade_entry["action"])
-                        save_json("partial_close_state.json", partial_state)
 
                         # Bei voller Schliessung: Rest der Tranchen-Pruefung ueberspringen
-                        if new_total >= 100:
+                        if new_total >= 100 and result:
                             break
 
                         if al:

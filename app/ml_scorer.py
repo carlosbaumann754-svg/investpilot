@@ -502,7 +502,7 @@ def train_from_trade_history(trade_history=None):
               sector (encoded), VIX level, Fear&Greed index,
               volatility, momentum_5d, momentum_20d, bollinger_pos.
 
-    The model is saved to data/ml_model.pkl (pickle) and metadata to
+    The model is saved to data/ml_model.joblib (via joblib) and metadata to
     data/ml_model.json.  Falls back to the existing GradientBoosting
     price-based training if not enough trade data.
 
@@ -645,17 +645,21 @@ def train_from_trade_history(trade_history=None):
         },
     }
 
-    # Persist model to pkl
+    # Persist model via joblib (sicherer als pickle, sklearn-Standard)
     try:
-        import pickle
+        from joblib import dump as joblib_dump
         import os
         data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-        pkl_path = os.path.join(data_dir, "ml_model.pkl")
-        with open(pkl_path, "wb") as f:
-            pickle.dump(model, f)
-        log.info(f"  Model gespeichert: {pkl_path}")
+        model_path = os.path.join(data_dir, "ml_model.joblib")
+        joblib_dump(model, model_path)
+        log.info(f"  Model gespeichert: {model_path}")
+        # Altes pkl entfernen falls vorhanden (Migration)
+        old_pkl = os.path.join(data_dir, "ml_model.pkl")
+        if os.path.exists(old_pkl):
+            os.remove(old_pkl)
+            log.info(f"  Altes pkl entfernt: {old_pkl}")
     except Exception as e:
-        log.warning(f"  Model pkl speichern fehlgeschlagen: {e}")
+        log.warning(f"  Model speichern fehlgeschlagen: {e}")
 
     # Persist metadata
     save_json("ml_model.json", _model_info)
@@ -664,9 +668,10 @@ def train_from_trade_history(trade_history=None):
 
 
 def load_persisted_model():
-    """Load a previously saved pkl model from disk.
+    """Load a previously saved model from disk via joblib.
 
     Called on startup so the bot can use ML scoring without retraining.
+    Supports both new .joblib and legacy .pkl format (auto-migration).
     Returns True if model was loaded, False otherwise.
     """
     global _model, _model_info
@@ -677,17 +682,30 @@ def load_persisted_model():
         return False
 
     try:
-        import pickle
         import os
         data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
+        # Primaer: joblib (sicher, sklearn-Standard)
+        joblib_path = os.path.join(data_dir, "ml_model.joblib")
+        if os.path.exists(joblib_path):
+            from joblib import load as joblib_load
+            _model = joblib_load(joblib_path)
+            _model_info = load_json("ml_model.json")
+            log.info(f"ML Model geladen von {joblib_path}")
+            return True
+
+        # Fallback: Legacy pkl (wird beim naechsten Training migriert)
         pkl_path = os.path.join(data_dir, "ml_model.pkl")
-        if not os.path.exists(pkl_path):
-            return False
-        with open(pkl_path, "rb") as f:
-            _model = pickle.load(f)
-        _model_info = load_json("ml_model.json")
-        log.info(f"ML Model geladen von {pkl_path}")
-        return True
+        if os.path.exists(pkl_path):
+            import pickle
+            with open(pkl_path, "rb") as f:
+                _model = pickle.load(f)
+            _model_info = load_json("ml_model.json")
+            log.warning(f"ML Model aus Legacy-pkl geladen: {pkl_path} "
+                        f"(wird beim naechsten Training zu joblib migriert)")
+            return True
+
+        return False
     except Exception as e:
         log.warning(f"ML Model laden fehlgeschlagen: {e}")
         return False
