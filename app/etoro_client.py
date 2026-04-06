@@ -211,6 +211,18 @@ class EtoroClient:
         pnl_val = pnl_raw.get("pnL", 0) if isinstance(pnl_raw, dict) else 0
         pnl_pct = (pnl_val / invested * 100) if invested > 0 else 0
 
+        # Preise aus der API extrahieren (verschiedene Feldnamen je nach Endpoint)
+        current_price = (
+            pos.get("currentRate") or pos.get("CurrentRate")
+            or pos.get("current_rate") or pos.get("currentPrice")
+            or None
+        )
+        entry_price = (
+            pos.get("openRate") or pos.get("OpenRate")
+            or pos.get("open_rate") or pos.get("openPrice")
+            or None
+        )
+
         return {
             "instrument_id": iid,
             "position_id": pid,
@@ -218,4 +230,6 @@ class EtoroClient:
             "pnl": round(pnl_val, 2),
             "pnl_pct": round(pnl_pct, 2),
             "leverage": leverage,
+            "current_price": current_price,
+            "entry_price": entry_price,
         }

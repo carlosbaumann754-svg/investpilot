@@ -269,6 +269,14 @@ def check_stop_loss_take_profit(client, config):
         if p["invested"] <= 0:
             continue
 
+        # Trailing SL: Fallback current_price aus PnL + entry_price berechnen
+        if not p.get("current_price") and p.get("entry_price") and p["invested"] > 0:
+            # current_price = entry_price * (1 + pnl_pct/100)
+            p["current_price"] = round(p["entry_price"] * (1 + p["pnl_pct"] / 100), 6)
+        if not p.get("entry_price") and p.get("current_price") and p["invested"] > 0 and p["pnl_pct"] != 0:
+            # entry_price = current_price / (1 + pnl_pct/100)
+            p["entry_price"] = round(p["current_price"] / (1 + p["pnl_pct"] / 100), 6)
+
         # Trailing SL Update + Trigger Check
         if lm and p.get("current_price"):
             lm.update_trailing_stop_loss(
@@ -459,12 +467,11 @@ def execute_scanner_trades(client, config, scan_results):
         if ctx_multiplier < 1.0:
             log.info(f"  Marktkontext: Positionsgroessen x{ctx_multiplier}")
 
-        # Regime Halt: VIX ueber Schwelle = keine neuen Kaeufe
-        vix_level = ctx.get("vix_level")
-        vix_halt_threshold = config.get("regime_filter", {}).get("vix_halt_threshold", 35)
-        if vix_level and vix_level > vix_halt_threshold:
-            log.warning(f"  REGIME HALT: VIX {vix_level:.1f} > {vix_halt_threshold} "
-                        f"- Keine neuen Kaeufe")
+        # Kombinierter Regime-Filter: VIX + Fear&Greed + Brain-Regime
+        from app.market_context import check_regime_filter
+        buy_allowed, regime_reason, regime_data = check_regime_filter(config)
+        if not buy_allowed:
+            log.warning(f"  REGIME FILTER: {regime_reason}")
             regime_halt = True
 
     # Risk Manager: Margin Safety Check
@@ -622,16 +629,20 @@ def execute_scanner_trades(client, config, scan_results):
 
                 # Risk Manager: Pre-Trade Validation
                 if rm:
-                    # Enrich positions with asset_class for correlation check
+                    # Enrich positions with asset_class + sector for correlation check
                     enriched = []
                     for p in parsed_positions:
                         ep = dict(p)
                         ep["asset_class"] = _lookup_asset_class(p["instrument_id"])
+                        ep["sector"] = _lookup_sector(p["instrument_id"])
                         enriched.append(ep)
+
+                    # Sektor des neuen Kandidaten
+                    candidate_sector = analysis.get("sector", "") or _lookup_sector(candidate["etoro_id"])
 
                     allowed, reasons = rm.validate_trade(
                         total_value, amount, leverage, asset_class,
-                        enriched, stop_loss_pct, config)
+                        enriched, stop_loss_pct, config, sector=candidate_sector)
                     if not allowed:
                         log.info(f"  RISK BLOCK {symbol}: {'; '.join(reasons)}")
                         continue
@@ -731,6 +742,18 @@ def _lookup_asset_class(instrument_id):
     except ImportError:
         pass
     return "stocks"
+
+
+def _lookup_sector(instrument_id):
+    """Finde Sektor fuer eine Instrument-ID (tech, finance, health, etc.)."""
+    try:
+        from app.market_scanner import ASSET_UNIVERSE
+        for symbol, info in ASSET_UNIVERSE.items():
+            if info["etoro_id"] == instrument_id:
+                return info.get("sector", "")
+    except ImportError:
+        pass
+    return ""
 
 
 # ============================================================
@@ -908,6 +931,17 @@ def run_trading_cycle():
 
     # 6. Stop-Loss / Take-Profit
     check_stop_loss_take_profit(client, config)
+
+    # 6b. Trailing SL State bereinigen (geschlossene Positionen entfernen)
+    lm = _import_leverage_manager()
+    if lm:
+        portfolio_for_cleanup = client.get_portfolio()
+        if portfolio_for_cleanup:
+            open_ids = [
+                EtoroClient.parse_position(pos)["position_id"]
+                for pos in portfolio_for_cleanup.get("positions", [])
+            ]
+            lm.cleanup_trailing_state(open_ids)
 
     # 7. Overnight Check (abends)
     now = datetime.now()

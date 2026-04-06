@@ -434,3 +434,105 @@ def get_seasonal_adjustment(asset_class, symbol):
             return -0.15  # Uebergangsperiode
 
     return 0
+
+
+# ============================================================
+# KOMBINIERTER REGIME-FILTER
+# ============================================================
+
+def check_regime_filter(config=None):
+    """Kombinierter Regime-Filter: VIX + Fear&Greed + Brain-Regime.
+
+    Bewertet die aktuelle Marktlage anhand mehrerer Indikatoren
+    und blockiert neue BUY-Trades bei unguenstigen Bedingungen.
+
+    Returns:
+        tuple: (buy_allowed: bool, reason: str, regime_data: dict)
+    """
+    if config is None:
+        config = load_config()
+
+    rf = config.get("regime_filter", {})
+
+    # Feature-Toggle: Wenn deaktiviert, immer erlauben
+    if not rf.get("enabled", True):
+        return True, "Regime-Filter deaktiviert", {}
+
+    # Schwellenwerte aus Config
+    vix_crisis = rf.get("vix_crisis_threshold", 35)
+    vix_caution = rf.get("vix_caution_threshold", 25)
+    fg_crisis = rf.get("fear_greed_crisis_threshold", 15)
+    fg_fear = rf.get("fear_greed_fear_threshold", 25)
+    score_threshold = rf.get("combined_score_threshold", -2)
+
+    # Aktuellen Context laden
+    ctx = get_current_context()
+    combined_score = 0
+    details = []
+
+    regime_data = {
+        "vix_level": ctx.get("vix_level"),
+        "fear_greed_index": ctx.get("fear_greed_index"),
+        "brain_regime": "unknown",
+        "combined_score": 0,
+        "score_threshold": score_threshold,
+    }
+
+    # --- VIX-Bewertung ---
+    vix_level = ctx.get("vix_level")
+    if vix_level is not None:
+        if vix_level > vix_crisis:
+            combined_score -= 2
+            details.append(f"VIX={vix_level:.1f} CRISIS (>{vix_crisis})")
+            log.warning(f"  Regime-Filter: VIX {vix_level:.1f} = CRISIS (-2)")
+        elif vix_level > vix_caution:
+            combined_score -= 1
+            details.append(f"VIX={vix_level:.1f} CAUTION (>{vix_caution})")
+            log.info(f"  Regime-Filter: VIX {vix_level:.1f} = CAUTION (-1)")
+        else:
+            log.info(f"  Regime-Filter: VIX {vix_level:.1f} = OK")
+    else:
+        log.debug("  Regime-Filter: VIX nicht verfuegbar")
+
+    # --- Fear & Greed Bewertung ---
+    fg_value = ctx.get("fear_greed_index")
+    if fg_value is not None:
+        if fg_value < fg_crisis:
+            combined_score -= 2
+            details.append(f"F&G={fg_value} EXTREME FEAR (<{fg_crisis})")
+            log.warning(f"  Regime-Filter: Fear&Greed {fg_value} = EXTREME FEAR (-2)")
+        elif fg_value < fg_fear:
+            combined_score -= 1
+            details.append(f"F&G={fg_value} FEAR (<{fg_fear})")
+            log.info(f"  Regime-Filter: Fear&Greed {fg_value} = FEAR (-1)")
+        else:
+            log.info(f"  Regime-Filter: Fear&Greed {fg_value} = OK")
+    else:
+        log.debug("  Regime-Filter: Fear&Greed nicht verfuegbar")
+
+    # --- Brain Marktregime ---
+    brain_state = load_json("brain_state.json") or {}
+    brain_regime = brain_state.get("market_regime", "unknown")
+    regime_data["brain_regime"] = brain_regime
+
+    if brain_regime == "bear":
+        combined_score -= 1
+        details.append(f"Brain-Regime={brain_regime} (-1)")
+        log.info(f"  Regime-Filter: Brain-Regime = bear (-1)")
+    else:
+        log.info(f"  Regime-Filter: Brain-Regime = {brain_regime}")
+
+    # --- Ergebnis ---
+    regime_data["combined_score"] = combined_score
+    regime_data["details"] = details
+
+    buy_allowed = combined_score > score_threshold
+    if buy_allowed:
+        reason = f"Regime OK (Score={combined_score}, Threshold={score_threshold})"
+        log.info(f"  Regime-Filter: {reason}")
+    else:
+        reason = (f"Score {combined_score} <= {score_threshold}: "
+                  f"{'; '.join(details)}")
+        log.warning(f"  Regime-Filter BLOCK: {reason}")
+
+    return buy_allowed, reason, regime_data

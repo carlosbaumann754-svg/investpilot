@@ -236,6 +236,50 @@ def check_correlation(new_instrument_class, existing_positions, config=None):
     return True, "OK"
 
 
+def check_sector_concentration(new_sector, existing_positions, config=None):
+    """Pruefe ob neue Position zu hohe Sektor-Konzentration verursacht.
+
+    Verhindert Klumpenrisiko innerhalb einer Asset-Klasse, z.B. 8x Tech-Aktien.
+    """
+    if config is None:
+        config = load_config()
+    risk_cfg = config.get("risk_management", {})
+
+    max_per_sector = risk_cfg.get("max_positions_per_sector", 4)
+    max_sector_pct = risk_cfg.get("max_sector_allocation_pct", 35)
+
+    if not new_sector:
+        return True, "OK"
+
+    # Zaehle Positionen und Werte pro Sektor
+    sector_count = {}
+    sector_value = {}
+    total_value = 0
+    for pos in existing_positions:
+        sec = pos.get("sector", "")
+        if not sec:
+            continue
+        sector_count[sec] = sector_count.get(sec, 0) + 1
+        val = pos.get("invested", 0)
+        sector_value[sec] = sector_value.get(sec, 0) + val
+        total_value += val
+
+    # Pruefe Anzahl
+    current_count = sector_count.get(new_sector, 0)
+    if current_count >= max_per_sector:
+        return False, (f"Max {max_per_sector} Positionen im Sektor '{new_sector}' "
+                       f"erreicht ({current_count})")
+
+    # Pruefe Allokation
+    if total_value > 0:
+        current_pct = sector_value.get(new_sector, 0) / total_value * 100
+        if current_pct >= max_sector_pct:
+            return False, (f"Max {max_sector_pct}% Allokation im Sektor '{new_sector}' "
+                           f"erreicht ({current_pct:.1f}%)")
+
+    return True, "OK"
+
+
 # ============================================================
 # MAX OFFENE POSITIONEN
 # ============================================================
@@ -535,7 +579,7 @@ def auto_deleverage(client, positions, portfolio_value, config=None):
 # ============================================================
 
 def validate_trade(portfolio_value, amount_usd, leverage, asset_class,
-                   existing_positions, stop_loss_pct, config=None):
+                   existing_positions, stop_loss_pct, config=None, sector=None):
     """Zentrale Pre-Trade-Validierung. Gibt (allowed, reasons) zurueck."""
     if config is None:
         config = load_config()
@@ -558,12 +602,18 @@ def validate_trade(portfolio_value, amount_usd, leverage, asset_class,
     if not pos_ok:
         reasons.append(pos_reason)
 
-    # 4. Korrelation
+    # 4. Korrelation (Asset-Klasse)
     corr_ok, corr_reason = check_correlation(asset_class, existing_positions, config)
     if not corr_ok:
         reasons.append(corr_reason)
 
-    # 5. Margin Safety
+    # 5. Sektor-Konzentration
+    if sector:
+        sec_ok, sec_reason = check_sector_concentration(sector, existing_positions, config)
+        if not sec_ok:
+            reasons.append(sec_reason)
+
+    # 6. Margin Safety
     margin_ok, margin_reason, _ = check_margin_safety(
         portfolio_value, existing_positions, config)
     if not margin_ok:
