@@ -280,6 +280,47 @@ def check_sector_concentration(new_sector, existing_positions, config=None):
     return True, "OK"
 
 
+def get_portfolio_concentration_score(existing_positions, config=None):
+    """Berechne Portfolio-Konzentrations-Score (0-100).
+
+    0 = perfekt diversifiziert, 100 = alles in einem Sektor/Klasse.
+    Basiert auf Herfindahl-Index der Sektor-Allokation.
+    """
+    if config is None:
+        config = load_config()
+
+    if not existing_positions:
+        return 0
+
+    sector_value = {}
+    total_value = 0
+    for pos in existing_positions:
+        sec = pos.get("sector", "") or pos.get("asset_class", "unknown")
+        val = pos.get("invested", 0)
+        if val <= 0:
+            continue
+        sector_value[sec] = sector_value.get(sec, 0) + val
+        total_value += val
+
+    if total_value <= 0 or len(sector_value) == 0:
+        return 0
+
+    # Herfindahl-Index: Summe der quadrierten Anteile
+    hhi = sum((v / total_value) ** 2 for v in sector_value.values())
+
+    # Normalisieren: 1/N (perfekt verteilt) bis 1.0 (alles in einem)
+    n = len(sector_value)
+    if n <= 1:
+        return 100
+
+    min_hhi = 1.0 / n  # Perfekt diversifiziert
+    # Score: 0 bei min_hhi, 100 bei 1.0
+    score = (hhi - min_hhi) / (1.0 - min_hhi) * 100
+    score = max(0, min(100, score))
+
+    return round(score, 1)
+
+
 # ============================================================
 # MAX OFFENE POSITIONEN
 # ============================================================

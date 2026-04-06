@@ -333,6 +333,57 @@ def check_stop_loss_take_profit(client, config):
                         al.alert_trade_executed(trade_entry)
                 continue  # Trailing SL hat Prioritaet, Skip fixed SL/TP
 
+        # --- Profit-Locking: Partial Close (TP-Tranchen) ---
+        lev_cfg = config.get("leverage", {})
+        tp_tranches = lev_cfg.get("tp_tranches", [])
+        if tp_tranches and p["pnl_pct"] > 0:
+            partial_state = load_json("partial_close_state.json") or {}
+            pid_key = str(p["position_id"])
+            triggered_tranches = partial_state.get(pid_key, {}).get("triggered", [])
+
+            for tranche_idx, tranche in enumerate(tp_tranches):
+                target_pct = tranche.get("profit_target_pct", 0)
+                close_pct = tranche.get("pct_of_position", 0)
+
+                if tranche_idx in triggered_tranches:
+                    continue  # Diese Tranche wurde bereits ausgeloest
+
+                if p["pnl_pct"] >= target_pct:
+                    close_amount = round(p["invested"] * close_pct / 100, 2)
+                    if close_amount >= 1:
+                        log.info(f"  PARTIAL_CLOSE: Position {p['position_id']} "
+                                 f"(Instrument {p['instrument_id']}) — "
+                                 f"Tranche {tranche_idx+1}: {close_pct}% bei +{target_pct}% "
+                                 f"(PnL: {p['pnl_pct']:+.1f}%, Betrag: ${close_amount:,.2f})")
+
+                        trade_entry = {
+                            "timestamp": datetime.now().isoformat(),
+                            "action": "PARTIAL_CLOSE",
+                            "instrument_id": p["instrument_id"],
+                            "position_id": p["position_id"],
+                            "pnl_pct": p["pnl_pct"],
+                            "pnl_usd": round(p["pnl"] * close_pct / 100, 2),
+                            "leverage": p["leverage"],
+                            "tranche_index": tranche_idx,
+                            "tranche_close_pct": close_pct,
+                            "tranche_target_pct": target_pct,
+                            "close_amount_usd": close_amount,
+                            "status": "logged",
+                        }
+                        save_trade(trade_entry)
+                        actions.append("PARTIAL_CLOSE")
+
+                        # Tranche als ausgeloest markieren
+                        if pid_key not in partial_state:
+                            partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
+                        partial_state[pid_key]["triggered"].append(tranche_idx)
+                        partial_state[pid_key]["total_closed_pct"] = (
+                            partial_state[pid_key].get("total_closed_pct", 0) + close_pct)
+                        save_json("partial_close_state.json", partial_state)
+
+                        if al:
+                            al.alert_trade_executed(trade_entry)
+
         # Stop-Loss Check
         if p["pnl_pct"] <= sl_pct:
             log.warning(f"  STOP-LOSS: Position {p['position_id']} "
@@ -354,10 +405,14 @@ def check_stop_loss_take_profit(client, config):
                 if al:
                     al.alert_trade_executed(trade_entry)
 
-        # Take-Profit Check
+        # Take-Profit Check (nur fuer verbleibende Position nach Partial Closes)
         elif p["pnl_pct"] >= tp_pct:
+            partial_state_tp = load_json("partial_close_state.json") or {}
+            pid_tp_key = str(p["position_id"])
+            closed_pct_total = partial_state_tp.get(pid_tp_key, {}).get("total_closed_pct", 0)
+            remaining_label = f" (Rest nach {closed_pct_total}% Partial Close)" if closed_pct_total > 0 else ""
             log.info(f"  TAKE-PROFIT: Position {p['position_id']} "
-                     f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
+                     f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%{remaining_label}")
             result = client.close_position(p["position_id"], p["instrument_id"])
             if result:
                 trade_entry = {
@@ -375,8 +430,26 @@ def check_stop_loss_take_profit(client, config):
                 if al:
                     al.alert_trade_executed(trade_entry)
 
+    # Partial-Close State bereinigen fuer geschlossene Positionen
+    _cleanup_partial_close_state(portfolio)
+
     log.info(f"  {len(actions)} SL/TP Aktionen")
     return actions
+
+
+def _cleanup_partial_close_state(portfolio):
+    """Entferne Partial-Close-State fuer Positionen die nicht mehr offen sind."""
+    partial_state = load_json("partial_close_state.json") or {}
+    if not partial_state:
+        return
+    open_ids = set()
+    if portfolio:
+        for pos in portfolio.get("positions", []):
+            p = EtoroClient.parse_position(pos)
+            open_ids.add(str(p["position_id"]))
+    cleaned = {pid: data for pid, data in partial_state.items() if pid in open_ids}
+    if len(cleaned) != len(partial_state):
+        save_json("partial_close_state.json", cleaned)
 
 
 # ============================================================
@@ -572,6 +645,29 @@ def execute_scanner_trades(client, config, scan_results):
         log.info("  BUY-Phase uebersprungen (Regime Halt aktiv)")
         return trades_executed
 
+    # Intraday Timing Filter: Keine Kaeufe in volatilen Marktphasen (Open/Close)
+    timing_cfg = config.get("intraday_timing", {})
+    if timing_cfg.get("enabled", False):
+        now = datetime.now()
+        avoid_first = timing_cfg.get("avoid_first_minutes", 30)
+        avoid_last = timing_cfg.get("avoid_last_minutes", 30)
+        # US Markt: 15:30-22:00 CET
+        market_open_h, market_open_m = 15, 30
+        market_close_h, market_close_m = 22, 0
+
+        minutes_since_open = (now.hour - market_open_h) * 60 + (now.minute - market_open_m)
+        minutes_until_close = (market_close_h - now.hour) * 60 + (market_close_m - now.minute)
+
+        if 0 <= minutes_since_open < avoid_first:
+            log.info(f"  INTRADAY TIMING: Erste {avoid_first} Minuten nach Open — "
+                     f"keine Kaeufe ({minutes_since_open} Min seit Open)")
+            return trades_executed
+
+        if 0 <= minutes_until_close < avoid_last:
+            log.info(f"  INTRADAY TIMING: Letzte {avoid_last} Minuten vor Close — "
+                     f"keine Kaeufe ({minutes_until_close} Min bis Close)")
+            return trades_executed
+
     # Recovery Mode: Einschraenkungen bei moderatem Drawdown
     recovery_active = False
     recovery_restrictions = {}
@@ -689,6 +785,17 @@ def execute_scanner_trades(client, config, scan_results):
 
                 # Market Context Multiplikator
                 amount = round(amount * ctx_multiplier, 2)
+
+                # Konzentrations-Penalty: Reduziere Positionsgroesse bei hoher Konzentration
+                risk_cfg_conc = config.get("risk_management", {})
+                if risk_cfg_conc.get("concentration_penalty_enabled", False) and rm:
+                    conc_threshold = risk_cfg_conc.get("concentration_threshold", 70)
+                    conc_reduction = risk_cfg_conc.get("concentration_size_reduction", 0.7)
+                    conc_score = rm.get_portfolio_concentration_score(parsed_positions, config)
+                    if conc_score > conc_threshold:
+                        amount = round(amount * conc_reduction, 2)
+                        log.info(f"  Konzentrations-Penalty: Score {conc_score:.0f} > {conc_threshold} "
+                                 f"-> Positionsgroesse x{conc_reduction}")
 
                 # Asset-spezifische Groessen-Anpassung
                 if af:

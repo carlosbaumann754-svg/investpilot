@@ -673,6 +673,189 @@ async def api_list_pdfs(user=Depends(require_auth)):
 
 
 # ============================================================
+# V8: PERFORMANCE / EQUITY / CORRELATION ENDPOINTS
+# ============================================================
+
+@app.get("/api/equity-curve")
+async def api_equity_curve(user=Depends(require_auth)):
+    """Taegliche Equity-Curve basierend auf Trade-History."""
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        from collections import defaultdict
+
+        history = read_json_safe("trade_history.json") or []
+        if not history:
+            return {"dates": [], "equity": [], "drawdown_pct": []}
+
+        # Portfolio-Startwert schaetzen (erster Trade Invest-Betrag x5 als Heuristik)
+        first_invest = 0
+        for t in history:
+            if t.get("amount_usd"):
+                first_invest = t["amount_usd"]
+                break
+        start_equity = max(first_invest * 5, 10000)
+
+        # Taegliche PnL aggregieren
+        daily_pnl = defaultdict(float)
+        for t in history:
+            ts = t.get("timestamp", "")[:10]
+            if not ts:
+                continue
+            pnl = t.get("pnl_usd", 0) or 0
+            daily_pnl[ts] += pnl
+
+        if not daily_pnl:
+            return {"dates": [], "equity": [], "drawdown_pct": []}
+
+        sorted_dates = sorted(daily_pnl.keys())
+        equity_values = []
+        drawdown_values = []
+        current_equity = start_equity
+        peak_equity = start_equity
+
+        for d in sorted_dates:
+            current_equity += daily_pnl[d]
+            equity_values.append(round(current_equity, 2))
+            peak_equity = max(peak_equity, current_equity)
+            dd_pct = ((current_equity - peak_equity) / peak_equity * 100) if peak_equity > 0 else 0
+            drawdown_values.append(round(dd_pct, 2))
+
+        return {
+            "dates": sorted_dates,
+            "equity": equity_values,
+            "drawdown_pct": drawdown_values,
+            "start_equity": start_equity,
+        }
+    except Exception as e:
+        log.error(f"Equity Curve Error: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/performance-metrics")
+async def api_performance_metrics(user=Depends(require_auth)):
+    """Berechne Performance-Metriken aus Trade-History."""
+    try:
+        import math
+        history = read_json_safe("trade_history.json") or []
+
+        # Nur abgeschlossene Trades mit PnL
+        closed_trades = [t for t in history if t.get("pnl_pct") is not None
+                         and t.get("action", "").endswith("CLOSE")]
+
+        if not closed_trades:
+            return {"error": "Keine abgeschlossenen Trades fuer Metriken"}
+
+        pnls = [t["pnl_pct"] for t in closed_trades]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+
+        win_rate = len(wins) / len(pnls) * 100 if pnls else 0
+        avg_win = sum(wins) / len(wins) if wins else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0
+        profit_factor = (sum(wins) / abs(sum(losses))) if losses and sum(losses) != 0 else 999
+
+        # Sharpe Ratio (annualisiert, angenommen 252 Handelstage)
+        mean_return = sum(pnls) / len(pnls)
+        std_return = (sum((p - mean_return) ** 2 for p in pnls) / len(pnls)) ** 0.5
+        sharpe = (mean_return / std_return * math.sqrt(252)) if std_return > 0 else 0
+
+        # Sortino Ratio (nur Downside-Volatilitaet)
+        downside_returns = [p for p in pnls if p < 0]
+        downside_std = (sum(p ** 2 for p in downside_returns) / max(len(downside_returns), 1)) ** 0.5
+        sortino = (mean_return / downside_std * math.sqrt(252)) if downside_std > 0 else 0
+
+        # Max Drawdown
+        cumulative = 0
+        peak = 0
+        max_dd = 0
+        for p in pnls:
+            cumulative += p
+            peak = max(peak, cumulative)
+            dd = cumulative - peak
+            max_dd = min(max_dd, dd)
+
+        return {
+            "total_trades": len(closed_trades),
+            "win_rate_pct": round(win_rate, 1),
+            "avg_win_pct": round(avg_win, 2),
+            "avg_loss_pct": round(avg_loss, 2),
+            "profit_factor": round(profit_factor, 2),
+            "sharpe_ratio": round(sharpe, 2),
+            "sortino_ratio": round(sortino, 2),
+            "max_drawdown_pct": round(max_dd, 2),
+            "total_return_pct": round(sum(pnls), 2),
+            "mean_return_pct": round(mean_return, 3),
+        }
+    except Exception as e:
+        log.error(f"Performance Metrics Error: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/position-correlations")
+async def api_position_correlations(user=Depends(require_auth)):
+    """Sektor-Verteilung und Konzentrations-Score fuer offene Positionen."""
+    try:
+        from app.config_manager import load_config
+        from app.etoro_client import EtoroClient
+
+        config = load_config()
+        client = EtoroClient(config)
+        if not client.configured:
+            return {"error": "eToro nicht konfiguriert"}
+
+        portfolio = client.get_portfolio()
+        if not portfolio:
+            return {"error": "Portfolio nicht verfuegbar"}
+
+        from app.etoro_client import EtoroClient as EC
+        positions = [EC.parse_position(p) for p in portfolio.get("positions", [])]
+
+        # Sektoren anreichern
+        try:
+            from app.market_scanner import ASSET_UNIVERSE
+            for p in positions:
+                for sym, info in ASSET_UNIVERSE.items():
+                    if info["etoro_id"] == p["instrument_id"]:
+                        p["sector"] = info.get("sector", "unknown")
+                        p["asset_class"] = info.get("class", "unknown")
+                        break
+        except ImportError:
+            pass
+
+        # Sektor-Aggregation
+        sectors = {}
+        total_invested = sum(p["invested"] for p in positions) or 1
+        for p in positions:
+            sec = p.get("sector", "unknown") or "unknown"
+            if sec not in sectors:
+                sectors[sec] = {"count": 0, "invested": 0, "allocation_pct": 0}
+            sectors[sec]["count"] += 1
+            sectors[sec]["invested"] += p["invested"]
+
+        for sec in sectors:
+            sectors[sec]["allocation_pct"] = round(sectors[sec]["invested"] / total_invested * 100, 1)
+            sectors[sec]["invested"] = round(sectors[sec]["invested"], 2)
+
+        # Konzentrations-Score
+        concentration_score = 0
+        try:
+            from app.risk_manager import get_portfolio_concentration_score
+            concentration_score = get_portfolio_concentration_score(positions, config)
+        except ImportError:
+            pass
+
+        return {
+            "sectors": sectors,
+            "concentration_score": concentration_score,
+            "total_positions": len(positions),
+            "total_invested": round(total_invested, 2),
+        }
+    except Exception as e:
+        log.error(f"Position Correlations Error: {e}")
+        return {"error": str(e)}
+
+
+# ============================================================
 # V5: REGIME, TRAILING SL, SECTORS
 # ============================================================
 

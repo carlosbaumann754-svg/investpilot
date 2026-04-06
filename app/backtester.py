@@ -378,10 +378,14 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
         "sector_blocked": 0,
     }
 
+    # Partial Close (TP Tranchen) Parameter
+    tp_tranches_cfg = config.get("leverage", {}).get("tp_tranches", [])
+
     trades = []          # completed trades
     open_positions = {}  # symbol -> {entry_price, entry_date, score, sector}
     trailing_highs = {}  # symbol -> highest price since entry (uses intraday highs)
     trailing_sl = {}     # symbol -> trailing SL price level
+    partial_triggered = {}  # symbol -> set of triggered tranche indices
 
     # We need all symbols to have aligned date indices
     # Get the common date range
@@ -544,7 +548,35 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
                 del open_positions[sym]
                 trailing_highs.pop(sym, None)
                 del trailing_sl[sym]
+                partial_triggered.pop(sym, None)
                 continue
+
+            # Partial Close (TP Tranchen) Simulation
+            if tp_tranches_cfg and pnl_pct > 0:
+                triggered_set = partial_triggered.get(sym, set())
+                for t_idx, t_cfg in enumerate(tp_tranches_cfg):
+                    if t_idx in triggered_set:
+                        continue
+                    if pnl_pct * 100 >= t_cfg.get("profit_target_pct", 0):
+                        close_pct_of_pos = t_cfg.get("pct_of_position", 0) / 100
+                        days_held = (current_date - pos["entry_date"]).days
+                        cost = _calc_costs(entry_price, days_held)
+                        trades.append({
+                            "symbol": sym,
+                            "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                            "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                            "entry_price": round(entry_price, 4),
+                            "exit_price": round(current_price, 4),
+                            "pnl_pct": round(pnl_pct * 100, 2),
+                            "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                            "cost_pct": round(cost * 100, 3),
+                            "days_held": days_held,
+                            "exit_reason": "PARTIAL_CLOSE",
+                            "entry_score": pos["score"],
+                            "partial_close_pct": t_cfg.get("pct_of_position", 0),
+                        })
+                        triggered_set.add(t_idx)
+                partial_triggered[sym] = triggered_set
 
             # Stop Loss
             if pnl_pct <= sl_pct:
@@ -567,6 +599,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
                 trailing_highs.pop(sym, None)
                 if sym in trailing_sl:
                     del trailing_sl[sym]
+                partial_triggered.pop(sym, None)
                 continue
 
             # Take Profit
@@ -590,6 +623,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
                 trailing_highs.pop(sym, None)
                 if sym in trailing_sl:
                     del trailing_sl[sym]
+                partial_triggered.pop(sym, None)
                 continue
 
         # 2. Score all assets and look for new entries

@@ -8,6 +8,7 @@ Inkl. Self-Improvement Optimizer (woechentlich, Grid-Search, Auto-ML, Rollback).
 Inkl. v5 Profitabilitaets-Upgrade: Regime Filter, Trailing SL, Dynamic Sizing, MTF Confluence, Sector Rotation, Recovery Mode.
 Inkl. v6 Monitoring & Q&A: Watchdog Diagnostics (3-Ebenen Health Check, Telegram Alerts), Q&A Chat (Claude API).
 Inkl. v7 Intelligence-Upgrade: Sentiment-Analyse, Portfolio Hedging, ML Trade-History Training, Google Drive Backup, Enhanced Telegram Alerts, Backtester mit realistischen Filtern.
+Inkl. v8 Profit-Locking & Analytics: TP-Tranchen (Partial Close), Konzentrations-Penalty, Intraday Timing Filter, Adaptive Optimizer, Equity Curve / Performance Metrics API.
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
@@ -46,7 +47,7 @@ investpilot/
 │   ├── report_pdf.py           # PDF-Generierung via ReportLab
 │   └── config_manager.py       # Config/Pfad-Management (Docker + lokal)
 ├── web/                        # FastAPI Dashboard
-│   ├── app.py                  # 37 REST Endpoints inkl. Kill Switch, Risk, Backtest, ML, Ask, Diagnostics
+│   ├── app.py                  # 40 REST Endpoints inkl. Kill Switch, Risk, Backtest, ML, Ask, Diagnostics, Equity, Metrics
 │   ├── auth.py                 # Login, bcrypt, Sessions
 │   ├── security.py             # Rate Limiting, Audit Log, Failed Login Tracking
 │   ├── data_access.py          # JSON Read/Write, Log Tailing
@@ -280,6 +281,9 @@ investpilot/
 - **`GET /api/diagnostics`** — [NEU v6] Bot-Gesundheitspruefung (5 Checks, Auth)
 - **`GET /api/diagnostics/alert`** — [NEU v6] Watchdog mit Telegram-Alert (kein Auth, fuer cron-job.org)
 - **`POST /api/ask`** — [NEU v6] Q&A Chat via Claude API (Auth)
+- **`GET /api/equity-curve`** — [NEU v8] Taegliche Equity-Curve + Drawdown
+- **`GET /api/performance-metrics`** — [NEU v8] Sharpe, Sortino, Win Rate, Profit Factor
+- **`GET /api/position-correlations`** — [NEU v8] Sektor-Verteilung + Konzentrations-Score
 - `GET /api/logs` — Scheduler Logs
 - `GET/POST /api/weekly-report` — Weekly Report
 - `GET /api/weekly-report/pdf|pdfs` — PDF Reports
@@ -392,6 +396,47 @@ investpilot/
 - **Realistische Filter**: VIX + Earnings Blackout Daten automatisch heruntergeladen
 - **ML Trade-History**: Auto-Training ab 50 Trades im Optimizer-Lauf
 - **Telegram Integration**: Ergebnis-Benachrichtigung nach jedem Lauf
+
+## Neue Features (v8 — Profit-Locking & Analytics)
+
+### Profit-Locking / Partial Close (`app/trader.py`, `app/backtester.py`)
+- **TP-Tranchen in SL/TP Loop**: Prueft ob offene Positionen eine Gewinn-Tranche erreicht haben
+- **Gestaffelter Ausstieg**: 50% bei +3%, 30% bei +6%, 20% bei +10% (konfigurierbar via `leverage.tp_tranches`)
+- **State Tracking**: `partial_close_state.json` speichert welche Tranchen pro Position ausgeloest wurden
+- **Backtester**: `simulate_trades()` simuliert Partial Closes mit Exit Reason `PARTIAL_CLOSE`
+- **Cleanup**: State wird automatisch bereinigt wenn Positionen geschlossen werden
+
+### Enhanced Correlation / Konzentrations-Penalty (`app/risk_manager.py`, `app/trader.py`)
+- **`get_portfolio_concentration_score()`**: Herfindahl-Index-basierter Score (0-100)
+- **Automatische Positionsreduktion**: Bei Score > Threshold (default 70) werden neue Positionen um 30% reduziert
+- Config: `risk_management.concentration_penalty_enabled`, `concentration_threshold`, `concentration_size_reduction`
+
+### Intraday Timing Filter (`app/trader.py`)
+- **Volatilitaets-Schutz**: Keine Kaeufe in ersten 30 Min nach Open (15:30-16:00 CET)
+- **Liquiditaets-Schutz**: Keine Kaeufe in letzten 30 Min vor Close (21:30-22:00 CET)
+- Config: `intraday_timing.enabled`, `avoid_first_minutes`, `avoid_last_minutes`
+
+### Adaptive Optimizer (`app/optimizer.py`)
+- **Bi-weekly statt weekly**: Optimierung laeuft alle 14 Tage statt jeden Sonntag
+- **Konfigurierbares Intervall**: `optimizer.optimization_interval_days` (default: 14)
+- **Prueft `optimization_history.json`**: Nur Lauf wenn >13 Tage seit letzter Optimierung
+
+### Dashboard Performance Endpoints (`web/app.py`)
+- **`GET /api/equity-curve`**: Taegliche Equity-Curve mit Drawdown-Prozent
+- **`GET /api/performance-metrics`**: Sharpe, Sortino, Max Drawdown, Win Rate, Profit Factor, Avg Win/Loss
+- **`GET /api/position-correlations`**: Sektor-Verteilung, Konzentrations-Score fuer offene Positionen
+
+### Neue Daten-Dateien
+- `partial_close_state.json` — Tracking welche TP-Tranchen pro Position ausgeloest wurden
+
+### Neue Config-Keys
+- `risk_management.concentration_penalty_enabled` — Konzentrations-Penalty aktivieren (default: true)
+- `risk_management.concentration_threshold` — Score ab dem Penalty greift (default: 70)
+- `risk_management.concentration_size_reduction` — Reduktionsfaktor (default: 0.7 = 30% kleiner)
+- `intraday_timing.enabled` — Timing-Filter aktivieren (default: true)
+- `intraday_timing.avoid_first_minutes` — Minuten nach Open ohne Kaeufe (default: 30)
+- `intraday_timing.avoid_last_minutes` — Minuten vor Close ohne Kaeufe (default: 30)
+- `optimizer.optimization_interval_days` — Tage zwischen Optimierungslaeufen (default: 14)
 
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:

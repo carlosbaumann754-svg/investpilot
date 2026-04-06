@@ -76,6 +76,7 @@
   "optimizer": {
     "enabled": true,
     "schedule": "sunday_02:00",
+    "optimization_interval_days": 14,
     "max_changes_per_week": 3,
     "rollback_threshold_pct": -5.0,
     "min_oos_sharpe_improvement": 0.3
@@ -117,7 +118,10 @@
     "dynamic_sizing_reference_score": 30,
     "recovery_mode_threshold_pct": -3,
     "recovery_mode_min_score": 30,
-    "recovery_mode_max_leverage": 1
+    "recovery_mode_max_leverage": 1,
+    "concentration_penalty_enabled": true,
+    "concentration_threshold": 70,
+    "concentration_size_reduction": 0.7
   },
   "min_expected_return_pct": 0.78,
   "multi_timeframe": {
@@ -182,6 +186,11 @@
     "manual_events": [],
     "use_sentiment_filter": true,
     "sentiment_block_threshold": -0.5
+  },
+  "intraday_timing": {
+    "enabled": true,
+    "avoid_first_minutes": 30,
+    "avoid_last_minutes": 30
   },
   "hedging": {
     "enabled": true,

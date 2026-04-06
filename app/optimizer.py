@@ -606,14 +606,18 @@ def _save_optimization_run(action, old_params, new_params, details):
 def is_sunday_optimization_time():
     """Pruefe ob Sonntag-Optimierung faellig ist.
 
-    Erweitertes Fenster: Sonntag 02:00-06:00, aber nur einmal pro Woche.
+    Erweitertes Fenster: Sonntag 02:00-06:00.
+    Intervall konfigurierbar (default: 14 Tage = bi-weekly).
     Verhindert verpasste Laeufe durch Render Free Tier Sleep.
     """
     now = datetime.now()
     if now.weekday() != 6 or now.hour < 2 or now.hour >= 6:
         return False
 
-    # Prüfe ob diese Woche schon gelaufen
+    # Pruefe ob genug Zeit seit letztem Lauf vergangen
+    config = load_config()
+    interval_days = config.get("optimizer", {}).get("optimization_interval_days", 14)
+
     try:
         from app.config_manager import load_json
         history = load_json("optimization_history.json") or {}
@@ -621,8 +625,8 @@ def is_sunday_optimization_time():
         if last_run:
             last_dt = datetime.fromisoformat(last_run)
             days_since = (now - last_dt).days
-            if days_since < 6:
-                return False  # Diese Woche schon gelaufen
+            if days_since < max(interval_days - 1, 6):
+                return False  # Intervall noch nicht erreicht
     except Exception:
         pass
 
