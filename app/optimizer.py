@@ -404,6 +404,22 @@ def run_weekly_optimization():
     log.info("WEEKLY OPTIMIZATION START")
     log.info("=" * 55)
 
+    # Memory-Safeguard: auf 512 MB Render-Starter kann Grid-Search + ML + Walk-Forward
+    # das Memory-Limit sprengen. Brich frueh ab statt mit OOM-Kill zu sterben.
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        free_mb = mem.available / (1024 * 1024)
+        log.info(f"Memory-Check: {free_mb:.0f} MB verfuegbar ({mem.percent:.0f}% in use)")
+        if free_mb < 150:
+            msg = f"Zu wenig freier Speicher: {free_mb:.0f} MB (min 150 MB noetig)"
+            log.error(msg)
+            return {"action": "error", "error": msg, "free_memory_mb": round(free_mb)}
+    except ImportError:
+        log.warning("psutil nicht verfuegbar, Memory-Check uebersprungen")
+    except Exception as e:
+        log.warning(f"Memory-Check Fehler: {e}")
+
     config = load_config()
     dt = config.get("demo_trading", {})
 

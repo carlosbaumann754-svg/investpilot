@@ -651,17 +651,42 @@ async def api_run_optimizer(background_tasks: BackgroundTasks, user=Depends(requ
     """Weekly Optimization im Hintergrund starten (non-blocking, vermeidet Render 100s Proxy-Timeout)."""
     try:
         from datetime import datetime
-        from app.config_manager import load_json
+        from app.config_manager import load_json, save_json
 
-        # Abbruch wenn bereits ein Lauf aktiv ist
+        # Abbruch wenn bereits ein Lauf aktiv ist — aber Stale-Lock-Recovery:
+        # Wenn letzter Lauf > 60 Min als "running" markiert ist, war das vermutlich
+        # ein Prozess-Kill (OOM, Render-Redeploy, Crash). Markiere als error und
+        # erlaube neuen Lauf.
+        STALE_LOCK_MINUTES = 60
         status = load_json("optimizer_status.json") or {}
         if status.get("state") == "running":
             started = status.get("started_at")
-            return {
-                "status": "already_running",
-                "message": f"Optimizer laeuft bereits seit {started}",
-                "started_at": started,
-            }
+            is_stale = False
+            if started:
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    age_min = (datetime.now() - started_dt).total_seconds() / 60
+                    if age_min > STALE_LOCK_MINUTES:
+                        is_stale = True
+                        log.warning(
+                            f"Stale Optimizer-Lock erkannt ({age_min:.0f} Min alt) "
+                            f"— vermutlich Prozess-Kill. Reset auf error."
+                        )
+                        status["state"] = "error"
+                        status["error"] = (
+                            f"Prozess abgebrochen (Lock stale nach {age_min:.0f} Min)"
+                        )
+                        status["finished_at"] = datetime.now().isoformat()
+                        save_json("optimizer_status.json", status)
+                except Exception:
+                    pass
+
+            if not is_stale:
+                return {
+                    "status": "already_running",
+                    "message": f"Optimizer laeuft bereits seit {started}",
+                    "started_at": started,
+                }
 
         background_tasks.add_task(_run_optimizer_background, user)
 

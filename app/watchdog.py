@@ -44,6 +44,11 @@ def run_diagnostics(trade_history=None, brain_state=None, risk_state=None,
     if checks["drawdown"]["status"] in ("error", "warning"):
         issues.append(checks["drawdown"]["message"])
 
+    # --- Check 6: Optimizer-Lock Gesundheit ---
+    checks["optimizer_lock"] = _check_optimizer_lock()
+    if checks["optimizer_lock"]["status"] in ("error", "warning"):
+        issues.append(checks["optimizer_lock"]["message"])
+
     # Gesamtstatus
     statuses = [c["status"] for c in checks.values()]
     if "error" in statuses:
@@ -266,6 +271,59 @@ def _check_drawdown(risk_state):
         "daily_pnl_pct": daily_dd,
         "weekly_pnl_pct": weekly_dd,
     }
+
+
+def _check_optimizer_lock():
+    """Erkenne stale Optimizer-Locks (Lauf > 60 Min noch 'running' = Prozess-Kill)."""
+    try:
+        from app.config_manager import load_json
+        status = load_json("optimizer_status.json")
+        if not status:
+            return {"status": "ok", "message": "Kein Optimizer-Lauf aktiv"}
+
+        state = status.get("state")
+        if state != "running":
+            if state == "error":
+                return {
+                    "status": "warning",
+                    "message": f"Letzter Optimizer-Lauf fehlgeschlagen: {status.get('error', 'unbekannt')}",
+                    "state": state,
+                }
+            return {
+                "status": "ok",
+                "message": f"Optimizer-Status: {state}",
+                "state": state,
+            }
+
+        started = status.get("started_at")
+        if not started:
+            return {"status": "warning", "message": "Optimizer running aber kein started_at"}
+
+        started_dt = datetime.fromisoformat(started)
+        age_min = (datetime.now() - started_dt).total_seconds() / 60
+
+        if age_min > 60:
+            return {
+                "status": "error",
+                "message": f"Optimizer haengt seit {int(age_min)} Min (stale lock)",
+                "state": state,
+                "age_minutes": round(age_min),
+            }
+        elif age_min > 30:
+            return {
+                "status": "warning",
+                "message": f"Optimizer laeuft bereits {int(age_min)} Min",
+                "state": state,
+                "age_minutes": round(age_min),
+            }
+        return {
+            "status": "ok",
+            "message": f"Optimizer laeuft seit {int(age_min)} Min",
+            "state": state,
+            "age_minutes": round(age_min),
+        }
+    except Exception as e:
+        return {"status": "ok", "message": f"Optimizer-Check nicht verfuegbar: {e}"}
 
 
 def format_telegram_alert(diagnostics):
