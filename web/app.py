@@ -612,38 +612,62 @@ async def api_optimizer(user=Depends(require_auth)):
 
 
 def _run_optimizer_background(username: str):
-    """Background-Worker fuer Optimizer-Lauf. Schreibt Status-Datei."""
+    """
+    Background-Worker fuer Optimizer-Lauf.
+
+    Startet den Optimizer als DETACHIERTEN Subprocess
+    (python -m app.optimizer_runner), damit ein OOM-Kill durch die
+    grid-search / yfinance-Downloads NICHT den uvicorn-Parent und damit
+    den ganzen Render-Container toetet. Der Subprocess schreibt
+    Fortschritt eigenstaendig in optimizer_status.json.
+    """
+    import subprocess
+    import sys
     from datetime import datetime
     from app.config_manager import save_json
 
-    status = {
+    # Initialer Placeholder-Status, damit die GUI sofort "running" sieht.
+    # Der Subprocess ueberschreibt ihn gleich mit seinem eigenen Status
+    # (inkl. PID und mode=subprocess).
+    initial_status = {
         "state": "running",
         "started_at": datetime.now().isoformat(),
         "finished_at": None,
         "triggered_by": username,
         "action": None,
         "error": None,
+        "mode": "subprocess-launching",
     }
     try:
-        save_json("optimizer_status.json", status)
+        save_json("optimizer_status.json", initial_status)
     except Exception:
         pass
 
     try:
-        from app.optimizer import run_weekly_optimization
-        result = run_weekly_optimization()
-        status["state"] = "done"
-        status["action"] = result.get("action", "unknown") if isinstance(result, dict) else "unknown"
+        # start_new_session loest den subprocess vom parent, damit
+        # uvicorn-Reloads / -Stops ihn nicht mitreissen.
+        kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if hasattr(os, "setsid"):
+            kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "app.optimizer_runner", username],
+            **kwargs,
+        )
+        log.info(f"Optimizer-Subprozess gestartet (PID {proc.pid})")
     except Exception as e:
-        log.exception("Optimizer Background-Lauf fehlgeschlagen")
-        status["state"] = "error"
-        status["error"] = str(e)
-
-    status["finished_at"] = datetime.now().isoformat()
-    try:
-        save_json("optimizer_status.json", status)
-    except Exception:
-        pass
+        log.exception("Optimizer-Subprozess-Start fehlgeschlagen")
+        initial_status["state"] = "error"
+        initial_status["error"] = f"subprocess spawn: {e}"
+        initial_status["finished_at"] = datetime.now().isoformat()
+        try:
+            save_json("optimizer_status.json", initial_status)
+        except Exception:
+            pass
 
 
 @app.post("/api/optimizer/run")
