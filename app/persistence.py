@@ -58,6 +58,35 @@ def _headers(token):
     }
 
 
+def _fetch_gist_file_content(file_entry, token):
+    """
+    Hole den vollstaendigen Inhalt einer Gist-Datei.
+    Wenn die GitHub-API die Datei als truncated markiert hat
+    (Groesse > ~1 MB), wird der Inhalt ueber raw_url nachgeladen.
+    Gibt den rohen Text-Content oder None bei Fehler zurueck.
+    """
+    content = file_entry.get("content", "")
+    truncated = file_entry.get("truncated", False)
+    if not truncated and content:
+        return content
+
+    raw_url = file_entry.get("raw_url")
+    if not raw_url:
+        return content or None
+
+    try:
+        # raw_url zeigt auf gist.githubusercontent.com
+        # Privat-Gist: Token als Authorization-Header senden
+        headers = {"Authorization": f"token {token}"} if token else {}
+        r = requests.get(raw_url, headers=headers, timeout=30)
+        if r.status_code == 200:
+            return r.text
+        log.warning(f"raw_url fetch fehlgeschlagen: HTTP {r.status_code}")
+    except Exception as e:
+        log.warning(f"raw_url fetch Fehler: {e}")
+    return content or None
+
+
 def _find_backup_gist(token):
     """Finde existierendes Backup-Gist anhand der Description."""
     try:
@@ -170,7 +199,8 @@ def restore_from_cloud():
 
         for filename in BACKUP_FILES:
             if filename in gist_data.get("files", {}):
-                content = gist_data["files"][filename].get("content", "")
+                file_entry = gist_data["files"][filename]
+                content = _fetch_gist_file_content(file_entry, token)
                 if not content:
                     continue
                 try:

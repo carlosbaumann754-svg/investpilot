@@ -758,7 +758,8 @@ async def api_admin_force_backup(user=Depends(require_auth)):
 def _gist_inspect_raw():
     """Lade Gist-Inhalt und gib rohes dict der Dateien zurueck."""
     import json
-    from app.persistence import _find_backup_gist, _get_token, _headers, GITHUB_API
+    from app.persistence import (_find_backup_gist, _get_token, _headers,
+                                  GITHUB_API, _fetch_gist_file_content)
     import requests
 
     token = _get_token()
@@ -790,9 +791,11 @@ async def api_admin_gist_inspect(user=Depends(require_auth)):
     """
     import json
     from app.config_manager import load_json
+    from app.persistence import _fetch_gist_file_content, _get_token
 
     gist_id, gist_data = _gist_inspect_raw()
     files = gist_data.get("files", {})
+    token = _get_token()
 
     out = {
         "gist_id": gist_id[:8] + "...",
@@ -801,19 +804,21 @@ async def api_admin_gist_inspect(user=Depends(require_auth)):
         "local": {},
     }
 
-    # Gist brain_state
+    # Gist brain_state — raw_url fuer truncated files
     brain_file = files.get("brain_state.json")
     if brain_file:
         try:
-            brain = json.loads(brain_file.get("content", "{}"))
+            content = _fetch_gist_file_content(brain_file, token) or "{}"
+            brain = json.loads(content)
             out["files"]["brain_state.json"] = {
                 "size": brain_file.get("size"),
+                "truncated": brain_file.get("truncated", False),
                 "total_runs": brain.get("total_runs"),
-                "regime": brain.get("regime"),
-                "winning_trades": brain.get("winning_trades"),
-                "losing_trades": brain.get("losing_trades"),
-                "total_pnl": brain.get("total_pnl"),
-                "instruments_learned": len(brain.get("instruments", {})),
+                "regime": brain.get("market_regime"),
+                "win_rate": brain.get("win_rate"),
+                "sharpe": brain.get("sharpe_estimate"),
+                "instruments_learned": len(brain.get("instrument_scores", {})),
+                "learned_rules": len(brain.get("learned_rules", [])),
                 "snapshots": len(brain.get("performance_snapshots", [])),
             }
         except Exception as e:
@@ -850,7 +855,8 @@ async def api_admin_gist_history(user=Depends(require_auth)):
     Hilft, eine alte gute Revision (vor Reset) zu finden.
     """
     import json
-    from app.persistence import _find_backup_gist, _get_token, _headers, GITHUB_API
+    from app.persistence import (_find_backup_gist, _get_token, _headers,
+                                  GITHUB_API, _fetch_gist_file_content)
     import requests
 
     token = _get_token()
@@ -884,17 +890,18 @@ async def api_admin_gist_history(user=Depends(require_auth)):
                 row["error"] = f"HTTP {r.status_code}"
                 results.append(row)
                 continue
-            files = r.json().get("files", {})
-            brain_file = files.get("brain_state.json")
+            files_dict = r.json().get("files", {})
+            brain_file = files_dict.get("brain_state.json")
             if brain_file:
-                content = brain_file.get("content", "")
+                content = _fetch_gist_file_content(brain_file, token)
                 if content:
                     brain = json.loads(content)
                     row["total_runs"] = brain.get("total_runs")
-                    row["regime"] = brain.get("regime")
-                    row["winning_trades"] = brain.get("winning_trades")
-                    row["instruments_learned"] = len(brain.get("instruments", {}))
+                    row["regime"] = brain.get("market_regime")
+                    row["win_rate"] = brain.get("win_rate")
+                    row["instruments_learned"] = len(brain.get("instrument_scores", {}))
                     row["snapshots"] = len(brain.get("performance_snapshots", []))
+                    row["learned_rules"] = len(brain.get("learned_rules", []))
         except Exception as e:
             row["error"] = str(e)
         results.append(row)
@@ -922,7 +929,8 @@ async def api_admin_force_restore_brain_from_sha(
     """
     import json
     from app.config_manager import save_json, load_json
-    from app.persistence import _find_backup_gist, _get_token, _headers, GITHUB_API
+    from app.persistence import (_find_backup_gist, _get_token, _headers,
+                                  GITHUB_API, _fetch_gist_file_content)
     import requests
 
     if confirm != "YES_OVERWRITE":
@@ -949,7 +957,8 @@ async def api_admin_force_restore_brain_from_sha(
         if filename not in gist_files:
             skipped.append({"file": filename, "reason": "nicht in Revision"})
             continue
-        content = gist_files[filename].get("content", "")
+        file_entry = gist_files[filename]
+        content = _fetch_gist_file_content(file_entry, token)
         if not content:
             skipped.append({"file": filename, "reason": "leer"})
             continue
