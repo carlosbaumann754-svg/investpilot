@@ -43,12 +43,18 @@ BACKUP_FILES = [
 ]
 
 # Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.
-# Grund: Optimizer-Status ist ephemer. Beim Container-Restart wuerde sonst ein
-# alter "running" Status mit toter PID zurueckkommen und den Optimizer-Slot
-# blockieren (siehe v9 Stale-Lock-Bug).
-NO_RESTORE_FILES = {
-    "optimizer_status.json",
-}
+#
+# v9-Historie: Damals lief der Optimizer als Subprocess IM Render-Container.
+# Bei OOM-Kill blieb optimizer_status.json mit toter PID auf state=running
+# stehen und blockierte den Optimizer-Slot. Fix damals: nicht restoren, der
+# Stale-Lock-Recovery in /api/optimizer/run raeumt auf.
+#
+# v10-Aenderung: Der Optimizer laeuft jetzt als GitHub Action — der Gist-Stand
+# (von der GH Action geschrieben) IST die autoritative Quelle. Wenn der Render
+# beim Restart NICHT restored, bleibt seine LOKALE Datei fuer immer auf
+# "running, dispatching" haengen → Watchdog meldet permanent stale lock.
+# Loesung: Set ist jetzt leer, Gist-Stand wird beim Restart restauriert.
+NO_RESTORE_FILES: set[str] = set()
 
 # Dateien die der Optimizer modifiziert. Werden vom GitHub-Action-Optimizer-Push
 # isoliert in den Gist geschrieben, um Race-Conditions mit Trading-Server-Updates
