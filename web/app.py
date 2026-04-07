@@ -827,6 +827,139 @@ async def api_admin_gist_inspect(user=Depends(require_auth)):
     return out
 
 
+@app.get("/api/admin/gist-history")
+async def api_admin_gist_history(user=Depends(require_auth)):
+    """
+    Durchlaufe Gist-Revision-History und zeige brain_state.total_runs pro Revision.
+    Hilft, eine alte gute Revision (vor Reset) zu finden.
+    """
+    import json
+    from app.persistence import _find_backup_gist, _get_token, _headers, GITHUB_API
+    import requests
+
+    token = _get_token()
+    if not token:
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN nicht gesetzt")
+    gist_id = _find_backup_gist(token)
+    if not gist_id:
+        raise HTTPException(status_code=404, detail="Kein Backup-Gist gefunden")
+
+    # Aktuellen Gist + History-SHAs laden
+    resp = requests.get(f"{GITHUB_API}/gists/{gist_id}", headers=_headers(token), timeout=15)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Gist-Fetch {resp.status_code}")
+    history = resp.json().get("history", [])
+
+    results = []
+    # Nur die letzten 30 Revisionen pruefen (Rate-Limit)
+    for entry in history[:30]:
+        sha = entry.get("version")
+        committed_at = entry.get("committed_at")
+        row = {"sha": sha[:10] if sha else None, "committed_at": committed_at,
+               "total_runs": None, "regime": None, "error": None}
+        try:
+            r = requests.get(
+                f"{GITHUB_API}/gists/{gist_id}/{sha}",
+                headers=_headers(token),
+                timeout=15,
+            )
+            if r.status_code != 200:
+                row["error"] = f"HTTP {r.status_code}"
+                results.append(row)
+                continue
+            files = r.json().get("files", {})
+            brain_file = files.get("brain_state.json")
+            if brain_file:
+                content = brain_file.get("content", "")
+                if content:
+                    brain = json.loads(content)
+                    row["total_runs"] = brain.get("total_runs")
+                    row["regime"] = brain.get("regime")
+                    row["winning_trades"] = brain.get("winning_trades")
+                    row["instruments_learned"] = len(brain.get("instruments", {}))
+                    row["snapshots"] = len(brain.get("performance_snapshots", []))
+        except Exception as e:
+            row["error"] = str(e)
+        results.append(row)
+
+    return {
+        "gist_id": gist_id[:8] + "...",
+        "total_revisions": len(history),
+        "revisions": results,
+    }
+
+
+@app.post("/api/admin/force-restore-brain-from-sha")
+async def api_admin_force_restore_brain_from_sha(
+    sha: str = "",
+    confirm: str = "",
+    files: str = "brain_state.json",
+    user=Depends(require_auth),
+):
+    """
+    NOTFALL: Stelle bestimmte Dateien aus einer SPEZIFISCHEN Gist-Revision wieder her.
+    Params:
+      sha=<gist_version_sha>  (Pflicht)
+      confirm=YES_OVERWRITE   (Pflicht)
+      files=comma,separated   (default: brain_state.json)
+    """
+    import json
+    from app.config_manager import save_json, load_json
+    from app.persistence import _find_backup_gist, _get_token, _headers, GITHUB_API
+    import requests
+
+    if confirm != "YES_OVERWRITE":
+        raise HTTPException(status_code=400, detail="?confirm=YES_OVERWRITE noetig")
+    if not sha:
+        raise HTTPException(status_code=400, detail="?sha=<gist_version> noetig")
+
+    token = _get_token()
+    if not token:
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN fehlt")
+    gist_id = _find_backup_gist(token)
+    if not gist_id:
+        raise HTTPException(status_code=404, detail="Kein Backup-Gist")
+
+    resp = requests.get(f"{GITHUB_API}/gists/{gist_id}/{sha}", headers=_headers(token), timeout=20)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Revision-Fetch {resp.status_code}")
+
+    gist_files = resp.json().get("files", {})
+    target_files = [f.strip() for f in files.split(",") if f.strip()]
+
+    restored, skipped, errors = [], [], []
+    for filename in target_files:
+        if filename not in gist_files:
+            skipped.append({"file": filename, "reason": "nicht in Revision"})
+            continue
+        content = gist_files[filename].get("content", "")
+        if not content:
+            skipped.append({"file": filename, "reason": "leer"})
+            continue
+        try:
+            data = json.loads(content)
+            old_local = load_json(filename)
+            save_json(filename, data)
+            entry = {"file": filename}
+            if isinstance(data, dict):
+                entry["restored_total_runs"] = data.get("total_runs")
+                entry["restored_regime"] = data.get("regime")
+            if isinstance(old_local, dict):
+                entry["old_total_runs"] = old_local.get("total_runs")
+            restored.append(entry)
+        except Exception as e:
+            errors.append({"file": filename, "error": str(e)})
+
+    try:
+        from web.security import log_audit
+        await log_audit(user, "ADMIN_RESTORE_FROM_SHA", f"sha={sha[:10]} restored={restored}")
+    except Exception:
+        pass
+
+    return {"status": "ok", "sha": sha[:10], "restored": restored,
+            "skipped": skipped, "errors": errors}
+
+
 @app.post("/api/admin/force-restore-brain")
 async def api_admin_force_restore_brain(
     confirm: str = "",
