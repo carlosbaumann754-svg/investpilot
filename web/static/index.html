@@ -39,66 +39,75 @@
     <!-- === DASHBOARD TAB === -->
     <div id="tab-dashboard" class="tab-content active">
         <div class="card">
-            <div class="card-title">Portfolio-Wert</div>
+            <div class="card-title">Portfolio-Wert<span class="tip" data-tip="Der Gesamtwert deines Kontos: Bargeld plus aktueller Wert aller offenen Positionen.">?</span></div>
             <div class="card-value" id="total-value">--</div>
             <div class="card-sub" id="total-pnl">--</div>
         </div>
 
         <div class="grid-3">
             <div class="card">
-                <div class="card-title">Cash</div>
+                <div class="card-title">Cash<span class="tip" data-tip="Freies Geld auf deinem Konto, das noch nicht investiert ist und fuer neue Trades zur Verfuegung steht.">?</span></div>
                 <div class="card-value" style="font-size:18px" id="cash-value">--</div>
             </div>
             <div class="card">
-                <div class="card-title">Investiert</div>
+                <div class="card-title">Investiert<span class="tip" data-tip="Geld, das gerade in offenen Positionen steckt. Dieser Betrag schwankt mit den Kursen.">?</span></div>
                 <div class="card-value" style="font-size:18px" id="invested-value">--</div>
             </div>
             <div class="card">
-                <div class="card-title">Positionen</div>
+                <div class="card-title">Positionen<span class="tip" data-tip="Anzahl der aktuell offenen Trades, die der Bot gerade haelt.">?</span></div>
                 <div class="card-value" style="font-size:18px" id="num-positions">--</div>
             </div>
         </div>
 
+        <!-- P&L Multi-Period -->
+        <div class="card">
+            <div class="card-title">Gewinn / Verlust ueber Zeit<span class="tip" data-tip="Wie gut der Bot in verschiedenen Zeitraeumen abgeschnitten hat. Kurze Zeitraeume (1-7 Tage) zeigen auch laufende Positionen mit, laengere zaehlen nur tatsaechlich abgeschlossene Trades.">?</span></div>
+            <div class="pnl-periods-grid" id="pnl-periods-grid">
+                <div class="pnl-period-cell"><div class="pnl-label">--</div></div>
+            </div>
+            <div class="card-sub" id="pnl-periods-meta" style="margin-top:8px;font-size:11px;">--</div>
+        </div>
+
         <div class="grid-2">
             <div class="card">
-                <div class="card-title">Brain Status</div>
+                <div class="card-title">Brain Status<span class="tip" data-tip="Was der Bot gerade ueber den Markt denkt: Bull (steigend), Bear (fallend) oder Sideways (seitwaerts). Daraus leitet er ab, ob er aggressiv kaufen oder vorsichtig sein soll.">?</span></div>
                 <div id="brain-regime" class="badge badge-blue">--</div>
                 <div class="card-sub" id="brain-stats">--</div>
             </div>
             <div class="card">
-                <div class="card-title">Trading</div>
+                <div class="card-title">Trading<span class="tip" data-tip="Zeigt an, ob der Bot gerade automatisch handeln darf. Mit dem Schalter oben rechts kannst du ihn jederzeit an- oder ausschalten.">?</span></div>
                 <div id="trading-status-badge" class="badge badge-green">--</div>
                 <div class="card-sub" id="last-run">--</div>
             </div>
         </div>
 
         <div class="card">
-            <div class="card-title">Regime Status</div>
+            <div class="card-title">Regime Status<span class="tip" data-tip="Eine Uebersicht ueber die aktuelle Marktstimmung. Der Bot nutzt diese Informationen, um zu entscheiden, ob er handeln oder lieber pausieren soll.">?</span></div>
             <div id="regime-status" style="display:flex;gap:8px;flex-wrap:wrap;">--</div>
             <div id="regime-details" style="margin-top:12px;display:none;">
                 <div class="grid-2" style="gap:8px;">
                     <div class="regime-detail-item">
-                        <span class="card-sub">VIX Level</span>
+                        <span class="card-sub">VIX Level<span class="tip" data-tip="Die 'Angstzahl' der Boerse. Unter 20 = ruhig, 20-30 = nervoes, ueber 30 = panisch. Bei sehr hoher Angst stoppt der Bot neue Kaeufe.">?</span></span>
                         <span id="regime-vix-value" style="font-weight:700;font-size:16px;">--</span>
                     </div>
                     <div class="regime-detail-item">
-                        <span class="card-sub">Market Regime</span>
+                        <span class="card-sub">Market Regime<span class="tip" data-tip="Die Markt-Phase: Bull = Kurse steigen, Bear = Kurse fallen, Sideways = Kurse bewegen sich seitwaerts.">?</span></span>
                         <span id="regime-market-value" class="badge badge-blue">--</span>
                     </div>
                     <div class="regime-detail-item">
-                        <span class="card-sub">Fear &amp; Greed</span>
+                        <span class="card-sub">Fear &amp; Greed<span class="tip" data-tip="Stimmungs-Index von 0 (extreme Angst) bis 100 (extreme Gier). Hohe Gier ist oft ein Warnsignal, hohe Angst kann Kaufchancen anzeigen.">?</span></span>
                         <span id="regime-fg-value" style="font-weight:700;font-size:16px;">--</span>
                     </div>
                     <div class="regime-detail-item">
-                        <span class="card-sub">Recovery Mode</span>
+                        <span class="card-sub">Recovery Mode<span class="tip" data-tip="Schutz-Modus: Wenn der Bot in einer Verlust-Phase ist, handelt er kleiner und vorsichtiger, bis er sich wieder erholt hat.">?</span></span>
                         <span id="regime-recovery-value" class="badge badge-blue">--</span>
                     </div>
                     <div class="regime-detail-item">
-                        <span class="card-sub">Trading Halted</span>
+                        <span class="card-sub">Trading Halted<span class="tip" data-tip="Wenn 'JA': Der Bot kauft gerade nichts Neues, weil der Markt zu unsicher ist. Bestehende Positionen werden weiter betreut.">?</span></span>
                         <span id="regime-halt-value" class="badge badge-blue">--</span>
                     </div>
                     <div class="regime-detail-item">
-                        <span class="card-sub">Regime Filter</span>
+                        <span class="card-sub">Regime Filter<span class="tip" data-tip="Sicherheits-Filter, der verhindert dass der Bot in schlechten Marktphasen kauft. 'OK' = darf kaufen, 'BLOCKIERT' = wartet auf bessere Bedingungen.">?</span></span>
                         <span id="regime-filter-value" class="badge badge-blue">--</span>
                     </div>
                 </div>
@@ -107,13 +116,13 @@
 
         <!-- SECTOR STRENGTH -->
         <div class="card" id="sector-card" style="display:none;">
-            <div class="card-title">Sektor-Staerke</div>
+            <div class="card-title">Sektor-Staerke<span class="tip" data-tip="Wie dein Geld auf verschiedene Branchen verteilt ist (z.B. Tech, Energie, Finanzen). Zu viel in einem Sektor = hoeheres Risiko.">?</span></div>
             <div id="sector-badges" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
         </div>
 
         <!-- WATCHDOG STATUS -->
         <div class="card" id="watchdog-card">
-            <div class="card-title">Bot-Gesundheit (Watchdog)</div>
+            <div class="card-title">Bot-Gesundheit (Watchdog)<span class="tip" data-tip="Ueberwacht ob alles funktioniert: Laeuft der Bot regelmaessig? Gibt es Fehler? Bei Problemen siehst du hier eine Warnung.">?</span></div>
             <div id="watchdog-status" style="display:flex;gap:8px;align-items:center;">
                 <div class="badge badge-blue" id="watchdog-badge">Prüfe...</div>
             </div>
@@ -130,7 +139,7 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Positionen</div>
+            <div class="card-title">Positionen<span class="tip" data-tip="Alle aktuell offenen Trades. ID = Asset-Nummer, Investiert = eingesetztes Geld, P/L = Gewinn/Verlust in USD, % = in Prozent, Lev = Hebel, Trail SL = automatischer Stop-Loss der mit dem Kurs mitwandert.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -162,31 +171,31 @@
     <div id="tab-brain" class="tab-content">
         <div class="grid-2">
             <div class="card">
-                <div class="card-title">Marktregime</div>
+                <div class="card-title">Marktregime<span class="tip" data-tip="Was der Bot ueber die Markt-Phase denkt. Bull = steigend, Bear = fallend, Sideways = seitwaerts.">?</span></div>
                 <div class="card-value" style="font-size:20px" id="brain-regime-detail">--</div>
             </div>
             <div class="card">
-                <div class="card-title">Laeufe</div>
+                <div class="card-title">Laeufe<span class="tip" data-tip="Wie oft der Bot bisher den Markt analysiert und Entscheidungen getroffen hat.">?</span></div>
                 <div class="card-value" style="font-size:20px" id="brain-runs">--</div>
             </div>
         </div>
         <div class="grid-3">
             <div class="card">
-                <div class="card-title">Win-Rate</div>
+                <div class="card-title">Win-Rate<span class="tip" data-tip="Anteil der gewinnbringenden Trades. Beispiel: 60% bedeutet, 6 von 10 Trades waren profitabel.">?</span></div>
                 <div class="card-value" style="font-size:18px" id="brain-winrate">--</div>
             </div>
             <div class="card">
-                <div class="card-title">Sharpe</div>
+                <div class="card-title">Sharpe<span class="tip" data-tip="Misst, wie gut die Rendite im Verhaeltnis zum Risiko ist. Ueber 1 = gut, ueber 2 = sehr gut. Je hoeher, desto besser.">?</span></div>
                 <div class="card-value" style="font-size:18px" id="brain-sharpe">--</div>
             </div>
             <div class="card">
-                <div class="card-title">Regeln</div>
+                <div class="card-title">Regeln<span class="tip" data-tip="Anzahl der Regeln, die der Bot aus seiner Erfahrung gelernt hat (z.B. 'Asset X funktioniert bei VIX unter 20 gut').">?</span></div>
                 <div class="card-value" style="font-size:18px" id="brain-rules">--</div>
             </div>
         </div>
 
         <div class="card">
-            <div class="card-title">Instrument Scores</div>
+            <div class="card-title">Instrument Scores<span class="tip" data-tip="Bewertung jedes einzelnen Assets durch den Bot. Hoher Score = der Bot vertraut diesem Asset, niedriger Score = vorsichtig sein.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -295,40 +304,40 @@
 
         <!-- Backtest Metrics (full period) -->
         <div class="card" id="bt-metrics-card" style="display:none">
-            <div class="card-title">Backtest Ergebnisse (Gesamtzeitraum)</div>
+            <div class="card-title">Backtest Ergebnisse (Gesamtzeitraum)<span class="tip" data-tip="Simulation: Wie haette der Bot in den letzten 5 Jahren abgeschnitten? Mit echten historischen Kursen, ohne echtes Geld zu riskieren.">?</span></div>
             <div class="grid-4" id="bt-metrics-grid">
                 <div>
-                    <div class="card-sub">Rendite</div>
+                    <div class="card-sub">Rendite<span class="tip" data-tip="Gesamtgewinn der Strategie ueber den getesteten Zeitraum, in Prozent.">?</span></div>
                     <div class="card-value" style="font-size:20px" id="bt-return">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Sharpe Ratio</div>
+                    <div class="card-sub">Sharpe Ratio<span class="tip" data-tip="Risiko-Bereinigte Rendite. Ueber 1 = gut, ueber 2 = sehr gut. Sagt aus: 'Wie viel Gewinn pro eingegangenem Risiko?'">?</span></div>
                     <div class="card-value" style="font-size:20px" id="bt-sharpe">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Max Drawdown</div>
+                    <div class="card-sub">Max Drawdown<span class="tip" data-tip="Der groesste Verlust vom Hoechststand bis zum naechsten Tief. Beispiel: -15% bedeutet, das Konto fiel zwischendurch um 15%.">?</span></div>
                     <div class="card-value" style="font-size:20px" id="bt-maxdd">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Win Rate</div>
+                    <div class="card-sub">Win Rate<span class="tip" data-tip="Anteil profitabler Trades. 55% = von 100 Trades waren 55 im Plus.">?</span></div>
                     <div class="card-value" style="font-size:20px" id="bt-winrate">--</div>
                 </div>
             </div>
             <div class="grid-4" style="margin-top:12px">
                 <div>
-                    <div class="card-sub">Trades</div>
+                    <div class="card-sub">Trades<span class="tip" data-tip="Wie viele Kauf- und Verkaufs-Aktionen die Strategie im getesteten Zeitraum gemacht haette.">?</span></div>
                     <div class="card-value" style="font-size:16px" id="bt-trades">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Profit Factor</div>
+                    <div class="card-sub">Profit Factor<span class="tip" data-tip="Verhaeltnis von Gesamtgewinnen zu Gesamtverlusten. Ueber 1.5 = solide, ueber 2 = sehr gut.">?</span></div>
                     <div class="card-value" style="font-size:16px" id="bt-pf">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Avg Dauer</div>
+                    <div class="card-sub">Avg Dauer<span class="tip" data-tip="Wie lange ein typischer Trade offen war (in Tagen).">?</span></div>
                     <div class="card-value" style="font-size:16px" id="bt-avgdays">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Kosten</div>
+                    <div class="card-sub">Kosten<span class="tip" data-tip="Geschaetzte Handels-Gebuehren und Spreads, die im Backtest beruecksichtigt wurden.">?</span></div>
                     <div class="card-value" style="font-size:16px" id="bt-costs">--</div>
                 </div>
             </div>

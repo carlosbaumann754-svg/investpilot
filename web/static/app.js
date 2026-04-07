@@ -74,17 +74,64 @@ function fmtTime(iso) {
            ' ' + d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
 }
 
+// === P&L MULTI-PERIOD ===
+function renderPnlPeriods(data) {
+    const grid = document.getElementById('pnl-periods-grid');
+    const meta = document.getElementById('pnl-periods-meta');
+    if (!grid || !data || !Array.isArray(data.periods)) return;
+
+    grid.innerHTML = data.periods.map(p => {
+        const cls = (p.pnl_usd || 0) >= 0 ? 'positive' : 'negative';
+        const usdTxt = (p.pnl_usd == null) ? '--' : fmtUsd(p.pnl_usd);
+        const pctTxt = (p.pnl_pct == null) ? '' : fmtPct(p.pnl_pct);
+        const modeIcon = p.mode === 'hybrid' ? '*' : '';
+        return `
+            <div class="pnl-period-cell">
+                <div class="pnl-label">${p.label}${modeIcon}</div>
+                <div class="pnl-usd ${cls}">${usdTxt}</div>
+                <div class="pnl-pct ${cls}">${pctTxt}</div>
+            </div>
+        `;
+    }).join('');
+
+    if (meta) {
+        meta.textContent = `* = inkl. laufende Positionen | ${data.total_closes_counted || 0} abgeschlossene Trades insgesamt`;
+    }
+}
+
+// === TOOLTIP CLICK HANDLER (Touch-friendly) ===
+document.addEventListener('click', (e) => {
+    const tip = e.target.closest('.tip');
+    // Schliesse alle anderen aktiven Tooltips
+    document.querySelectorAll('.tip.active').forEach(el => {
+        if (el !== tip) el.classList.remove('active');
+    });
+    if (tip) {
+        e.stopPropagation();
+        tip.classList.toggle('active');
+    }
+});
+
 // === DASHBOARD ===
 async function loadDashboard() {
     try {
-        const [portfolioRes, brainRes, statusRes, regimeRes, trailRes, sectorRes] = await Promise.all([
+        const [portfolioRes, brainRes, statusRes, regimeRes, trailRes, sectorRes, pnlPeriodsRes] = await Promise.all([
             apiFetch('/api/portfolio'),
             apiFetch('/api/brain'),
             apiFetch('/api/trading/status'),
             apiFetch('/api/regime'),
             apiFetch('/api/trailing-sl'),
             apiFetch('/api/sectors'),
+            apiFetch('/api/pnl-periods'),
         ]);
+
+        // P&L Multi-Period Card
+        if (pnlPeriodsRes) {
+            try {
+                const pp = await pnlPeriodsRes.json();
+                renderPnlPeriods(pp);
+            } catch(e) { console.error('pnl-periods render:', e); }
+        }
 
         if (portfolioRes) {
             const p = await portfolioRes.json();

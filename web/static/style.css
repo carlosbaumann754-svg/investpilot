@@ -460,3 +460,120 @@ tr:hover {
     color: var(--text-dim);
     gap: 10px;
 }
+
+/* === TOOLTIP (? icon mit Erklaerung) === */
+.tip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    vertical-align: middle;
+    transition: all 0.15s ease;
+}
+.tip:hover, .tip.active {
+    background: var(--blue);
+    color: #fff;
+    border-color: var(--blue);
+}
+.tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    min-width: 200px;
+    max-width: 260px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.45;
+    text-align: left;
+    text-transform: none;
+    letter-spacing: normal;
+    white-space: normal;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 1000;
+}
+.tip:hover::after, .tip.active::after {
+    opacity: 1;
+}
+/* Pfeil unter dem Tooltip */
+.tip::before {
+    content: "";
+    position: absolute;
+    bottom: calc(100% + 2px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: var(--border);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 1001;
+}
+.tip:hover::before, .tip.active::before {
+    opacity: 1;
+}
+/* Auf kleinen Screens Tooltip linksbuendig damit er nicht abgeschnitten wird */
+@media (max-width: 500px) {
+    .tip::after {
+        left: 0;
+        transform: none;
+        min-width: 180px;
+        max-width: 240px;
+    }
+    .tip::before { left: 14px; }
+}
+
+/* === P&L PERIODS GRID === */
+.pnl-periods-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+}
+.pnl-period-cell {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 8px;
+    text-align: center;
+}
+.pnl-period-cell .pnl-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.pnl-period-cell .pnl-usd {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.pnl-period-cell .pnl-pct {
+    font-size: 11px;
+    margin-top: 2px;
+}
+@media (max-width: 600px) {
+    .pnl-periods-grid { grid-template-columns: repeat(2, 1fr); }
+}

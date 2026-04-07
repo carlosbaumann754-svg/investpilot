@@ -178,6 +178,116 @@ async def api_portfolio(user=Depends(require_auth)):
         return {"error": str(e)}
 
 
+@app.get("/api/pnl-periods")
+async def api_pnl_periods(user=Depends(require_auth)):
+    """Aggregierter Gewinn/Verlust ueber mehrere Zeitfenster.
+
+    Hybrid-Modell:
+      - Fenster <= 7 Tage: realisierter PnL aus Trade-History + aktueller
+        unrealisierter PnL aus offenen Positionen (zeigt was du gerade
+        wirklich verdienst, inkl. laufender Trades)
+      - Fenster > 7 Tage: nur realisierter PnL (sauber, deterministisch,
+        wie ein Broker-Statement)
+
+    Prozent-Basis: Equity am Anfang des Fensters
+        = current_total_value - total_pnl_in_window
+    """
+    from datetime import datetime, timedelta
+    try:
+        history = read_json_safe("trade_history.json") or []
+
+        # Aktueller Portfolio-Snapshot fuer Hybrid-Berechnung + % Basis
+        current_value = 0.0
+        current_unrealized = 0.0
+        try:
+            config = load_config()
+            client = EtoroClient(config)
+            if client.configured:
+                portfolio = client.get_portfolio() or {}
+                credit = portfolio.get("credit", 0) or 0
+                positions = portfolio.get("positions", []) or []
+                current_unrealized = portfolio.get("unrealizedPnL", 0) or 0
+                parsed = [EtoroClient.parse_position(p) for p in positions]
+                total_invested = sum(p["invested"] for p in parsed)
+                current_value = credit + total_invested + current_unrealized
+        except Exception as e:
+            log.warning(f"PnL-Periods: Portfolio-Fetch fehlgeschlagen: {e}")
+
+        now = datetime.now()
+        windows = [
+            ("1d",   "Heute",       now - timedelta(days=1),    True),
+            ("7d",   "7 Tage",      now - timedelta(days=7),    True),
+            ("30d",  "30 Tage",     now - timedelta(days=30),   False),
+            ("90d",  "3 Monate",    now - timedelta(days=90),   False),
+            ("180d", "6 Monate",    now - timedelta(days=180),  False),
+            ("365d", "1 Jahr",      now - timedelta(days=365),  False),
+            ("ytd",  "Jahresanfang", datetime(now.year, 1, 1),  False),
+            ("all",  "Gesamt",      datetime(1970, 1, 1),       False),
+        ]
+
+        # Realisierten PnL pro Fenster aufsummieren
+        realized = {key: 0.0 for key, *_ in windows}
+        closes = 0
+        for trade in history:
+            action = str(trade.get("action", ""))
+            if not action.endswith("CLOSE") and "CLOSE" not in action:
+                continue
+            pnl = trade.get("pnl_usd")
+            if pnl is None:
+                continue
+            ts_str = trade.get("timestamp", "")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts.tzinfo is not None:
+                    ts = ts.replace(tzinfo=None)
+            except Exception:
+                continue
+            closes += 1
+            for key, _label, start_dt, _hybrid in windows:
+                if ts >= start_dt:
+                    realized[key] += float(pnl)
+
+        # Periods zusammenbauen mit Hybrid-Logik
+        periods = []
+        for key, label, _start_dt, hybrid in windows:
+            r_pnl = realized[key]
+            if hybrid:
+                total_pnl = r_pnl + current_unrealized
+                mode = "hybrid"
+            else:
+                total_pnl = r_pnl
+                mode = "realized"
+
+            # Equity am Anfang des Fensters fuer % Basis
+            start_equity = current_value - total_pnl
+            if start_equity > 0:
+                pct = (total_pnl / start_equity) * 100
+            else:
+                pct = 0.0
+
+            periods.append({
+                "key": key,
+                "label": label,
+                "pnl_usd": round(total_pnl, 2),
+                "pnl_pct": round(pct, 2),
+                "realized_pnl": round(r_pnl, 2),
+                "unrealized_pnl": round(current_unrealized, 2) if hybrid else 0,
+                "mode": mode,
+            })
+
+        return {
+            "periods": periods,
+            "current_total_value": round(current_value, 2),
+            "current_unrealized": round(current_unrealized, 2),
+            "total_closes_counted": closes,
+        }
+    except Exception as e:
+        log.error(f"PnL-Periods Error: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, offset: int = 0, user=Depends(require_auth)):
     """Trade-Historie (paginiert)."""
