@@ -42,6 +42,25 @@ BACKUP_FILES = [
     "optimizer_status.json",
 ]
 
+# Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.
+# Grund: Optimizer-Status ist ephemer. Beim Container-Restart wuerde sonst ein
+# alter "running" Status mit toter PID zurueckkommen und den Optimizer-Slot
+# blockieren (siehe v9 Stale-Lock-Bug).
+NO_RESTORE_FILES = {
+    "optimizer_status.json",
+}
+
+# Dateien die der Optimizer modifiziert. Werden vom GitHub-Action-Optimizer-Push
+# isoliert in den Gist geschrieben, um Race-Conditions mit Trading-Server-Updates
+# (brain_state, trade_history) zu vermeiden.
+OPTIMIZER_OUTPUT_FILES = [
+    "config.json",
+    "optimization_history.json",
+    "optimizer_status.json",
+    "ml_model.json",
+    "backtest_results.json",
+]
+
 
 def _get_token():
     """GitHub Token aus Environment Variable laden."""
@@ -198,6 +217,9 @@ def restore_from_cloud():
         files_restored = 0
 
         for filename in BACKUP_FILES:
+            if filename in NO_RESTORE_FILES:
+                log.debug(f"    Skip restore (NO_RESTORE_FILES): {filename}")
+                continue
             if filename in gist_data.get("files", {}):
                 file_entry = gist_data["files"][filename]
                 content = _fetch_gist_file_content(file_entry, token)
@@ -269,3 +291,117 @@ def restore_from_cloud():
 def restore_from_cloud_with_gdrive():
     """Restore from GitHub Gist (Google Drive deaktiviert — SA Quota-Limit)."""
     return restore_from_cloud()
+
+
+def restore_for_optimizer():
+    """
+    Restore-Variante fuer den GitHub-Action-Optimizer.
+
+    Holt ALLE Backup-Dateien (auch brain_state.json, trade_history.json),
+    weil der CI-Runner mit leerem data/-Verzeichnis startet und der Optimizer
+    den aktuellen Brain-State + Trade-Historie braucht, um sinnvolle Backtests
+    zu rechnen. Im Gegensatz zu restore_from_cloud() ueberspringt diese
+    Variante NICHTS und nutzt keine "should_restore"-Heuristik — der CI-Runner
+    hat per Definition keine lokalen Daten zu schuetzen.
+    """
+    token = _get_token()
+    if not token or not requests:
+        log.warning("restore_for_optimizer: Kein GITHUB_TOKEN — Abbruch")
+        return False
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("restore_for_optimizer: Kein Backup-Gist gefunden")
+            return False
+
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            log.warning(f"restore_for_optimizer: HTTP {resp.status_code}")
+            return False
+
+        gist_data = resp.json()
+        files_restored = 0
+        for filename in BACKUP_FILES:
+            if filename in NO_RESTORE_FILES:
+                continue
+            if filename not in gist_data.get("files", {}):
+                continue
+            file_entry = gist_data["files"][filename]
+            content = _fetch_gist_file_content(file_entry, token)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+            except Exception as e:
+                log.warning(f"restore_for_optimizer: parse {filename}: {e}")
+                continue
+            save_json(filename, parsed)
+            files_restored += 1
+        log.info(f"restore_for_optimizer: {files_restored} Dateien geladen")
+        return files_restored > 0
+    except Exception as e:
+        log.warning(f"restore_for_optimizer Fehler: {e}")
+        return False
+
+
+def backup_optimizer_results():
+    """
+    Push NUR die Dateien, die der Optimizer modifiziert.
+
+    Wird vom GitHub-Action-Runner am Ende eines Optimizer-Laufs aufgerufen.
+    Vermeidet die Race-Condition mit dem Trading-Server: Wuerden wir
+    backup_to_cloud() nutzen, wuerden wir brain_state.json / trade_history.json
+    aus dem Stand zu Optimizer-Start ueberschreiben — und damit alle Trades
+    der letzten ~20 Minuten verlieren.
+    """
+    token = _get_token()
+    if not token or not requests:
+        log.warning("backup_optimizer_results: Kein GITHUB_TOKEN")
+        return False
+
+    files = {}
+    for filename in OPTIMIZER_OUTPUT_FILES:
+        data = load_json(filename)
+        if data is not None:
+            files[filename] = {
+                "content": json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            }
+
+    if not files:
+        log.warning("backup_optimizer_results: Keine Optimizer-Output-Dateien gefunden")
+        return False
+
+    files["_optimizer_meta.json"] = {
+        "content": json.dumps({
+            "last_optimizer_push": datetime.now().isoformat(),
+            "files": list(files.keys()),
+            "source": "github-action",
+        }, indent=2)
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("backup_optimizer_results: Kein Backup-Gist gefunden")
+            return False
+
+        # PATCH: aktualisiert nur die uebergebenen Files, laesst andere unberuehrt.
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": files},
+            timeout=20,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"backup_optimizer_results OK ({len(files)} Dateien)")
+            return True
+        log.warning(f"backup_optimizer_results: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        log.warning(f"backup_optimizer_results Fehler: {e}")
+        return False

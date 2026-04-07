@@ -9,6 +9,7 @@ Inkl. v5 Profitabilitaets-Upgrade: Regime Filter, Trailing SL, Dynamic Sizing, M
 Inkl. v6 Monitoring & Q&A: Watchdog Diagnostics (3-Ebenen Health Check, Telegram Alerts), Q&A Chat (Claude API).
 Inkl. v7 Intelligence-Upgrade: Sentiment-Analyse, Portfolio Hedging, ML Trade-History Training, Google Drive Backup, Enhanced Telegram Alerts, Backtester mit realistischen Filtern.
 Inkl. v8 Profit-Locking & Analytics: TP-Tranchen (Partial Close), Konzentrations-Penalty, Intraday Timing Filter, Adaptive Optimizer, Equity Curve / Performance Metrics API.
+Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub-Action Optimizer (Lern-Loop laeuft vollstaendig autonom in 7-GB CI-Runner statt 512-MB Render).
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
 **eToro User:** carlosbaumann777
@@ -471,6 +472,97 @@ Alle erfordern Auth (`require_auth`).
 2. `POST /api/admin/force-restore-brain-from-sha?sha=<sha>&confirm=YES_OVERWRITE` — restore
 3. `POST /api/admin/force-backup` — push restored state als neuer Gist-HEAD
 4. Scheduler nimmt automatisch wieder Trading auf, brain.total_runs zaehlt von restored Wert weiter
+
+## v10 — GitHub-Action Optimizer (2026-04-07)
+
+### Hintergrund
+Die v9 Subprocess-Isolation hat sich auf Render Free Tier (512 MB) als unzureichend erwiesen: Der OOM-Killer arbeitet auf cgroup-Ebene und reisst trotz `start_new_session=True` den ganzen Container mit. v10 verlegt den Optimizer-Lauf in eine **GitHub Action** (7 GB RAM, kostenlos), waehrend der Trading-Server unberuehrt weiterlaeuft.
+
+### Architektur
+```
+GitHub Actions (Sonntag 03:00 UTC)         Render (24/7)
++----------------------------------+      +-------------------------+
+| 1. Checkout repo                 |      | trader.py: liest        |
+| 2. restore_for_optimizer()       |      | config.json,            |
+|    - holt brain_state.json,      |<---->| optimized_params,       |
+|      trade_history.json, ...     | Gist | brain_state.json        |
+| 3. run_weekly_optimization()     |      |                         |
+|    - volles Grid-Search          |      | persistence.py          |
+|    - skip_inline_backup=1        |      | restore_from_cloud():   |
+| 4. backup_optimizer_results()    |      |  - skipt NO_RESTORE_FILES|
+|    - PUSH NUR config.json,       |      |                         |
+|      optimization_history,       |      | trader liest neue       |
+|      ml_model, optimizer_status  |      | Params beim naechsten   |
+|    - KEIN Push von brain/trades  |      | Cycle (alle 5 Min)      |
++----------------------------------+      +-------------------------+
+```
+
+### Persistence (`app/persistence.py`)
+- **`NO_RESTORE_FILES`**: Set mit Dateien, die zwar gesichert werden duerfen, aber NIEMALS aus der Cloud restored. Aktuell: `optimizer_status.json`. Verhindert dass nach OOM-Restart eine alte "running" PID den Optimizer-Slot blockiert (v9-Bug).
+- **`OPTIMIZER_OUTPUT_FILES`**: Liste der Dateien, die der Optimizer modifiziert (`config.json`, `optimization_history.json`, `optimizer_status.json`, `ml_model.json`, `backtest_results.json`).
+- **`restore_for_optimizer()`**: CI-Variante von `restore_from_cloud()`. Holt ALLE Backup-Files (ausser NO_RESTORE_FILES) ohne `should_restore`-Heuristik — der CI-Runner hat per Definition kein lokales State zu schuetzen.
+- **`backup_optimizer_results()`**: Push NUR der `OPTIMIZER_OUTPUT_FILES`. Vermeidet Race-Condition mit Trading-Server-Updates: ohne diese Trennung wuerden wir `brain_state.json` / `trade_history.json` auf den Stand zu Optimizer-Start zurueckdrehen.
+
+### Optimizer Runner (`app/optimizer_runner.py`)
+- **CI-Mode-Erkennung**: Aktiv wenn `INVESTPILOT_OPTIMIZER_CI=1` ODER `triggered_by` mit `github-action` beginnt.
+- **CI-Pipeline**:
+  1. `restore_for_optimizer()` — holt Brain-State + Trade-Historie aus Gist
+  2. Setzt `INVESTPILOT_SKIP_INLINE_BACKUP=1` damit der Optimizer NICHT inline `backup_to_cloud()` ruft
+  3. `run_weekly_optimization()` — voller Grid-Search ohne Memory-Safeguard-Risiko
+  4. `backup_optimizer_results()` — isolierter Push der Output-Files
+- **Legacy-Subprocess-Mode**: Bleibt erhalten fuer lokale Tests, wird auf Render aber nicht mehr verwendet.
+
+### Optimizer (`app/optimizer.py`)
+- **`INVESTPILOT_SKIP_INLINE_BACKUP=1`**: Konditional in `run_weekly_optimization()`. Im CI-Mode wird der inline `backup_to_cloud()` uebersprungen, weil der Runner stattdessen `backup_optimizer_results()` aufruft.
+
+### Web-Endpoint Update (`web/app.py`)
+- **`POST /api/optimizer/run`**: Triggert jetzt nicht mehr `subprocess.Popen`, sondern den GitHub Workflow per REST API (`POST /repos/{owner}/{repo}/actions/workflows/optimizer.yml/dispatches`). Stale-Lock-Recovery (60 Min) bleibt aktiv.
+- **`_trigger_github_action_optimizer(username)`** ersetzt `_run_optimizer_background()`.
+- Status-File wird mit `mode: "github-action-running"` markiert. Der Workflow ueberschreibt es spaeter via Gist-Push.
+
+### GitHub Action (`.github/workflows/optimizer.yml`)
+- **Trigger**: `cron: '0 3 * * 0'` (Sonntag 03:00 UTC) + `workflow_dispatch` (manuell + REST API).
+- **Concurrency-Group**: `investpilot-optimizer` — verhindert parallele Laeufe.
+- **Timeout**: 45 Min (volles Grid + ML + Walk-Forward).
+- **Step 1**: Checkout, Python 3.11, `pip install -r requirements.txt`.
+- **Step 2**: `python -m app.optimizer_runner github-action-${triggered_by}` mit `INVESTPILOT_OPTIMIZER_CI=1`.
+- **Step 3**: Upload `optimizer_status.json` + `optimization_history.json` + `data/logs/` als Artifact (14 Tage Retention) — auch bei Failure.
+
+### Neue Secrets (GitHub Repo)
+**Einmalig anzulegen** unter Settings → Secrets → Actions:
+- **`INVESTPILOT_GIST_TOKEN`** (Pflicht): PAT mit Scopes `gist` + `actions:write`. Wird im Workflow als `GITHUB_TOKEN` env exportiert.
+- **`TELEGRAM_BOT_TOKEN`** (optional): Wenn gesetzt, sendet der Optimizer bei Abschluss einen Telegram-Alert.
+- **`TELEGRAM_CHAT_ID`** (optional): Ziel-Chat fuer Telegram-Alerts.
+
+### Neue Env-Vars (Render)
+- **`GITHUB_REPO`** (optional, default `carlosbaumann754-svg/investpilot`): Repo fuer Workflow-Dispatch.
+- **`OPTIMIZER_WORKFLOW_FILE`** (optional, default `optimizer.yml`): Workflow-Filename.
+- **`OPTIMIZER_WORKFLOW_REF`** (optional, default `master`): Branch.
+- **Voraussetzung**: Bestehender `GITHUB_TOKEN` braucht jetzt zusaetzlich `actions:write` Scope. Falls nicht vorhanden: PAT neu erstellen.
+
+### Lern-Loop (vollstaendig)
+1. **Mo–Sa**: Trading-Server tradet, lernt im Brain (Win-Rate, Instrumente, Sektoren, Regime)
+2. **Sa Nacht**: Letzte Trades fuellen `brain_state.json` + `trade_history.json` im Gist
+3. **So 03:00 UTC**: GitHub Action startet automatisch
+4. **So 03:00–03:25 UTC**: Optimizer testet 600+ Param-Kombinationen, findet beste Werte
+5. **So 03:25 UTC**: Push von `config.json` + `optimization_history.json` in Gist
+6. **So 03:30 UTC**: Trading-Server liest beim naechsten Cycle neue Params (via `restore_from_cloud()`)
+7. **Ab Sonntag-Cycle**: Bot tradet mit optimierten Werten
+
+### Race-Condition-Schutz
+| Risiko | v10-Loesung |
+|--------|------------|
+| GH-Action ueberschreibt brain_state.json mit altem Stand | `backup_optimizer_results()` pusht NICHT brain_state |
+| Optimizer-Status zombieert nach Render-OOM | `NO_RESTORE_FILES = {optimizer_status.json}` |
+| Parallele Optimizer-Laeufe | `concurrency: investpilot-optimizer` im Workflow |
+| Stale Status auf Dashboard | 60-Min Stale-Lock-Recovery in `/api/optimizer/run` (v9 bleibt aktiv) |
+
+### Vorteile vs v9
+- ✅ 7 GB RAM statt 512 MB → kein Memory-Safeguard-Abbruch noetig
+- ✅ Container-OOM unmoeglich → Trading-Server bleibt 100% online
+- ✅ Vollkommen autonom: Sonntags-Cron + Auto-Push, kein Mensch im Loop
+- ✅ Reproduzierbar: Jeder Run hat GitHub Actions Log + Artifact
+- ✅ Skaliert mit v5+ Grid (648 Combos) ohne weitere Aenderungen
 
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:

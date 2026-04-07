@@ -611,24 +611,26 @@ async def api_optimizer(user=Depends(require_auth)):
     return {"runs": [], "last_run": None}
 
 
-def _run_optimizer_background(username: str):
+def _trigger_github_action_optimizer(username: str):
     """
-    Background-Worker fuer Optimizer-Lauf.
+    Triggert den Optimizer-Workflow auf GitHub Actions (v10).
 
-    Startet den Optimizer als DETACHIERTEN Subprocess
-    (python -m app.optimizer_runner), damit ein OOM-Kill durch die
-    grid-search / yfinance-Downloads NICHT den uvicorn-Parent und damit
-    den ganzen Render-Container toetet. Der Subprocess schreibt
-    Fortschritt eigenstaendig in optimizer_status.json.
+    Vorteil ggue. dem alten Subprocess-Modell:
+    - Laeuft auf einem 7-GB-RAM Runner statt Render Free Tier 512 MB
+    - Container-OOMs koennen den Trading-Server nicht mehr toeten
+    - Volles Grid-Search ohne Memory-Safeguard-Abbruch
+    - Ergebnisse werden via isoliertem Gist-Push uebernommen (keine Race
+      mit Trading-Server-Updates)
+
+    ENV:
+        GITHUB_TOKEN              PAT mit gist+actions:write scope (Pflicht)
+        GITHUB_REPO               "owner/repo" (optional, default carlosbaumann754-svg/investpilot)
+        OPTIMIZER_WORKFLOW_FILE   Workflow-Filename (optional, default optimizer.yml)
+        OPTIMIZER_WORKFLOW_REF    Branch/Ref (optional, default master)
     """
-    import subprocess
-    import sys
     from datetime import datetime
     from app.config_manager import save_json
 
-    # Initialer Placeholder-Status, damit die GUI sofort "running" sieht.
-    # Der Subprocess ueberschreibt ihn gleich mit seinem eigenen Status
-    # (inkl. PID und mode=subprocess).
     initial_status = {
         "state": "running",
         "started_at": datetime.now().isoformat(),
@@ -636,38 +638,65 @@ def _run_optimizer_background(username: str):
         "triggered_by": username,
         "action": None,
         "error": None,
-        "mode": "subprocess-launching",
+        "mode": "github-action-dispatching",
     }
     try:
         save_json("optimizer_status.json", initial_status)
     except Exception:
         pass
 
-    try:
-        # start_new_session loest den subprocess vom parent, damit
-        # uvicorn-Reloads / -Stops ihn nicht mitreissen.
-        kwargs = {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "close_fds": True,
-        }
-        if hasattr(os, "setsid"):
-            kwargs["start_new_session"] = True
-
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "app.optimizer_runner", username],
-            **kwargs,
-        )
-        log.info(f"Optimizer-Subprozess gestartet (PID {proc.pid})")
-    except Exception as e:
-        log.exception("Optimizer-Subprozess-Start fehlgeschlagen")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log.error("Optimizer-Trigger: GITHUB_TOKEN fehlt")
         initial_status["state"] = "error"
-        initial_status["error"] = f"subprocess spawn: {e}"
+        initial_status["error"] = "GITHUB_TOKEN fehlt — Workflow nicht ausloesbar"
         initial_status["finished_at"] = datetime.now().isoformat()
         try:
             save_json("optimizer_status.json", initial_status)
         except Exception:
             pass
+        return
+
+    repo = os.environ.get("GITHUB_REPO", "carlosbaumann754-svg/investpilot")
+    workflow_file = os.environ.get("OPTIMIZER_WORKFLOW_FILE", "optimizer.yml")
+    ref = os.environ.get("OPTIMIZER_WORKFLOW_REF", "master")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+
+    try:
+        import requests
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "ref": ref,
+                "inputs": {"triggered_by": username},
+            },
+            timeout=15,
+        )
+        if resp.status_code in (201, 204):
+            log.info(f"Optimizer-Workflow getriggert (repo={repo}, ref={ref})")
+            initial_status["mode"] = "github-action-running"
+            initial_status["action"] = "dispatched"
+        else:
+            log.error(f"Workflow-Dispatch HTTP {resp.status_code}: {resp.text[:200]}")
+            initial_status["state"] = "error"
+            initial_status["error"] = (
+                f"workflow_dispatch HTTP {resp.status_code}: {resp.text[:160]}"
+            )
+            initial_status["finished_at"] = datetime.now().isoformat()
+    except Exception as e:
+        log.exception("Workflow-Dispatch fehlgeschlagen")
+        initial_status["state"] = "error"
+        initial_status["error"] = f"dispatch: {type(e).__name__}: {e}"
+        initial_status["finished_at"] = datetime.now().isoformat()
+
+    try:
+        save_json("optimizer_status.json", initial_status)
+    except Exception:
+        pass
 
 
 @app.post("/api/optimizer/run")
@@ -712,7 +741,7 @@ async def api_run_optimizer(background_tasks: BackgroundTasks, user=Depends(requ
                     "started_at": started,
                 }
 
-        background_tasks.add_task(_run_optimizer_background, user)
+        background_tasks.add_task(_trigger_github_action_optimizer, user)
 
         try:
             from web.security import log_audit

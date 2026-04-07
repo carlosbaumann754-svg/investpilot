@@ -9,6 +9,7 @@ Safety Guards: Max 1 Aenderung/Woche, OOS muss besser sein, Rollback bei Einbruc
 
 import logging
 import copy
+import os
 from datetime import datetime
 
 from app.config_manager import load_config, save_config, load_json, save_json
@@ -600,12 +601,18 @@ def run_weekly_optimization():
     # CRITICAL: Sofortiges Cloud-Backup nach Optimizer-Lauf.
     # Verhindert Datenverlust falls Container vor dem naechsten
     # Trading-Zyklus neu startet (Render Free Tier spin-down).
-    try:
-        from app.persistence import backup_to_cloud
-        backup_to_cloud()
-        log.info("Cloud-Backup nach Optimizer-Lauf erfolgreich")
-    except Exception as e:
-        log.warning(f"Cloud-Backup nach Optimizer fehlgeschlagen: {e}")
+    # Im CI-Mode (GitHub-Action) wird das hier uebersprungen — der Runner
+    # macht stattdessen einen ISOLIERTEN Push (nur Optimizer-Output-Dateien),
+    # um Race-Conditions mit Trading-Server-Updates zu vermeiden.
+    if os.environ.get("INVESTPILOT_SKIP_INLINE_BACKUP", "0") == "1":
+        log.info("Inline-Backup uebersprungen (CI-Mode, Runner pusht isoliert)")
+    else:
+        try:
+            from app.persistence import backup_to_cloud
+            backup_to_cloud()
+            log.info("Cloud-Backup nach Optimizer-Lauf erfolgreich")
+        except Exception as e:
+            log.warning(f"Cloud-Backup nach Optimizer fehlgeschlagen: {e}")
 
     # Telegram: Optimizer-Ergebnis senden
     try:

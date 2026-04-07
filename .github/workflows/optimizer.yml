@@ -1,0 +1,77 @@
+name: Weekly Optimizer
+
+# Laeuft jeden Sonntag 03:00 UTC (= 04:00/05:00 MEZ/MESZ).
+# Zusaetzlich manuell triggerbar via "Run workflow" im GitHub UI
+# oder via REST API (workflow_dispatch) — z.B. vom Render Dashboard-Button.
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: "Trigger-Quelle (manual / dashboard / debug)"
+        required: false
+        default: "manual"
+
+# Erlaubt nur einen aktiven Lauf gleichzeitig — neuere Trigger queueen,
+# altere Laeufe werden gecancelt.
+concurrency:
+  group: investpilot-optimizer
+  cancel-in-progress: false
+
+jobs:
+  optimize:
+    name: Run Weekly Optimization
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare data directory
+        run: |
+          mkdir -p data/logs
+          # Default-Config bereitstellen, damit config_manager nicht
+          # auf eine fehlende Datei trifft. restore_for_optimizer
+          # ueberschreibt sie gleich mit dem aktuellen Gist-Stand.
+          if [ -f data/config.json ]; then
+            echo "Default config.json bereits vorhanden"
+          else
+            echo "{}" > data/config.json
+          fi
+
+      - name: Run optimizer (CI-Mode)
+        env:
+          # Pflicht: gleicher Token wie der Render-Server fuer denselben Gist.
+          GITHUB_TOKEN: ${{ secrets.INVESTPILOT_GIST_TOKEN }}
+          # Erzwingt restore_for_optimizer + isolierten Push am Ende
+          INVESTPILOT_OPTIMIZER_CI: '1'
+          # Laesst Telegram-Alerts durch (optional, kann leer bleiben)
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m app.optimizer_runner github-action-${{ github.event.inputs.triggered_by || 'cron' }}
+
+      - name: Upload optimizer status (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-status-${{ github.run_id }}
+          path: |
+            data/optimizer_status.json
+            data/optimization_history.json
+            data/logs/
+          retention-days: 14
+          if-no-files-found: ignore
