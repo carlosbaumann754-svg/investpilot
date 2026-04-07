@@ -438,6 +438,40 @@ investpilot/
 - `intraday_timing.avoid_last_minutes` — Minuten vor Close ohne Kaeufe (default: 30)
 - `optimizer.optimization_interval_days` — Tage zwischen Optimierungslaeufen (default: 14)
 
+## v9 — Brain-Recovery & Subprocess-Optimizer (2026-04-07)
+
+### Persistence Hardening (`app/persistence.py`)
+- **`_fetch_gist_file_content(file_entry, token)`**: Helper, der bei `truncated=true` (GitHub liefert nur ~743KB content im API-Response) automatisch ueber `raw_url` mit Authorization-Header den vollen Inhalt nachlaedt. Loest stillschweigenden Datenverlust bei >700KB Brain-Files.
+- **Intelligenter Restore in `restore_from_cloud()`**: Statt `is_empty`-Check vergleicht jetzt `gist.total_runs` vs `local.total_runs` — restore wenn Gist mehr Runs hat. Schuetzt vor OOM-Reset, wo der Scheduler 1 Dummy-Cycle schreibt bevor Restore laeuft. Trade-history: Restore wenn Gist mehr Trades hat.
+- **`optimizer_status.json`**: Neu in BACKUP_FILES, damit Subprocess-Status persistent ist.
+
+### Subprocess-Isolation Optimizer (`app/optimizer_runner.py` NEU + `web/app.py`)
+- **Neuer Standalone-Runner**: `python -m app.optimizer_runner [triggered_by]` startet den Optimizer als komplett separaten Python-Prozess.
+- **`/api/optimizer/run`**: Spawnt `subprocess.Popen([sys.executable, "-m", "app.optimizer_runner", username], start_new_session=True)`. Wenn der Optimizer das 512 MB Render-Limit sprengt, wird NUR der Subprocess vom OOM-Killer getroffen — der Web/Scheduler-Container ueberlebt.
+- **Status-Tracking**: Subprocess schreibt waehrend des Laufs in `optimizer_status.json` (state, pid, started_at, finished_at, action, error). Felder `mode: "subprocess"` + `pid` sind neu.
+- **`scheduler.py`**: Sonntags-Auto-Optimizer per Default DEAKTIVIERT, gegated hinter `ENABLE_SUNDAY_AUTO_OPTIMIZER=1` Env-Var. Damit kein Sonntag-Brain-Reset mehr.
+
+### Neue Admin-Endpoints (`web/app.py`)
+Alle erfordern Auth (`require_auth`).
+- **`POST /api/admin/force-backup`**: Erzwingt sofortiges `backup_to_cloud()` ohne abzuwarten. Nuetzlich nach manuellem Restore.
+- **`GET /api/admin/gist-inspect`**: Liefert Metadaten des aktuellen Gist-HEADs ohne Schreibzugriff. Zeigt `size`, `truncated`, `raw_url_present`, `content_len_in_api`, `fetched_content_len`, plus geparste Brain-Werte (`total_runs`, `market_regime`, `win_rate`, `sharpe_estimate`, `instrument_scores`-Anzahl, `learned_rules`, `performance_snapshots`). Plus Vergleich mit lokalem Brain-State.
+- **`GET /api/admin/gist-history`**: Iteriert die letzten 30 Gist-Revisionen und zeigt `total_runs` pro Revision. Hilft eine alte gute Revision (vor Reset) zu finden. Liefert Full-SHA und Short-SHA.
+- **`POST /api/admin/force-restore-brain-from-sha?sha=<full_40>&confirm=YES_OVERWRITE&files=brain_state.json`**: Notfall-Restore aus einer SPEZIFISCHEN Gist-Revision (per SHA). Unterstuetzt mehrere Files via Komma-Trennung. Pflicht: Full-40-char SHA.
+- **`POST /api/admin/force-restore-brain?confirm=YES_OVERWRITE`**: Force-Restore aus aktuellem Gist-HEAD ohne `is_empty`-Check.
+
+### Neue Files
+- `app/optimizer_runner.py` — Standalone Subprocess Entry-Point
+- `optimizer_status.json` — Persistent Subprocess-Status (mit `mode`, `pid`, `started_at`, `finished_at`, `action`, `error`)
+
+### Neue Env-Vars
+- `ENABLE_SUNDAY_AUTO_OPTIMIZER=1` — Re-aktiviert den Sonntag-Auto-Optimizer (Default: aus)
+
+### Recovery-Workflow nach Brain-Reset
+1. `GET /api/admin/gist-history` — finde Revision mit hohem `total_runs`
+2. `POST /api/admin/force-restore-brain-from-sha?sha=<sha>&confirm=YES_OVERWRITE` — restore
+3. `POST /api/admin/force-backup` — push restored state als neuer Gist-HEAD
+4. Scheduler nimmt automatisch wieder Trading auf, brain.total_runs zaehlt von restored Wert weiter
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`
