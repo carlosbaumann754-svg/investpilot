@@ -39,6 +39,7 @@ BACKUP_FILES = [
     "backtest_results.json",
     "ml_model.json",
     "optimization_history.json",
+    "optimizer_status.json",
 ]
 
 

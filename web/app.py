@@ -8,7 +8,7 @@ import sys
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, validator
@@ -611,23 +611,83 @@ async def api_optimizer(user=Depends(require_auth)):
     return {"runs": [], "last_run": None}
 
 
-@app.post("/api/optimizer/run")
-async def api_run_optimizer(user=Depends(require_auth)):
-    """Weekly Optimization manuell starten."""
+def _run_optimizer_background(username: str):
+    """Background-Worker fuer Optimizer-Lauf. Schreibt Status-Datei."""
+    from datetime import datetime
+    from app.config_manager import save_json
+
+    status = {
+        "state": "running",
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "triggered_by": username,
+        "action": None,
+        "error": None,
+    }
+    try:
+        save_json("optimizer_status.json", status)
+    except Exception:
+        pass
+
     try:
         from app.optimizer import run_weekly_optimization
         result = run_weekly_optimization()
+        status["state"] = "done"
+        status["action"] = result.get("action", "unknown") if isinstance(result, dict) else "unknown"
+    except Exception as e:
+        log.exception("Optimizer Background-Lauf fehlgeschlagen")
+        status["state"] = "error"
+        status["error"] = str(e)
+
+    status["finished_at"] = datetime.now().isoformat()
+    try:
+        save_json("optimizer_status.json", status)
+    except Exception:
+        pass
+
+
+@app.post("/api/optimizer/run")
+async def api_run_optimizer(background_tasks: BackgroundTasks, user=Depends(require_auth)):
+    """Weekly Optimization im Hintergrund starten (non-blocking, vermeidet Render 100s Proxy-Timeout)."""
+    try:
+        from datetime import datetime
+        from app.config_manager import load_json
+
+        # Abbruch wenn bereits ein Lauf aktiv ist
+        status = load_json("optimizer_status.json") or {}
+        if status.get("state") == "running":
+            started = status.get("started_at")
+            return {
+                "status": "already_running",
+                "message": f"Optimizer laeuft bereits seit {started}",
+                "started_at": started,
+            }
+
+        background_tasks.add_task(_run_optimizer_background, user)
 
         try:
             from web.security import log_audit
-            await log_audit(user, "OPTIMIZER_RUN",
-                            f"Action={result.get('action', 'unknown')}")
+            await log_audit(user, "OPTIMIZER_RUN_STARTED", "Background task scheduled")
         except Exception:
             pass
 
-        return {"status": "ok", "result": result}
+        return {
+            "status": "started",
+            "message": "Optimizer laeuft im Hintergrund. Pruefe /api/optimizer/status fuer Fortschritt.",
+            "started_at": datetime.now().isoformat(),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/optimizer/status")
+async def api_optimizer_status(user=Depends(require_auth)):
+    """Status des letzten/laufenden Optimizer-Background-Laufs."""
+    from app.config_manager import load_json
+    status = load_json("optimizer_status.json")
+    if not status:
+        return {"state": "idle", "message": "Noch kein Optimizer-Lauf gestartet"}
+    return status
 
 
 @app.post("/api/optimizer/rollback")
