@@ -47,11 +47,45 @@ def _is_ci_mode(triggered_by: str) -> bool:
     return triggered_by.startswith("github-action")
 
 
+def _shard_mode_config():
+    """Liest Shard-Konfiguration aus Env. Returns (shard_id, num_shards) oder None."""
+    if os.environ.get("INVESTPILOT_OPTIMIZER_SHARD_MODE", "0") != "1":
+        return None
+    try:
+        shard_id = int(os.environ["INVESTPILOT_OPTIMIZER_SHARD"])
+        num_shards = int(os.environ["INVESTPILOT_OPTIMIZER_NUM_SHARDS"])
+    except (KeyError, ValueError) as e:
+        log.error(f"SHARD_MODE aktiv aber SHARD/NUM_SHARDS ungueltig: {e}")
+        return None
+    if shard_id < 0 or shard_id >= num_shards:
+        log.error(f"SHARD-Index {shard_id} ausserhalb [0,{num_shards})")
+        return None
+    return (shard_id, num_shards)
+
+
+def _is_merge_mode() -> bool:
+    return os.environ.get("INVESTPILOT_OPTIMIZER_MERGE_MODE", "0") == "1"
+
+
 def main():
     triggered_by = sys.argv[1] if len(sys.argv) > 1 else "subprocess"
     pid = os.getpid()
     ci_mode = _is_ci_mode(triggered_by)
-    mode_label = "github-action" if ci_mode else "subprocess"
+    shard_cfg = _shard_mode_config()
+    merge_mode = _is_merge_mode()
+
+    if shard_cfg and merge_mode:
+        log.error("SHARD_MODE und MERGE_MODE gleichzeitig — Abbruch")
+        sys.exit(2)
+
+    if shard_cfg:
+        mode_label = f"github-action-shard-{shard_cfg[0]+1}/{shard_cfg[1]}"
+    elif merge_mode:
+        mode_label = "github-action-merge"
+    elif ci_mode:
+        mode_label = "github-action"
+    else:
+        mode_label = "subprocess"
 
     log.info(f"Optimizer-Runner gestartet (PID {pid}, mode={mode_label}, "
              f"triggered_by={triggered_by})")
@@ -95,8 +129,15 @@ def main():
     _write_status(status)
 
     try:
-        from app.optimizer import run_weekly_optimization
-        result = run_weekly_optimization()
+        if shard_cfg:
+            from app.optimizer import run_shard_optimization
+            result = run_shard_optimization(shard_cfg[0], shard_cfg[1])
+        elif merge_mode:
+            from app.optimizer import run_merge_optimization
+            result = run_merge_optimization()
+        else:
+            from app.optimizer import run_weekly_optimization
+            result = run_weekly_optimization()
         if isinstance(result, dict):
             status["action"] = result.get("action", "unknown")
             if result.get("action") == "error":
@@ -120,8 +161,10 @@ def main():
     status["finished_at"] = datetime.now().isoformat()
     _write_status(status)
 
-    # CI-Mode: Optimizer-Output isoliert in den Gist pushen
-    if ci_mode:
+    # CI-Mode: Optimizer-Output isoliert in den Gist pushen.
+    # Shard-Jobs pushen NICHT (ihre Resultate landen als GH-Artifact und
+    # werden vom Merge-Job konsumiert). Nur Single- und Merge-Mode pushen.
+    if ci_mode and not shard_cfg:
         try:
             from app.persistence import backup_optimizer_results
             ok = backup_optimizer_results()
@@ -131,6 +174,8 @@ def main():
                 log.error("CI-Mode: backup_optimizer_results fehlgeschlagen")
         except Exception as e:
             log.exception(f"CI-Mode: Push-Fehler: {e}")
+    elif shard_cfg:
+        log.info(f"Shard-Mode: kein Gist-Push (Shard-Resultate via GH Artifact)")
 
     if status["state"] == "error":
         sys.exit(1)

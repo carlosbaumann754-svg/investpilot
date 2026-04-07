@@ -312,6 +312,390 @@ def _score_at_bar(closes, volumes, idx, lookback=60):
 
 
 # ============================================================
+# GRID-SEARCH PRECOMPUTE (v10 Performance Pack)
+# ============================================================
+#
+# Diese Helpers berechnen einmalig alle Daten, die zwischen Grid-Combos
+# IDENTISCH sind: Symbol-Arrays, Score-Matrix pro (sym, day), normalisierte
+# VIX-Lookups, Datums-Indices. Spart 30-50x Laufzeit im Optimizer.
+#
+# Wichtig: Die hier produzierten Daten sind READ-ONLY — die Simulation darf
+# nicht in das precomputed-Dict schreiben (sonst killt es Multiprocessing).
+
+def precompute_grid_data(histories, vix_history=None):
+    """Pre-compute alle Daten die zwischen Grid-Combos identisch sind.
+
+    Returns:
+        dict mit:
+          - symbol_data: {sym: {closes, highs, volumes, dates, dates_to_idx, scores, sector}}
+          - sorted_dates: sortierte Liste aller Daten ueber alle Symbole
+          - vix_by_date_norm: {date_obj.date() -> vix_value} fuer O(1) lookup
+    """
+    symbol_data = {}
+    all_dates_set = set()
+
+    for sym, hist in histories.items():
+        closes = hist["Close"].values.tolist()
+        highs = hist["High"].values.tolist() if "High" in hist.columns else closes[:]
+        volumes = hist["Volume"].values.tolist()
+        dates = hist.index.tolist()
+
+        # O(1) date -> idx lookup (statt list.index() O(N))
+        dates_to_idx = {d: i for i, d in enumerate(dates)}
+
+        # Score-Matrix: pro Bar einmal berechnen, alle Combos lesen daraus.
+        # Score haengt NUR von closes/volumes ab, NICHT von Grid-Params!
+        scores = [_score_at_bar(closes, volumes, i) for i in range(len(closes))]
+
+        # Sektor cachen (wird sonst in jeder Combo neu nachgeschlagen)
+        info = ASSET_UNIVERSE.get(sym, {})
+        sector = info.get("sector", "unknown")
+
+        symbol_data[sym] = {
+            "closes": closes,
+            "highs": highs,
+            "volumes": volumes,
+            "dates": dates,
+            "dates_to_idx": dates_to_idx,
+            "scores": scores,
+            "sector": sector,
+        }
+        all_dates_set.update(dates)
+
+    sorted_dates = sorted(all_dates_set)
+
+    # VIX normalisieren: einmal date()-Strip, danach O(1) lookup
+    vix_by_date_norm = {}
+    if vix_history:
+        for vix_date, vix_val in vix_history.items():
+            try:
+                key = vix_date.date() if hasattr(vix_date, "date") else vix_date
+            except Exception:
+                key = vix_date
+            vix_by_date_norm[key] = vix_val
+
+    return {
+        "symbol_data": symbol_data,
+        "sorted_dates": sorted_dates,
+        "vix_by_date_norm": vix_by_date_norm,
+    }
+
+
+def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
+                         use_realistic_filters=True):
+    """Fast simulate_trades using precomputed data structures.
+
+    Bit-identisch zu simulate_trades(), aber:
+      - Keine pandas->list Konvertierung (precomputed)
+      - O(1) statt O(N) date->idx lookups
+      - Score-Matrix statt _score_at_bar() pro Combo
+      - Normalisierte VIX-Lookups
+
+    Wird ausschliesslich von run_grid_search() im Optimizer aufgerufen.
+    Die Ergebnisse sind identisch zu simulate_trades() (siehe Regression-Test).
+    """
+    if config is None:
+        config = load_config()
+
+    dt = config.get("demo_trading", {})
+    sl_pct = dt.get("stop_loss_pct", -3) / 100
+    tp_pct = dt.get("take_profit_pct", 5) / 100
+    min_score = dt.get("min_scanner_score", 15)
+    max_positions = dt.get("max_positions", 20)
+
+    lev_cfg = config.get("leverage", {})
+    trailing_sl_pct = lev_cfg.get("trailing_sl_pct", 2.0) / 100
+    trailing_activation_pct = lev_cfg.get("trailing_sl_activation_pct", 1.0) / 100
+
+    rf_cfg = config.get("regime_filter", {})
+    vix_crisis_threshold = rf_cfg.get("vix_crisis_threshold", 35)
+    vix_caution_threshold = rf_cfg.get("vix_caution_threshold", 25)
+
+    risk_cfg = config.get("risk_management", {})
+    max_positions_per_sector = risk_cfg.get("max_positions_per_sector", 4)
+    max_sector_allocation_pct = risk_cfg.get("max_sector_allocation_pct", 35)
+
+    if earnings_blackouts is None:
+        earnings_blackouts = {}
+
+    symbol_data = precomputed["symbol_data"]
+    sorted_dates = precomputed["sorted_dates"]
+    vix_by_date_norm = precomputed["vix_by_date_norm"]
+
+    filter_stats = {
+        "vix_blocked": 0,
+        "vix_reduced": 0,
+        "earnings_blocked": 0,
+        "sector_blocked": 0,
+    }
+
+    tp_tranches_cfg = config.get("leverage", {}).get("tp_tranches", [])
+
+    trades = []
+    open_positions = {}
+    trailing_highs = {}
+    trailing_sl = {}
+    partial_triggered = {}
+
+    start_idx = 60
+
+    def _get_vix_fast(dt_val):
+        if not vix_by_date_norm:
+            return None
+        try:
+            key = dt_val.date() if hasattr(dt_val, "date") else dt_val
+        except Exception:
+            key = dt_val
+        return vix_by_date_norm.get(key)
+
+    def _is_earnings_blackout_fast(sym, current_date):
+        if sym not in earnings_blackouts:
+            return False
+        blackout_set = earnings_blackouts[sym]
+        if not blackout_set:
+            return False
+        try:
+            check_date = current_date.date() if hasattr(current_date, "date") else current_date
+        except Exception:
+            check_date = current_date
+        return check_date in blackout_set
+
+    def _check_sector_concentration_fast(new_sym):
+        new_sector = symbol_data.get(new_sym, {}).get("sector", "unknown")
+        if not new_sector or new_sector == "unknown":
+            return True
+
+        sector_count = defaultdict(int)
+        sector_value = defaultdict(float)
+        total_value = 0.0
+
+        for sym, pos in open_positions.items():
+            sec = pos.get("sector", "unknown")
+            sector_count[sec] += 1
+            val = pos.get("entry_price", 1.0)
+            sector_value[sec] += val
+            total_value += val
+
+        if sector_count[new_sector] >= max_positions_per_sector:
+            return False
+
+        if total_value > 0:
+            avg_val = total_value / max(len(open_positions), 1)
+            new_sector_val = sector_value[new_sector] + avg_val
+            new_total = total_value + avg_val
+            if new_total > 0 and (new_sector_val / new_total * 100) > max_sector_allocation_pct:
+                return False
+
+        return True
+
+    for day_i in range(start_idx, len(sorted_dates)):
+        current_date = sorted_dates[day_i]
+
+        # 1. SL/TP/Trailing fuer offene Positionen
+        for sym in list(open_positions.keys()):
+            sd = symbol_data.get(sym)
+            if not sd:
+                continue
+            sym_idx = sd["dates_to_idx"].get(current_date, -1)
+            if sym_idx < 0:
+                continue
+
+            pos = open_positions[sym]
+            current_price = sd["closes"][sym_idx]
+            intraday_high = sd["highs"][sym_idx]
+            entry_price = pos["entry_price"]
+            pnl_pct = (current_price - entry_price) / entry_price
+
+            high_pnl_pct = (intraday_high - entry_price) / entry_price
+            if high_pnl_pct >= trailing_activation_pct:
+                if sym not in trailing_highs or intraday_high > trailing_highs[sym]:
+                    trailing_highs[sym] = intraday_high
+                trail_level = trailing_highs[sym] * (1 - trailing_sl_pct)
+                if sym not in trailing_sl or trail_level > trailing_sl[sym]:
+                    trailing_sl[sym] = trail_level
+
+            if sym in trailing_sl and current_price <= trailing_sl[sym]:
+                days_held = (current_date - pos["entry_date"]).days
+                cost = _calc_costs(entry_price, days_held)
+                trades.append({
+                    "symbol": sym,
+                    "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                    "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                    "entry_price": round(entry_price, 4),
+                    "exit_price": round(current_price, 4),
+                    "pnl_pct": round(pnl_pct * 100, 2),
+                    "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                    "cost_pct": round(cost * 100, 3),
+                    "days_held": days_held,
+                    "exit_reason": "TRAILING_SL",
+                    "entry_score": pos["score"],
+                })
+                del open_positions[sym]
+                trailing_highs.pop(sym, None)
+                del trailing_sl[sym]
+                partial_triggered.pop(sym, None)
+                continue
+
+            if tp_tranches_cfg and pnl_pct > 0:
+                triggered_set = partial_triggered.get(sym, set())
+                for t_idx, t_cfg in enumerate(tp_tranches_cfg):
+                    if t_idx in triggered_set:
+                        continue
+                    if pnl_pct * 100 >= t_cfg.get("profit_target_pct", 0):
+                        days_held = (current_date - pos["entry_date"]).days
+                        cost = _calc_costs(entry_price, days_held)
+                        trades.append({
+                            "symbol": sym,
+                            "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                            "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                            "entry_price": round(entry_price, 4),
+                            "exit_price": round(current_price, 4),
+                            "pnl_pct": round(pnl_pct * 100, 2),
+                            "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                            "cost_pct": round(cost * 100, 3),
+                            "days_held": days_held,
+                            "exit_reason": "PARTIAL_CLOSE",
+                            "entry_score": pos["score"],
+                            "partial_close_pct": t_cfg.get("pct_of_position", 0),
+                        })
+                        triggered_set.add(t_idx)
+                partial_triggered[sym] = triggered_set
+
+            if pnl_pct <= sl_pct:
+                days_held = (current_date - pos["entry_date"]).days
+                cost = _calc_costs(entry_price, days_held)
+                trades.append({
+                    "symbol": sym,
+                    "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                    "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                    "entry_price": round(entry_price, 4),
+                    "exit_price": round(current_price, 4),
+                    "pnl_pct": round(pnl_pct * 100, 2),
+                    "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                    "cost_pct": round(cost * 100, 3),
+                    "days_held": days_held,
+                    "exit_reason": "STOP_LOSS",
+                    "entry_score": pos["score"],
+                })
+                del open_positions[sym]
+                trailing_highs.pop(sym, None)
+                if sym in trailing_sl:
+                    del trailing_sl[sym]
+                partial_triggered.pop(sym, None)
+                continue
+
+            if pnl_pct >= tp_pct:
+                days_held = (current_date - pos["entry_date"]).days
+                cost = _calc_costs(entry_price, days_held)
+                trades.append({
+                    "symbol": sym,
+                    "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                    "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                    "entry_price": round(entry_price, 4),
+                    "exit_price": round(current_price, 4),
+                    "pnl_pct": round(pnl_pct * 100, 2),
+                    "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                    "cost_pct": round(cost * 100, 3),
+                    "days_held": days_held,
+                    "exit_reason": "TAKE_PROFIT",
+                    "entry_score": pos["score"],
+                })
+                del open_positions[sym]
+                trailing_highs.pop(sym, None)
+                if sym in trailing_sl:
+                    del trailing_sl[sym]
+                partial_triggered.pop(sym, None)
+                continue
+
+        # 2. Score & neue Entries
+        if len(open_positions) >= max_positions:
+            continue
+
+        vix_block = False
+        vix_reduce_size = False
+        if use_realistic_filters and vix_by_date_norm:
+            vix_val = _get_vix_fast(current_date)
+            if vix_val is not None:
+                if vix_val > vix_crisis_threshold:
+                    vix_block = True
+                    filter_stats["vix_blocked"] += 1
+                elif vix_val > vix_caution_threshold:
+                    vix_reduce_size = True
+                    filter_stats["vix_reduced"] += 1
+
+        if vix_block:
+            continue
+
+        scored = []
+        for sym, sd in symbol_data.items():
+            if sym in open_positions:
+                continue
+            sym_idx = sd["dates_to_idx"].get(current_date, -1)
+            if sym_idx < 0:
+                continue
+            # Score aus Cache statt _score_at_bar() Aufruf!
+            score = sd["scores"][sym_idx]
+            if score >= min_score:
+                scored.append((sym, score, sd["closes"][sym_idx], current_date))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        if vix_reduce_size:
+            slots = max(1, (max_positions - len(open_positions)) // 2)
+        else:
+            slots = max_positions - len(open_positions)
+
+        opened_today = 0
+        for sym, score, price, date in scored:
+            if opened_today >= slots:
+                break
+
+            if use_realistic_filters and earnings_blackouts:
+                if _is_earnings_blackout_fast(sym, current_date):
+                    filter_stats["earnings_blocked"] += 1
+                    continue
+
+            if use_realistic_filters:
+                if not _check_sector_concentration_fast(sym):
+                    filter_stats["sector_blocked"] += 1
+                    continue
+
+            open_positions[sym] = {
+                "entry_price": price,
+                "entry_date": date,
+                "score": score,
+                "sector": symbol_data[sym].get("sector", "unknown"),
+            }
+            opened_today += 1
+
+    # Restliche Positionen am Ende schliessen
+    for sym, pos in open_positions.items():
+        sd = symbol_data.get(sym)
+        if not sd or not sd["closes"]:
+            continue
+        last_price = sd["closes"][-1]
+        last_date = sd["dates"][-1]
+        pnl_pct = (last_price - pos["entry_price"]) / pos["entry_price"]
+        days_held = (last_date - pos["entry_date"]).days if hasattr(last_date, "__sub__") else 0
+        cost = _calc_costs(pos["entry_price"], max(days_held, 0))
+        trades.append({
+            "symbol": sym,
+            "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+            "exit_date": last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date)[:10],
+            "entry_price": round(pos["entry_price"], 4),
+            "exit_price": round(last_price, 4),
+            "pnl_pct": round(pnl_pct * 100, 2),
+            "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+            "cost_pct": round(cost * 100, 3),
+            "days_held": max(days_held, 0),
+            "exit_reason": "END_OF_DATA",
+            "entry_score": pos["score"],
+        })
+
+    return trades
+
+
+# ============================================================
 # TRADE SIMULATION
 # ============================================================
 
