@@ -831,12 +831,17 @@ async def api_admin_gist_inspect(user=Depends(require_auth)):
     # Gist brain_state — raw_url fuer truncated files
     brain_file = files.get("brain_state.json")
     if brain_file:
+        meta_row = {
+            "size": brain_file.get("size"),
+            "truncated": brain_file.get("truncated", False),
+            "raw_url_present": bool(brain_file.get("raw_url")),
+            "content_len_in_api": len(brain_file.get("content", "") or ""),
+        }
         try:
             content = _fetch_gist_file_content(brain_file, token) or "{}"
+            meta_row["fetched_content_len"] = len(content)
             brain = json.loads(content)
-            out["files"]["brain_state.json"] = {
-                "size": brain_file.get("size"),
-                "truncated": brain_file.get("truncated", False),
+            meta_row.update({
                 "total_runs": brain.get("total_runs"),
                 "regime": brain.get("market_regime"),
                 "win_rate": brain.get("win_rate"),
@@ -844,9 +849,10 @@ async def api_admin_gist_inspect(user=Depends(require_auth)):
                 "instruments_learned": len(brain.get("instrument_scores", {})),
                 "learned_rules": len(brain.get("learned_rules", [])),
                 "snapshots": len(brain.get("performance_snapshots", [])),
-            }
+            })
         except Exception as e:
-            out["files"]["brain_state.json"] = {"error": str(e)}
+            meta_row["error"] = str(e)
+        out["files"]["brain_state.json"] = meta_row
 
     # Meta
     meta_file = files.get("_backup_meta.json")
@@ -860,10 +866,12 @@ async def api_admin_gist_inspect(user=Depends(require_auth)):
     local_brain = load_json("brain_state.json") or {}
     out["local"]["brain_state.json"] = {
         "total_runs": local_brain.get("total_runs"),
-        "regime": local_brain.get("regime"),
-        "winning_trades": local_brain.get("winning_trades"),
-        "losing_trades": local_brain.get("losing_trades"),
-        "instruments_learned": len(local_brain.get("instruments", {})),
+        "market_regime": local_brain.get("market_regime"),
+        "win_rate": local_brain.get("win_rate"),
+        "sharpe": local_brain.get("sharpe_estimate"),
+        "instruments_learned": len(local_brain.get("instrument_scores", {})),
+        "learned_rules": len(local_brain.get("learned_rules", [])),
+        "snapshots": len(local_brain.get("performance_snapshots", [])),
     }
 
     # Liste aller Dateien im Gist
