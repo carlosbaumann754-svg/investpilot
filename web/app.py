@@ -735,6 +735,22 @@ async def api_rollback(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/admin/force-backup")
+async def api_admin_force_backup(user=Depends(require_auth)):
+    """Triggert sofort einen Cloud-Backup (schiebt lokalen Stand als Gist HEAD)."""
+    try:
+        from app.persistence import backup_to_cloud
+        ok = backup_to_cloud()
+        try:
+            from web.security import log_audit
+            await log_audit(user, "ADMIN_FORCE_BACKUP", f"success={ok}")
+        except Exception:
+            pass
+        return {"status": "ok" if ok else "failed", "success": ok}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================
 # ADMIN: GIST INSPECT / FORCE RESTORE (Emergency Recovery)
 # ============================================================

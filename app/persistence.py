@@ -171,23 +171,52 @@ def restore_from_cloud():
         for filename in BACKUP_FILES:
             if filename in gist_data.get("files", {}):
                 content = gist_data["files"][filename].get("content", "")
-                if content:
-                    # Wiederherstellen wenn lokal keine/leere Daten
-                    local_data = load_json(filename)
-                    is_empty = (
-                        local_data is None
-                        or local_data == []
-                        or local_data == {}
-                        or (isinstance(local_data, dict) and local_data.get("total_runs", 0) == 0
-                            and len(local_data) <= 1)
-                    )
-                    if is_empty:
-                        data = json.loads(content)
-                        save_json(filename, data)
-                        files_restored += 1
-                        log.info(f"    Wiederhergestellt: {filename}")
-                    else:
-                        log.debug(f"    Uebersprungen (lokal vorhanden): {filename}")
+                if not content:
+                    continue
+                try:
+                    gist_parsed = json.loads(content)
+                except Exception as e:
+                    log.warning(f"    Parse-Fehler bei Gist-{filename}: {e}")
+                    continue
+
+                local_data = load_json(filename)
+
+                # Entscheidungslogik fuer Restore:
+                # 1. Lokale Datei fehlt/leer  -> immer restore
+                # 2. brain_state.json: restore wenn Gist mehr total_runs hat
+                #    (schuetzt gegen OOM-Reset wo Scheduler 1 Zyklus schreibt
+                #     bevor Restore laeuft)
+                # 3. trade_history.json: restore wenn Gist mehr Trades hat
+                # 4. Sonstige: restore wenn lokal None/leer
+                should_restore = False
+                reason = ""
+
+                if local_data is None or local_data == [] or local_data == {}:
+                    should_restore = True
+                    reason = "lokal leer"
+                elif filename == "brain_state.json" and isinstance(gist_parsed, dict):
+                    local_runs = (local_data.get("total_runs", 0)
+                                  if isinstance(local_data, dict) else 0)
+                    gist_runs = gist_parsed.get("total_runs", 0)
+                    if gist_runs > local_runs:
+                        should_restore = True
+                        reason = f"gist runs={gist_runs} > local runs={local_runs}"
+                elif filename == "trade_history.json" and isinstance(gist_parsed, list):
+                    local_count = len(local_data) if isinstance(local_data, list) else 0
+                    if len(gist_parsed) > local_count:
+                        should_restore = True
+                        reason = f"gist trades={len(gist_parsed)} > local={local_count}"
+                elif isinstance(local_data, dict) and local_data.get("total_runs", 0) == 0 \
+                        and len(local_data) <= 1:
+                    should_restore = True
+                    reason = "lokal Dummy-State"
+
+                if should_restore:
+                    save_json(filename, gist_parsed)
+                    files_restored += 1
+                    log.info(f"    Wiederhergestellt: {filename} ({reason})")
+                else:
+                    log.debug(f"    Uebersprungen (lokal aktueller/gleich): {filename}")
 
         # Meta-Info lesen
         meta = gist_data.get("files", {}).get("_backup_meta.json", {})
