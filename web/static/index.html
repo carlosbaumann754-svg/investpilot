@@ -291,12 +291,12 @@
         <!-- Actions -->
         <div class="grid-2">
             <div class="card" style="text-align:center">
-                <div class="card-title">Backtest starten</div>
+                <div class="card-title">Backtest starten<span class="tip" data-tip="Simuliert die Strategie auf 5 Jahren echter Vergangenheits-Kurse, ohne echtes Geld zu riskieren. Zeigt dir wie der Bot in der Vergangenheit performt haette. Dauert ein paar Minuten.">?</span></div>
                 <div class="card-sub">5 Jahre Historie, Walk-Forward Validation</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-run-backtest" onclick="runBacktest()">Run Backtest</button>
             </div>
             <div class="card" style="text-align:center">
-                <div class="card-title">ML-Modell trainieren</div>
+                <div class="card-title">ML-Modell trainieren<span class="tip" data-tip="Trainiert das Machine-Learning-'Hirn' des Bots neu mit aktuellen Daten. Es lernt aus historischen Kursen, welche Muster zu Gewinnen fuehrten. Sollte ab und zu gemacht werden, damit das Modell aktuell bleibt.">?</span></div>
                 <div class="card-sub">Gradient Boosting auf historischen Daten</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-train-ml" onclick="trainML()">Train ML Model</button>
             </div>
@@ -346,7 +346,7 @@
 
         <!-- Walk-Forward Comparison -->
         <div class="card" id="bt-walkforward-card" style="display:none">
-            <div class="card-title">Walk-Forward Validation (In-Sample vs Out-of-Sample)</div>
+            <div class="card-title">Walk-Forward Validation (In-Sample vs Out-of-Sample)<span class="tip" data-tip="Ehrlichkeits-Test: Der Bot lernt auf einem Teil der Vergangenheit (In-Sample) und wird dann auf einem unbekannten Teil getestet (Out-of-Sample). Wenn beide aehnlich gut sind, funktioniert die Strategie wirklich. Wenn nur In-Sample gut ist, hat der Bot 'auswendig gelernt' und es klappt im echten Leben nicht.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -359,13 +359,13 @@
 
         <!-- Equity Curve (SVG) -->
         <div class="card" id="bt-equity-card" style="display:none">
-            <div class="card-title">Equity Curve</div>
+            <div class="card-title">Equity Curve<span class="tip" data-tip="Die Kurve zeigt, wie sich dein Kontostand im Backtest ueber die Zeit entwickelt haette. Eine glatte, steigende Kurve ist gut. Tiefe Einbrueche zeigen riskante Phasen.">?</span></div>
             <div id="bt-equity-chart" style="width:100%;overflow-x:auto"></div>
         </div>
 
         <!-- Monthly Returns Heatmap -->
         <div class="card" id="bt-monthly-card" style="display:none">
-            <div class="card-title">Monatliche Renditen (%)</div>
+            <div class="card-title">Monatliche Renditen (%)<span class="tip" data-tip="Heatmap mit dem Gewinn/Verlust pro Monat. Gruen = Plus-Monat, Rot = Minus-Monat. Hilft zu sehen, ob der Bot in bestimmten Jahreszeiten besser oder schlechter laeuft.">?</span></div>
             <div class="table-wrap">
                 <table id="bt-monthly-table" style="font-size:12px"></table>
             </div>
@@ -374,7 +374,7 @@
         <!-- Best / Worst Trades -->
         <div class="grid-2" id="bt-trades-cards" style="display:none">
             <div class="card">
-                <div class="card-title" style="color:var(--green)">Top 5 Trades</div>
+                <div class="card-title" style="color:var(--green)">Top 5 Trades<span class="tip" data-tip="Die 5 profitabelsten Trades aus dem Backtest. Zeigt welche Assets und Situationen besonders gut funktioniert haben.">?</span></div>
                 <div class="table-wrap">
                     <table>
                         <thead><tr><th>Symbol</th><th>P/L%</th><th>Tage</th><th>Exit</th></tr></thead>
@@ -383,7 +383,7 @@
                 </div>
             </div>
             <div class="card">
-                <div class="card-title" style="color:var(--red)">Worst 5 Trades</div>
+                <div class="card-title" style="color:var(--red)">Worst 5 Trades<span class="tip" data-tip="Die 5 schlechtesten Trades aus dem Backtest. Wichtig zum Lernen: Welche Situationen sollte der Bot in Zukunft vermeiden?">?</span></div>
                 <div class="table-wrap">
                     <table>
                         <thead><tr><th>Symbol</th><th>P/L%</th><th>Tage</th><th>Exit</th></tr></thead>
@@ -395,27 +395,27 @@
 
         <!-- ML Model Info -->
         <div class="card" id="bt-ml-card" style="display:none">
-            <div class="card-title">ML-Modell Status</div>
+            <div class="card-title">ML-Modell Status<span class="tip" data-tip="Das Machine-Learning-Modell ist ein zusaetzliches 'Hirn', das aus Mustern lernt: Welche Kombinationen von Indikatoren fuehrten in der Vergangenheit zu Gewinnen? Es hilft dem Bot bessere Kauf-Entscheidungen zu treffen.">?</span></div>
             <div class="grid-4" id="bt-ml-metrics">
                 <div>
-                    <div class="card-sub">Accuracy</div>
+                    <div class="card-sub">Accuracy<span class="tip" data-tip="Wie oft das Modell insgesamt richtig liegt. 70% = bei 100 Vorhersagen waren 70 korrekt. Achtung: Allein nicht aussagekraeftig — siehe Precision und Recall.">?</span></div>
                     <div class="card-value" style="font-size:18px" id="ml-accuracy">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Precision</div>
+                    <div class="card-sub">Precision<span class="tip" data-tip="Wenn das Modell sagt 'kauf das!' — wie oft hat es Recht? 80% = von 10 Kauf-Empfehlungen waren 8 wirklich gewinnbringend. Hoch = wenige Fehlalarme.">?</span></div>
                     <div class="card-value" style="font-size:18px" id="ml-precision">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Recall</div>
+                    <div class="card-sub">Recall<span class="tip" data-tip="Von allen wirklich guten Chancen — wie viele hat das Modell erkannt? 60% = es hat 6 von 10 echten Gewinn-Chancen gefunden. Hoch = verpasst wenig.">?</span></div>
                     <div class="card-value" style="font-size:18px" id="ml-recall">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">F1 Score</div>
+                    <div class="card-sub">F1 Score<span class="tip" data-tip="Kombinierte Note aus Precision und Recall (0 bis 1). Ueber 0.7 = solides Modell, ueber 0.8 = sehr gut. Eine einzige Zahl die zeigt 'wie gut ist das Modell wirklich'.">?</span></div>
                     <div class="card-value" style="font-size:18px" id="ml-f1">--</div>
                 </div>
             </div>
             <div style="margin-top:16px">
-                <div class="card-sub" style="font-weight:bold;margin-bottom:8px">Feature Importances</div>
+                <div class="card-sub" style="font-weight:bold;margin-bottom:8px">Feature Importances<span class="tip" data-tip="Zeigt welche Daten dem Modell am wichtigsten sind fuer seine Entscheidungen (z.B. Trend-Staerke, Volumen, RSI). Lange Balken = sehr wichtig fuer die Vorhersage.">?</span></div>
                 <div id="ml-features-chart" style="width:100%"></div>
             </div>
             <div class="card-sub" style="margin-top:8px;font-size:11px" id="ml-trained-at">--</div>
@@ -423,7 +423,7 @@
 
         <!-- Optimizer Section -->
         <div class="card" style="border-color:var(--orange)">
-            <div class="card-title" style="color:var(--orange)">Self-Improvement Optimizer</div>
+            <div class="card-title" style="color:var(--orange)">Self-Improvement Optimizer<span class="tip" data-tip="Der Selbst-Verbesserer: Laeuft jeden Sonntag automatisch und probiert hunderte Parameter-Kombinationen durch, um die beste Strategie fuer die aktuelle Marktlage zu finden. Aenderungen werden nur uebernommen wenn sie auch bei unbekannten Daten funktionieren.">?</span></div>
             <div class="card-sub" style="margin-bottom:12px">Automatische Parameter-Optimierung (woechentlich Sonntag 02:00)</div>
             <div class="grid-3">
                 <button class="btn btn-primary" id="btn-run-optimizer" onclick="runOptimizer()" style="background:var(--orange)">Optimizer starten</button>
@@ -433,29 +433,29 @@
         </div>
 
         <div class="card" id="opt-status-card" style="display:none">
-            <div class="card-title">Letzter Optimierungslauf</div>
+            <div class="card-title">Letzter Optimierungslauf<span class="tip" data-tip="Ergebnisse vom letzten automatischen Sonntags-Lauf des Optimizers.">?</span></div>
             <div class="grid-4" id="opt-metrics">
                 <div>
-                    <div class="card-sub">Aktion</div>
+                    <div class="card-sub">Aktion<span class="tip" data-tip="Was der Optimizer entschieden hat: 'applied' = neue Einstellungen wurden uebernommen, 'no_change' = die alten waren noch besser, 'rejected' = neue Vorschlaege haben den Sicherheits-Test nicht bestanden.">?</span></div>
                     <div class="card-value" style="font-size:16px" id="opt-action">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Zeitpunkt</div>
+                    <div class="card-sub">Zeitpunkt<span class="tip" data-tip="Wann der Optimizer zuletzt gelaufen ist.">?</span></div>
                     <div class="card-value" style="font-size:14px" id="opt-time">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Getestete Kombis</div>
+                    <div class="card-sub">Getestete Kombis<span class="tip" data-tip="Wie viele unterschiedliche Parameter-Kombinationen der Optimizer durchprobiert hat (z.B. Stop-Loss von -3% bis -8% in Schritten von 0.5%).">?</span></div>
                     <div class="card-value" style="font-size:16px" id="opt-tested">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Bester OOS Sharpe</div>
+                    <div class="card-sub">Bester OOS Sharpe<span class="tip" data-tip="Die beste risiko-bereinigte Rendite, die der Optimizer auf unbekannten Daten (Out-of-Sample) erreicht hat. Ueber 1 = gut, ueber 2 = sehr gut.">?</span></div>
                     <div class="card-value" style="font-size:16px" id="opt-sharpe">--</div>
                 </div>
             </div>
         </div>
 
         <div class="card" id="opt-changes-card" style="display:none">
-            <div class="card-title">Parameter-Aenderungen</div>
+            <div class="card-title">Parameter-Aenderungen<span class="tip" data-tip="Zeigt welche Einstellungen vom Optimizer geaendert wurden und wie. So siehst du genau, was sich an der Strategie geaendert hat.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead><tr><th>Parameter</th><th>Vorher</th><th>Nachher</th></tr></thead>
@@ -465,7 +465,7 @@
         </div>
 
         <div class="card" id="opt-history-card" style="display:none">
-            <div class="card-title">Optimierungs-Historie</div>
+            <div class="card-title">Optimierungs-Historie<span class="tip" data-tip="Liste aller bisherigen Optimizer-Laeufe mit Datum und was geaendert wurde. Hilft beim Nachvollziehen wie sich die Strategie im Laufe der Zeit entwickelt hat.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead><tr><th>Datum</th><th>Aktion</th><th>Aenderungen</th></tr></thead>
