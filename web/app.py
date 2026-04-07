@@ -855,7 +855,8 @@ async def api_admin_gist_history(user=Depends(require_auth)):
     for entry in history[:30]:
         sha = entry.get("version")
         committed_at = entry.get("committed_at")
-        row = {"sha": sha[:10] if sha else None, "committed_at": committed_at,
+        row = {"sha": sha, "sha_short": sha[:10] if sha else None,
+               "committed_at": committed_at,
                "total_runs": None, "regime": None, "error": None}
         try:
             r = requests.get(
