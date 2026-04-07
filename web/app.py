@@ -736,6 +736,174 @@ async def api_rollback(user=Depends(require_auth)):
 
 
 # ============================================================
+# ADMIN: GIST INSPECT / FORCE RESTORE (Emergency Recovery)
+# ============================================================
+
+def _gist_inspect_raw():
+    """Lade Gist-Inhalt und gib rohes dict der Dateien zurueck."""
+    import json
+    from app.persistence import _find_backup_gist, _get_token, _headers, GITHUB_API
+    import requests
+
+    token = _get_token()
+    if not token:
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN nicht gesetzt")
+
+    gist_id = _find_backup_gist(token)
+    if not gist_id:
+        raise HTTPException(status_code=404, detail="Kein Backup-Gist gefunden")
+
+    resp = requests.get(
+        f"{GITHUB_API}/gists/{gist_id}",
+        headers=_headers(token),
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gist-Fetch fehlgeschlagen: HTTP {resp.status_code}",
+        )
+    return gist_id, resp.json()
+
+
+@app.get("/api/admin/gist-inspect")
+async def api_admin_gist_inspect(user=Depends(require_auth)):
+    """
+    Zeige Metadaten des GitHub-Gist-Backups ohne etwas zu schreiben.
+    Fuer Notfall-Diagnose (z.B. Brain-Reset nach OOM).
+    """
+    import json
+    from app.config_manager import load_json
+
+    gist_id, gist_data = _gist_inspect_raw()
+    files = gist_data.get("files", {})
+
+    out = {
+        "gist_id": gist_id[:8] + "...",
+        "updated_at": gist_data.get("updated_at"),
+        "files": {},
+        "local": {},
+    }
+
+    # Gist brain_state
+    brain_file = files.get("brain_state.json")
+    if brain_file:
+        try:
+            brain = json.loads(brain_file.get("content", "{}"))
+            out["files"]["brain_state.json"] = {
+                "size": brain_file.get("size"),
+                "total_runs": brain.get("total_runs"),
+                "regime": brain.get("regime"),
+                "winning_trades": brain.get("winning_trades"),
+                "losing_trades": brain.get("losing_trades"),
+                "total_pnl": brain.get("total_pnl"),
+                "instruments_learned": len(brain.get("instruments", {})),
+                "snapshots": len(brain.get("performance_snapshots", [])),
+            }
+        except Exception as e:
+            out["files"]["brain_state.json"] = {"error": str(e)}
+
+    # Meta
+    meta_file = files.get("_backup_meta.json")
+    if meta_file:
+        try:
+            out["backup_meta"] = json.loads(meta_file.get("content", "{}"))
+        except Exception:
+            pass
+
+    # Local brain_state fuer Vergleich
+    local_brain = load_json("brain_state.json") or {}
+    out["local"]["brain_state.json"] = {
+        "total_runs": local_brain.get("total_runs"),
+        "regime": local_brain.get("regime"),
+        "winning_trades": local_brain.get("winning_trades"),
+        "losing_trades": local_brain.get("losing_trades"),
+        "instruments_learned": len(local_brain.get("instruments", {})),
+    }
+
+    # Liste aller Dateien im Gist
+    out["all_files"] = sorted(files.keys())
+
+    return out
+
+
+@app.post("/api/admin/force-restore-brain")
+async def api_admin_force_restore_brain(
+    confirm: str = "",
+    files: str = "brain_state.json",
+    user=Depends(require_auth),
+):
+    """
+    NOTFALL: Erzwinge Restore einzelner Dateien aus dem GitHub-Gist,
+    OHNE die is_empty-Pruefung. Ueberschreibt lokale Dateien.
+
+    Params:
+      confirm=YES_OVERWRITE  (Pflicht)
+      files=comma,separated,list  (default: brain_state.json)
+    """
+    import json
+    from app.config_manager import save_json, load_json
+
+    if confirm != "YES_OVERWRITE":
+        raise HTTPException(
+            status_code=400,
+            detail="Sicherheitsabfrage: ?confirm=YES_OVERWRITE noetig",
+        )
+
+    target_files = [f.strip() for f in files.split(",") if f.strip()]
+    if not target_files:
+        raise HTTPException(status_code=400, detail="Keine Dateien angegeben")
+
+    gist_id, gist_data = _gist_inspect_raw()
+    gist_files = gist_data.get("files", {})
+
+    restored = []
+    skipped = []
+    errors = []
+
+    for filename in target_files:
+        if filename not in gist_files:
+            skipped.append({"file": filename, "reason": "nicht im Gist"})
+            continue
+        content = gist_files[filename].get("content", "")
+        if not content:
+            skipped.append({"file": filename, "reason": "leerer Inhalt"})
+            continue
+        try:
+            data = json.loads(content)
+            # Sicherheits-Snapshot des alten lokalen Zustands
+            old_local = load_json(filename)
+            save_json(filename, data)
+            entry = {"file": filename}
+            if isinstance(data, dict):
+                entry["restored_total_runs"] = data.get("total_runs")
+                entry["restored_regime"] = data.get("regime")
+            if isinstance(old_local, dict):
+                entry["old_total_runs"] = old_local.get("total_runs")
+            restored.append(entry)
+        except Exception as e:
+            errors.append({"file": filename, "error": str(e)})
+
+    try:
+        from web.security import log_audit
+        await log_audit(
+            user,
+            "ADMIN_FORCE_RESTORE_BRAIN",
+            f"restored={[r['file'] for r in restored]} skipped={skipped} errors={errors}",
+        )
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "gist_id": gist_id[:8] + "...",
+        "restored": restored,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+# ============================================================
 # PDF REPORTS
 # ============================================================
 
