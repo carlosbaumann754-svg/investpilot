@@ -369,6 +369,15 @@ def rollback_optimization():
     save_json("optimization_history.json", history)
 
     log.warning(f"ROLLBACK: Parameter zurueckgesetzt auf {old_params}")
+
+    # CRITICAL: Backup nach Rollback damit die Ruecksetzung persistiert
+    try:
+        from app.persistence import backup_to_cloud
+        backup_to_cloud()
+        log.info("Cloud-Backup nach Rollback erfolgreich")
+    except Exception as e:
+        log.warning(f"Cloud-Backup nach Rollback fehlgeschlagen: {e}")
+
     return True, f"Rollback erfolgreich auf {old_params}"
 
 
@@ -571,6 +580,16 @@ def run_weekly_optimization():
         for key, val in changes_made.items():
             log.info(f"  {key}: {val['old']} -> {val['new']}")
     log.info("=" * 55)
+
+    # CRITICAL: Sofortiges Cloud-Backup nach Optimizer-Lauf.
+    # Verhindert Datenverlust falls Container vor dem naechsten
+    # Trading-Zyklus neu startet (Render Free Tier spin-down).
+    try:
+        from app.persistence import backup_to_cloud
+        backup_to_cloud()
+        log.info("Cloud-Backup nach Optimizer-Lauf erfolgreich")
+    except Exception as e:
+        log.warning(f"Cloud-Backup nach Optimizer fehlgeschlagen: {e}")
 
     # Telegram: Optimizer-Ergebnis senden
     try:
