@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from pydantic import BaseModel, validator
 from typing import Optional
 
@@ -42,6 +42,49 @@ app.middleware("http")(security_middleware)
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ============================================================
+# CACHE-BUSTING fuer statische Assets
+# ============================================================
+# Version-Token wird einmal beim App-Start berechnet und an /static/app.js
+# + /static/style.css im HTML angehaengt. Nach einem Deploy aendert sich der
+# Token → Browser holt die neue Datei, ohne dass der User hart neu laden muss.
+def _compute_static_version() -> str:
+    # Bevorzugt: Git-SHA von Render (automatisch gesetzt)
+    sha = os.environ.get("RENDER_GIT_COMMIT")
+    if sha:
+        return sha[:12]
+    # Fallback: max mtime von app.js + style.css (aendert sich bei jedem Deploy)
+    try:
+        tokens = []
+        for name in ("app.js", "style.css"):
+            p = STATIC_DIR / name
+            if p.exists():
+                tokens.append(str(int(p.stat().st_mtime)))
+        return "-".join(tokens) if tokens else "dev"
+    except Exception:
+        return "dev"
+
+
+_STATIC_VERSION = _compute_static_version()
+
+
+def _render_html_with_version(filename: str) -> HTMLResponse:
+    """Liest ein HTML-Template und haengt ?v=<version> an app.js/style.css.
+
+    Verhindert Browser-Cache-Probleme nach Deploys — der User sieht
+    automatisch die neue Version ohne Hard-Reload.
+    """
+    path = STATIC_DIR / filename
+    try:
+        html = path.read_text(encoding="utf-8")
+    except Exception as e:
+        log.error(f"HTML read error {filename}: {e}")
+        return HTMLResponse("<h1>Error loading page</h1>", status_code=500)
+    html = html.replace("/static/app.js", f"/static/app.js?v={_STATIC_VERSION}")
+    html = html.replace("/static/style.css", f"/static/style.css?v={_STATIC_VERSION}")
+    return HTMLResponse(content=html)
 
 
 # ============================================================
@@ -238,11 +281,11 @@ async def two_factor_disable(req: TwoFactorDisableRequest, user=Depends(require_
 
 @app.get("/")
 async def root():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return _render_html_with_version("index.html")
 
 @app.get("/login")
 async def login_page():
-    return FileResponse(str(STATIC_DIR / "login.html"))
+    return _render_html_with_version("login.html")
 
 
 # ============================================================
