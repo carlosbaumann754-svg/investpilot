@@ -280,8 +280,14 @@ def train_model(histories, train_pct=0.8):
         log.warning(f"Zu wenig Trainingsdaten: {len(all_features)} Samples")
         return {"error": f"Zu wenig Daten ({len(all_features)} Samples, min. 200)"}
 
-    X = np.array(all_features)
+    X = np.array(all_features, dtype=float)
     y = np.array(all_labels)
+
+    # Sanitize NaN/Inf (can arise from flat windows, division by zero in ATR/ADX/OBV/VWAP)
+    nan_count = int(np.isnan(X).sum()) + int(np.isinf(X).sum())
+    if nan_count > 0:
+        log.warning(f"ML Training: {nan_count} NaN/Inf in features sanitized")
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Train/test split
     split = int(len(X) * train_pct)
@@ -518,7 +524,9 @@ def predict_score(features_dict):
         row = [features_dict.get(f, defaults.get(f, 0)) for f in FEATURE_NAMES]
 
     try:
-        proba = _model.predict_proba(np.array([row]))[0]
+        X_row = np.array([row], dtype=float)
+        X_row = np.nan_to_num(X_row, nan=0.0, posinf=0.0, neginf=0.0)
+        proba = _model.predict_proba(X_row)[0]
         return float(proba[1]) if len(proba) == 2 else 0.5
     except Exception as e:
         log.warning(f"predict_score Fehler: {e}")
@@ -608,8 +616,14 @@ def train_from_trade_history(trade_history=None):
         pnl = t.get("pnl_net_pct", t.get("pnl_pct", 0))
         y_labels.append(1 if pnl > 0 else 0)
 
-    X = np.array(X_rows)
+    X = np.array(X_rows, dtype=float)
     y = np.array(y_labels)
+
+    # Sanitize NaN/Inf
+    nan_count = int(np.isnan(X).sum()) + int(np.isinf(X).sum())
+    if nan_count > 0:
+        log.warning(f"Trade-History Training: {nan_count} NaN/Inf sanitized")
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Train/test split (chronological)
     split = int(len(X) * 0.8)
