@@ -66,10 +66,43 @@ def create_token(username: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def decode_token(token: str) -> dict:
-    """Decode und validiere JWT Token."""
+def create_partial_token(username: str) -> str:
+    """Kurzlebiger Token (5min) fuer 2FA-Zwischenschritt.
+
+    Marker: pending_2fa=True. Wird vom 2FA-Verify-Endpoint gegen
+    einen vollen Token ausgetauscht.
+    """
+    expire = datetime.utcnow() + timedelta(minutes=5)
+    payload = {
+        "sub": username,
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "pending_2fa": True,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def decode_partial_token(token: str) -> dict:
+    """Decode + erfordert pending_2fa=True. Returns payload oder None."""
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if not payload.get("pending_2fa"):
+            return None
+        return payload
+    except JWTError:
+        return None
+
+
+def decode_token(token: str) -> dict:
+    """Decode und validiere JWT Token.
+
+    Lehnt pending_2fa-Token ab — die sind nur fuer den
+    /api/auth/verify-2fa Endpoint gueltig.
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("pending_2fa"):
+            return None  # Halb-Login-Token nicht als Vollzugriff akzeptieren
         return payload
     except JWTError:
         return None

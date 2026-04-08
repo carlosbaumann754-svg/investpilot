@@ -577,3 +577,26 @@ tr:hover {
 @media (max-width: 600px) {
     .pnl-periods-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Benchmark-Cell: drei kleine Zeilen (Bot / SPY / Alpha) */
+.bench-cell-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    line-height: 1.3;
+    padding: 1px 0;
+}
+.bench-cell-row .bench-label {
+    color: var(--text-dim);
+    font-weight: 500;
+}
+.bench-cell-row .bench-value {
+    font-weight: 700;
+}
+.bench-cell-row.bench-alpha {
+    margin-top: 3px;
+    padding-top: 3px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+}

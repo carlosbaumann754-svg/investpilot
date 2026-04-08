@@ -68,6 +68,15 @@
             <div class="card-sub" id="pnl-periods-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
+        <!-- Bot vs. Markt (Benchmark) -->
+        <div class="card">
+            <div class="card-title">Bot vs. Markt (S&amp;P 500)<span class="tip" data-tip="Vergleicht deine Performance mit dem S&amp;P 500 (SPY). Wenn der Bot besser ist als einfach den ETF zu kaufen, hat er positives 'Alpha' (gruen). Ist er schlechter, haettest du mit Buy-and-Hold mehr verdient (rot). Das ist die wichtigste Kennzahl fuer einen aktiven Bot.">?</span></div>
+            <div class="pnl-periods-grid" id="benchmark-grid">
+                <div class="pnl-period-cell"><div class="pnl-label">--</div></div>
+            </div>
+            <div class="card-sub" id="benchmark-meta" style="margin-top:8px;font-size:11px;">--</div>
+        </div>
+
         <div class="grid-2">
             <div class="card">
                 <div class="card-title">Brain Status<span class="tip" data-tip="Was der Bot gerade ueber den Markt denkt: Bull (steigend), Bear (fallend) oder Sideways (seitwaerts). Daraus leitet er ab, ob er aggressiv kaufen oder vorsichtig sein soll.">?</span></div>
@@ -527,6 +536,62 @@
         <div class="card">
             <div class="card-title">Portfolio-Allokation<span class="tip" data-tip="Hier legst du fest, welchen Anteil deines Geldes der Bot auf welche Asset-Klasse verteilen darf (z.B. 40% Aktien, 30% ETFs, 20% Krypto, 10% Cash).">?</span></div>
             <div id="allocation-editor"></div>
+        </div>
+
+        <!-- 2FA Setup -->
+        <div class="card">
+            <div class="card-title">Zwei-Faktor-Authentifizierung (2FA)<span class="tip" data-tip="Zusaetzlicher Login-Schutz: Nach Username/Passwort musst du noch einen 6-stelligen Code aus einer Authenticator-App (Google Authenticator, Authy, 1Password) eingeben. Selbst wenn jemand dein Passwort kennt, kommt er ohne dein Handy nicht rein.">?</span></div>
+            <div id="twofa-status" class="card-sub" style="margin-bottom:12px;">Lade Status...</div>
+
+            <!-- Aus-Zustand: Setup-Button -->
+            <div id="twofa-setup-section" style="display:none;">
+                <button class="btn btn-primary" style="width:100%;" onclick="start2FASetup()">2FA aktivieren</button>
+            </div>
+
+            <!-- Setup-Flow: QR + Recovery + Confirm -->
+            <div id="twofa-setup-wizard" style="display:none;">
+                <div class="card-sub" style="margin-bottom:8px;">
+                    <strong>Schritt 1:</strong> Scanne diesen QR-Code mit deiner Authenticator-App
+                    (Google Authenticator, Authy, Microsoft Authenticator, 1Password ...).
+                </div>
+                <div id="twofa-qr-container" style="background:#fff;padding:12px;border-radius:8px;text-align:center;margin-bottom:12px;">
+                    <img id="twofa-qr-img" alt="QR Code" style="max-width:200px;width:100%;">
+                </div>
+                <div class="card-sub" style="margin-bottom:8px;font-size:11px;">
+                    Manuell eingeben falls QR nicht funktioniert:
+                    <code id="twofa-secret" style="display:block;background:var(--bg-input);padding:8px;border-radius:6px;margin-top:4px;font-size:13px;letter-spacing:2px;text-align:center;word-break:break-all;">--</code>
+                </div>
+
+                <div class="card-sub" style="margin:16px 0 8px;">
+                    <strong style="color:var(--orange);">Schritt 2:</strong> Notiere dir diese Recovery-Codes an einem sicheren Ort
+                    (Passwort-Manager, ausgedruckt im Tresor). Wenn du dein Handy verlierst, sind das die
+                    einzigen Codes mit denen du dich noch einloggen kannst. <strong>Sie werden nur jetzt einmal angezeigt.</strong>
+                </div>
+                <div id="twofa-recovery-codes" style="background:var(--bg-input);padding:12px;border-radius:8px;font-family:monospace;font-size:13px;line-height:1.8;text-align:center;margin-bottom:12px;"></div>
+
+                <div class="card-sub" style="margin:16px 0 8px;">
+                    <strong>Schritt 3:</strong> Gib den aktuellen 6-stelligen Code aus deiner App ein, um zu bestaetigen dass alles funktioniert:
+                </div>
+                <div class="form-group">
+                    <input type="text" id="twofa-confirm-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                           placeholder="123456" style="font-size:20px;text-align:center;letter-spacing:4px;">
+                </div>
+                <button class="btn btn-primary" style="width:100%;" onclick="confirm2FASetup()">2FA einschalten</button>
+                <button class="btn btn-secondary" style="width:100%;margin-top:8px;" onclick="cancel2FASetup()">Abbrechen</button>
+            </div>
+
+            <!-- An-Zustand: Disable-Form -->
+            <div id="twofa-disable-section" style="display:none;">
+                <div class="card-sub" style="margin-bottom:8px;color:var(--green);">
+                    ✓ 2FA ist aktiv. Recovery-Codes verbleibend: <span id="twofa-recovery-remaining">--</span>
+                </div>
+                <div class="form-group" style="margin-top:12px;">
+                    <label>Aktuellen TOTP-Code zum Deaktivieren eingeben:</label>
+                    <input type="text" id="twofa-disable-code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                           placeholder="123456" style="font-size:18px;text-align:center;letter-spacing:4px;">
+                </div>
+                <button class="btn btn-danger" style="width:100%;" onclick="disable2FA()">2FA deaktivieren</button>
+            </div>
         </div>
 
         <div class="card" style="margin-top:20px">

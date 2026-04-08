@@ -11,6 +11,8 @@
         <div class="login-box">
             <h2>InvestPilot</h2>
             <div id="login-error" class="login-error"></div>
+
+            <!-- Stage 1: Username + Password -->
             <form id="login-form">
                 <div class="form-group">
                     <label>Username</label>
@@ -22,14 +24,62 @@
                 </div>
                 <button type="submit" class="btn btn-primary">Login</button>
             </form>
+
+            <!-- Stage 2: 2FA-Code -->
+            <form id="totp-form" style="display:none;">
+                <div class="form-group">
+                    <label id="totp-label">6-stelliger Code aus deiner Authenticator-App</label>
+                    <input type="text" id="totp-code" inputmode="numeric" autocomplete="one-time-code"
+                           pattern="[0-9A-Za-z\-]*" maxlength="12" required
+                           style="font-size:20px;text-align:center;letter-spacing:4px;">
+                </div>
+                <button type="submit" class="btn btn-primary">Bestaetigen</button>
+                <div style="margin-top:12px;text-align:center;font-size:13px;">
+                    <a href="#" id="toggle-recovery" style="color:var(--blue);">Recovery-Code verwenden</a>
+                </div>
+                <div style="margin-top:8px;text-align:center;font-size:13px;">
+                    <a href="#" id="back-to-login" style="color:var(--text-dim);">← Zurueck zum Login</a>
+                </div>
+            </form>
         </div>
     </div>
     <script>
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const errEl = document.getElementById('login-error');
-            errEl.style.display = 'none';
+        const errEl = document.getElementById('login-error');
+        const loginForm = document.getElementById('login-form');
+        const totpForm = document.getElementById('totp-form');
+        const totpInput = document.getElementById('totp-code');
+        const totpLabel = document.getElementById('totp-label');
+        let _partialToken = null;
+        let _isRecovery = false;
 
+        function showErr(msg) {
+            errEl.textContent = msg;
+            errEl.style.display = 'block';
+        }
+
+        function hideErr() {
+            errEl.style.display = 'none';
+        }
+
+        function showStage2() {
+            loginForm.style.display = 'none';
+            totpForm.style.display = 'block';
+            totpInput.value = '';
+            setTimeout(() => totpInput.focus(), 50);
+        }
+
+        function showStage1() {
+            totpForm.style.display = 'none';
+            loginForm.style.display = 'block';
+            _partialToken = null;
+            _isRecovery = false;
+            totpLabel.textContent = '6-stelliger Code aus deiner Authenticator-App';
+            hideErr();
+        }
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideErr();
             try {
                 const res = await fetch('/api/auth/login', {
                     method: 'POST',
@@ -40,17 +90,77 @@
                     })
                 });
                 const data = await res.json();
-                if (res.ok && data.token) {
+                if (!res.ok) {
+                    showErr(data.detail || 'Login fehlgeschlagen');
+                    return;
+                }
+                if (data.requires_2fa && data.partial_token) {
+                    _partialToken = data.partial_token;
+                    showStage2();
+                    return;
+                }
+                if (data.token) {
                     localStorage.setItem('token', data.token);
                     window.location.href = '/';
-                } else {
-                    errEl.textContent = data.detail || 'Login fehlgeschlagen';
-                    errEl.style.display = 'block';
                 }
             } catch (err) {
-                errEl.textContent = 'Verbindungsfehler';
-                errEl.style.display = 'block';
+                showErr('Verbindungsfehler');
             }
+        });
+
+        totpForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideErr();
+            if (!_partialToken) {
+                showStage1();
+                showErr('Sitzung abgelaufen, bitte neu einloggen');
+                return;
+            }
+            try {
+                const res = await fetch('/api/auth/verify-2fa', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        partial_token: _partialToken,
+                        code: totpInput.value.trim(),
+                        is_recovery: _isRecovery,
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    showErr(data.detail || 'Code falsch');
+                    return;
+                }
+                if (data.token) {
+                    localStorage.setItem('token', data.token);
+                    window.location.href = '/';
+                }
+            } catch (err) {
+                showErr('Verbindungsfehler');
+            }
+        });
+
+        document.getElementById('toggle-recovery').addEventListener('click', (e) => {
+            e.preventDefault();
+            _isRecovery = !_isRecovery;
+            if (_isRecovery) {
+                totpLabel.textContent = 'Recovery-Code (XXXX-XXXX)';
+                totpInput.setAttribute('placeholder', 'XXXX-XXXX');
+                totpInput.setAttribute('maxlength', '12');
+                e.target.textContent = 'Doch TOTP-Code verwenden';
+            } else {
+                totpLabel.textContent = '6-stelliger Code aus deiner Authenticator-App';
+                totpInput.removeAttribute('placeholder');
+                totpInput.setAttribute('maxlength', '6');
+                e.target.textContent = 'Recovery-Code verwenden';
+            }
+            totpInput.value = '';
+            totpInput.focus();
+        });
+
+        document.getElementById('back-to-login').addEventListener('click', (e) => {
+            e.preventDefault();
+            showStage1();
         });
 
         // Redirect wenn bereits eingeloggt

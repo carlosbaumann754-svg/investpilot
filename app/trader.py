@@ -712,10 +712,17 @@ def execute_scanner_trades(client, config, scan_results):
     use_ml = dt_config.get("use_ml_scoring", False)
     if use_ml:
         try:
-            from app.ml_scorer import is_model_trained, predict_score, load_persisted_model
+            from app.ml_scorer import (
+                is_model_trained, predict_score, load_persisted_model,
+                get_tuned_threshold,
+            )
             if not is_model_trained():
                 load_persisted_model()
             if is_model_trained():
+                # Option B: Bonus/Malus um den F1-getunten Threshold zentrieren
+                # (statt um fixe 0.5), damit der sichere Default des Trainings
+                # auch die Buy-Entscheidung kalibriert.
+                ml_threshold = get_tuned_threshold()
                 for cand in buy_candidates:
                     analysis = cand.get("analysis", {})
                     ml_prob = predict_score({
@@ -730,14 +737,15 @@ def execute_scanner_trades(client, config, scan_results):
                     })
                     if ml_prob is not None:
                         original = cand["score"]
-                        # Additive Anpassung: ml_prob=0.5 ist neutral (kein Effekt),
-                        # ml_prob=0.8 gibt +15 Bonus, ml_prob=0.2 gibt -15 Malus.
-                        # Verhindert systematische Score-Reduktion durch Multiplikation.
-                        ml_bonus = round((ml_prob - 0.5) * 50, 1)
+                        # Additive Anpassung um den tuned Threshold:
+                        # prob == threshold -> 0 Bonus (neutral)
+                        # prob == threshold+0.3 -> +15 Bonus
+                        # prob == threshold-0.3 -> -15 Malus
+                        ml_bonus = round((ml_prob - ml_threshold) * 50, 1)
                         cand["score"] = round(original + ml_bonus, 1)
                         log.info(f"  ML Score: {cand['symbol']} "
                                  f"{original:.1f} + {ml_bonus:+.1f} = {cand['score']:.1f} "
-                                 f"(prob={ml_prob:.2f})")
+                                 f"(prob={ml_prob:.2f}, t={ml_threshold:.2f})")
                 # Re-sort and re-filter after ML adjustment
                 buy_candidates = [c for c in buy_candidates if c["score"] >= min_score]
                 buy_candidates.sort(key=lambda x: x["score"], reverse=True)

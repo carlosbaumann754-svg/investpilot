@@ -24,8 +24,12 @@ from web.data_access import (
     set_trading_enabled, read_log_tail
 )
 
-from web.auth import authenticate_user
+from web.auth import (
+    authenticate_user, create_partial_token, decode_partial_token,
+    create_token, verify_password,
+)
 from web.security import security_middleware, record_failed_login, log_audit as _log_audit
+from web import auth_2fa
 
 log = logging.getLogger("WebApp")
 
@@ -114,18 +118,118 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class TwoFactorVerifyRequest(BaseModel):
+    partial_token: str
+    code: str
+    is_recovery: bool = False
+
+class TwoFactorConfirmRequest(BaseModel):
+    code: str
+
+class TwoFactorDisableRequest(BaseModel):
+    code: str
+
+
 @app.post("/api/auth/login")
 async def login(req: LoginRequest, request: Request):
-    """Login mit Username/Password, gibt JWT Token zurueck."""
-    ip = request.client.host if request.client else "unknown"
-    token = authenticate_user(req.username, req.password)
+    """Login Stufe 1: Username/Password.
 
-    if not token:
+    - Wenn 2FA aus: voller JWT-Token zurueck.
+    - Wenn 2FA an: partial_token + requires_2fa=True. Client muss
+      dann /api/auth/verify-2fa mit dem TOTP-Code aufrufen.
+    """
+    ip = request.client.host if request.client else "unknown"
+
+    # Erst Username/Password pruefen (nutzt verify_password + Username-Check)
+    from web.auth import DASHBOARD_USERNAME
+    if req.username != DASHBOARD_USERNAME or not verify_password(req.password):
         record_failed_login(ip, req.username)
         raise HTTPException(status_code=401, detail="Falscher Username oder Passwort")
 
+    # 2FA-Status pruefen
+    if auth_2fa.is_enabled():
+        partial = create_partial_token(req.username)
+        await _log_audit(req.username, "LOGIN_STAGE1_OK", f"Stage1 von {ip}, 2FA erforderlich", "INFO", ip)
+        return {
+            "requires_2fa": True,
+            "partial_token": partial,
+            "username": req.username,
+        }
+
+    # Kein 2FA — direkt vollen Token ausstellen
+    full_token = create_token(req.username)
     await _log_audit(req.username, "LOGIN_SUCCESS", f"Login von {ip}", "INFO", ip)
-    return {"token": token, "username": req.username}
+    return {"token": full_token, "username": req.username}
+
+
+@app.post("/api/auth/verify-2fa")
+async def verify_2fa(req: TwoFactorVerifyRequest, request: Request):
+    """Login Stufe 2: TOTP-Code (oder Recovery-Code) verifizieren.
+
+    Tauscht partial_token + Code gegen vollen JWT-Token.
+    """
+    ip = request.client.host if request.client else "unknown"
+
+    payload = decode_partial_token(req.partial_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Partial-Token ungueltig oder abgelaufen")
+
+    username = payload.get("sub", "")
+    if not username:
+        raise HTTPException(status_code=401, detail="Token ohne Benutzer")
+
+    if req.is_recovery:
+        ok = auth_2fa.verify_recovery_code(req.code)
+        action = "LOGIN_2FA_RECOVERY"
+    else:
+        ok = auth_2fa.verify_totp(req.code)
+        action = "LOGIN_2FA_TOTP"
+
+    if not ok:
+        record_failed_login(ip, username)
+        await _log_audit(username, "LOGIN_2FA_FAIL", f"2FA fehlgeschlagen von {ip}", "WARNING", ip)
+        raise HTTPException(status_code=401, detail="Falscher Code")
+
+    full_token = create_token(username)
+    await _log_audit(username, action, f"2FA OK von {ip}", "INFO", ip)
+    return {"token": full_token, "username": username}
+
+
+@app.get("/api/auth/2fa/status")
+async def two_factor_status(user=Depends(require_auth)):
+    """Aktueller 2FA-Status fuer den Settings-Tab."""
+    return auth_2fa.get_status()
+
+
+@app.post("/api/auth/2fa/setup")
+async def two_factor_setup_start(user=Depends(require_auth)):
+    """Startet Setup-Flow: erzeugt Secret + QR + Recovery-Codes.
+
+    Diese Daten werden NUR EINMAL zurueckgegeben — nach diesem Call
+    muss der User sie scannen/notieren. Setup ist erst nach
+    /api/auth/2fa/setup/confirm aktiv.
+    """
+    if auth_2fa.is_enabled():
+        raise HTTPException(status_code=400, detail="2FA ist bereits aktiviert. Erst deaktivieren um neu einzurichten.")
+    return auth_2fa.begin_setup(user)
+
+
+@app.post("/api/auth/2fa/setup/confirm")
+async def two_factor_setup_confirm(req: TwoFactorConfirmRequest, user=Depends(require_auth)):
+    """Bestaetigt Setup mit erstem TOTP-Code aus der Authenticator-App."""
+    if auth_2fa.confirm_setup(req.code):
+        await _log_audit(user, "2FA_ENABLED", "2FA erfolgreich eingerichtet", "INFO", "")
+        return {"ok": True}
+    raise HTTPException(status_code=400, detail="Falscher Code — bitte aus der Authenticator-App neu eingeben")
+
+
+@app.post("/api/auth/2fa/disable")
+async def two_factor_disable(req: TwoFactorDisableRequest, user=Depends(require_auth)):
+    """Deaktiviert 2FA. Erfordert gueltigen TOTP-Code zur Bestaetigung."""
+    if auth_2fa.disable(req.code):
+        await _log_audit(user, "2FA_DISABLED", "2FA deaktiviert", "WARNING", "")
+        return {"ok": True}
+    raise HTTPException(status_code=400, detail="Falscher Code")
 
 
 # ============================================================
@@ -176,6 +280,129 @@ async def api_portfolio(user=Depends(require_auth)):
     except Exception as e:
         log.error(f"Portfolio API Error: {e}")
         return {"error": str(e)}
+
+
+# ============================================================
+# BENCHMARK (SPY S&P 500) — In-Memory Cache mit 1h TTL
+# ============================================================
+_BENCHMARK_CACHE: dict = {"data": None, "ts": 0.0}
+
+
+def _fetch_spy_closes(years: int = 5):
+    """Holt SPY-Tagesschlusskurse via yfinance, gecached fuer 1h.
+
+    Returns:
+        dict {date: close_price} oder None bei Fehler.
+    """
+    import time as _time
+    now_ts = _time.time()
+    if _BENCHMARK_CACHE["data"] and (now_ts - _BENCHMARK_CACHE["ts"] < 3600):
+        return _BENCHMARK_CACHE["data"]
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker("SPY")
+        hist = ticker.history(period=f"{years}y", interval="1d")
+        if hist.empty:
+            return None
+        closes = {}
+        for date_idx, row in hist.iterrows():
+            d = date_idx.to_pydatetime().replace(tzinfo=None).date()
+            closes[d] = float(row["Close"])
+        _BENCHMARK_CACHE["data"] = closes
+        _BENCHMARK_CACHE["ts"] = now_ts
+        log.info(f"SPY-Cache aktualisiert: {len(closes)} Tage")
+        return closes
+    except Exception as e:
+        log.warning(f"SPY-Fetch fehlgeschlagen: {e}")
+        return None
+
+
+def _spy_return_pct(closes: dict, start_dt, end_dt) -> float | None:
+    """Berechnet SPY-Rendite in % zwischen zwei Daten.
+
+    Findet den naechstgelegenen Handelstag falls das exakte Datum
+    kein Boersentag war (Wochenende, Feiertag).
+    """
+    if not closes:
+        return None
+    sorted_dates = sorted(closes.keys())
+    if not sorted_dates:
+        return None
+
+    def _find_close_on_or_before(target_date):
+        # Binaere Suche waere overkill — wir haben max ~1300 Tage
+        candidate = None
+        for d in sorted_dates:
+            if d <= target_date:
+                candidate = d
+            else:
+                break
+        return candidate
+
+    start_d = start_dt.date() if hasattr(start_dt, "date") else start_dt
+    end_d = end_dt.date() if hasattr(end_dt, "date") else end_dt
+
+    start_key = _find_close_on_or_before(start_d)
+    end_key = _find_close_on_or_before(end_d)
+
+    if start_key is None or end_key is None:
+        return None
+    if start_key == end_key:
+        return 0.0
+
+    start_price = closes[start_key]
+    end_price = closes[end_key]
+    if start_price <= 0:
+        return None
+    return ((end_price - start_price) / start_price) * 100
+
+
+@app.get("/api/benchmark")
+async def api_benchmark(user=Depends(require_auth)):
+    """Liefert SPY-Returns ueber dieselben Zeitfenster wie /api/pnl-periods.
+
+    Das Frontend berechnet Alpha (portfolio_pct - spy_pct) selbst, um
+    Code-Duplikation zu vermeiden.
+    """
+    from datetime import datetime, timedelta
+    try:
+        closes = _fetch_spy_closes(years=5)
+        if not closes:
+            return {"error": "SPY-Daten nicht verfuegbar", "benchmark": "SPY", "periods": []}
+
+        now = datetime.now()
+        windows = [
+            ("1d",   "Heute",        now - timedelta(days=1)),
+            ("7d",   "7 Tage",       now - timedelta(days=7)),
+            ("30d",  "30 Tage",      now - timedelta(days=30)),
+            ("90d",  "3 Monate",     now - timedelta(days=90)),
+            ("180d", "6 Monate",     now - timedelta(days=180)),
+            ("365d", "1 Jahr",       now - timedelta(days=365)),
+            ("ytd",  "Jahresanfang", datetime(now.year, 1, 1)),
+            ("all",  "Gesamt",       now - timedelta(days=365 * 5)),  # max 5y SPY-Cache
+        ]
+
+        periods = []
+        for key, label, start_dt in windows:
+            pct = _spy_return_pct(closes, start_dt, now)
+            periods.append({
+                "key": key,
+                "label": label,
+                "spy_pct": round(pct, 2) if pct is not None else None,
+            })
+
+        # Jueengster Datenpunkt fuer Stale-Check
+        latest = max(closes.keys()) if closes else None
+        return {
+            "benchmark": "SPY",
+            "benchmark_name": "S&P 500 ETF",
+            "periods": periods,
+            "data_points": len(closes),
+            "latest_close_date": latest.isoformat() if latest else None,
+        }
+    except Exception as e:
+        log.error(f"Benchmark Error: {e}")
+        return {"error": str(e), "benchmark": "SPY", "periods": []}
 
 
 @app.get("/api/pnl-periods")

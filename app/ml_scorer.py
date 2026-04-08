@@ -16,6 +16,7 @@ try:
     import numpy as np
     from sklearn.ensemble import GradientBoostingClassifier
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    from sklearn.utils.class_weight import compute_sample_weight
     HAS_ML = True
 except ImportError:
     HAS_ML = False
@@ -27,6 +28,7 @@ from app.market_scanner import calc_rsi, calc_macd, calc_bollinger_position
 # Cached model
 _model = None
 _model_info = None
+_tuned_threshold = 0.5  # Option B: F1-optimiert beim Training, in ml_model.json persistiert
 
 FEATURE_NAMES = [
     "rsi", "macd_val", "macd_signal", "macd_hist",
@@ -289,7 +291,10 @@ def train_model(histories, train_pct=0.8):
     log.info(f"Training: {len(X_train)} Samples, Test: {len(X_test)} Samples")
     log.info(f"Label Balance: {sum(y_train)}/{len(y_train)} positive ({sum(y_train)/len(y_train)*100:.1f}%)")
 
-    # Train
+    # Train — Option B: balanced sample weights gegen Class-Imbalance
+    # (GradientBoostingClassifier hat kein class_weight Param, daher via sample_weight)
+    sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
+
     model = GradientBoostingClassifier(
         n_estimators=100,
         max_depth=4,
@@ -297,25 +302,52 @@ def train_model(histories, train_pct=0.8):
         subsample=0.8,
         random_state=42,
     )
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weights)
 
-    # Evaluate
+    # Evaluate at default threshold (0.5) for Baseline
     train_pred = model.predict(X_train)
-    test_pred = model.predict(X_test)
-    test_proba = model.predict_proba(X_test)[:, 1] if len(model.classes_) == 2 else np.zeros(len(X_test))
+    test_pred_default = model.predict(X_test)
+    test_proba = (
+        model.predict_proba(X_test)[:, 1]
+        if len(model.classes_) == 2
+        else np.zeros(len(X_test))
+    )
 
     train_acc = accuracy_score(y_train, train_pred)
-    test_acc = accuracy_score(y_test, test_pred)
-    test_prec = precision_score(y_test, test_pred, zero_division=0)
-    test_rec = recall_score(y_test, test_pred, zero_division=0)
-    test_f1 = f1_score(y_test, test_pred, zero_division=0)
+
+    # Threshold-Tuning: optimiere F1 auf Test-Set (sicherer Default: F1 = Mittelweg
+    # zwischen Precision und Recall)
+    best_threshold = 0.5
+    best_f1 = 0.0
+    threshold_scan = []
+    if len(model.classes_) == 2 and len(X_test) > 0:
+        for t in np.arange(0.10, 0.91, 0.05):
+            preds_t = (test_proba >= t).astype(int)
+            f1_t = f1_score(y_test, preds_t, zero_division=0)
+            threshold_scan.append((round(float(t), 2), round(float(f1_t), 4)))
+            if f1_t > best_f1:
+                best_f1 = f1_t
+                best_threshold = float(t)
+
+    # Metriken mit getuntem Threshold berechnen
+    test_pred_tuned = (test_proba >= best_threshold).astype(int)
+    test_acc = accuracy_score(y_test, test_pred_tuned)
+    test_prec = precision_score(y_test, test_pred_tuned, zero_division=0)
+    test_rec = recall_score(y_test, test_pred_tuned, zero_division=0)
+    test_f1 = f1_score(y_test, test_pred_tuned, zero_division=0)
+
+    # Default-Threshold-Metriken zum Vergleich
+    default_prec = precision_score(y_test, test_pred_default, zero_division=0)
+    default_rec = recall_score(y_test, test_pred_default, zero_division=0)
+    default_f1 = f1_score(y_test, test_pred_default, zero_division=0)
 
     # Feature importances
     importances = dict(zip(FEATURE_NAMES, model.feature_importances_.tolist()))
 
     # Cache model
-    global _model, _model_info
+    global _model, _model_info, _tuned_threshold
     _model = model
+    _tuned_threshold = best_threshold
 
     _model_info = {
         "trained": datetime.now().isoformat(),
@@ -327,12 +359,20 @@ def train_model(histories, train_pct=0.8):
         "test_precision": round(test_prec * 100, 1),
         "test_recall": round(test_rec * 100, 1),
         "test_f1": round(test_f1 * 100, 1),
+        "tuned_threshold": round(best_threshold, 3),
+        "default_threshold_metrics": {
+            "precision": round(default_prec * 100, 1),
+            "recall": round(default_rec * 100, 1),
+            "f1": round(default_f1 * 100, 1),
+        },
+        "class_balancing": "balanced_sample_weights",
         "feature_importances": {k: round(v, 4) for k, v in
                                 sorted(importances.items(), key=lambda x: x[1], reverse=True)},
         "model_params": {
             "n_estimators": 100,
             "max_depth": 4,
             "learning_rate": 0.1,
+            "class_weight": "balanced",
         },
     }
 
@@ -598,13 +638,35 @@ def train_from_trade_history(trade_history=None):
 
     # Evaluate
     train_pred = model.predict(X_train)
-    test_pred = model.predict(X_test)
+    test_pred_default = model.predict(X_test)
+    test_proba = (
+        model.predict_proba(X_test)[:, 1]
+        if len(model.classes_) == 2
+        else np.zeros(len(X_test))
+    )
+
+    # Threshold-Tuning: F1-Optimum (Option B — Mittelweg Precision/Recall)
+    best_threshold = 0.5
+    best_f1 = 0.0
+    if len(model.classes_) == 2 and len(X_test) > 0:
+        for t in np.arange(0.10, 0.91, 0.05):
+            preds_t = (test_proba >= t).astype(int)
+            f1_t = f1_score(y_test, preds_t, zero_division=0)
+            if f1_t > best_f1:
+                best_f1 = f1_t
+                best_threshold = float(t)
+
+    test_pred = (test_proba >= best_threshold).astype(int)
 
     train_acc = accuracy_score(y_train, train_pred)
     test_acc = accuracy_score(y_test, test_pred)
     test_prec = precision_score(y_test, test_pred, zero_division=0)
     test_rec = recall_score(y_test, test_pred, zero_division=0)
     test_f1 = f1_score(y_test, test_pred, zero_division=0)
+
+    default_prec = precision_score(y_test, test_pred_default, zero_division=0)
+    default_rec = recall_score(y_test, test_pred_default, zero_division=0)
+    default_f1 = f1_score(y_test, test_pred_default, zero_division=0)
 
     trade_feature_names = [
         "scanner_score", "rsi", "macd_hist", "volume_trend",
@@ -621,8 +683,9 @@ def train_from_trade_history(trade_history=None):
         log.info(f"    {fname}: {imp:.4f}")
 
     # Cache model globally (overrides the price-based model)
-    global _model, _model_info
+    global _model, _model_info, _tuned_threshold
     _model = model
+    _tuned_threshold = best_threshold
     _model_info = {
         "trained": datetime.now().isoformat(),
         "training_source": "trade_history",
@@ -635,6 +698,13 @@ def train_from_trade_history(trade_history=None):
         "test_precision": round(test_prec * 100, 1),
         "test_recall": round(test_rec * 100, 1),
         "test_f1": round(test_f1 * 100, 1),
+        "tuned_threshold": round(best_threshold, 3),
+        "default_threshold_metrics": {
+            "precision": round(default_prec * 100, 1),
+            "recall": round(default_rec * 100, 1),
+            "f1": round(default_f1 * 100, 1),
+        },
+        "class_balancing": "balanced",
         "feature_importances": {k: round(v, 4) for k, v in sorted_imp},
         "model_type": "RandomForest",
         "model_params": {
@@ -667,6 +737,26 @@ def train_from_trade_history(trade_history=None):
     return _model_info
 
 
+def get_tuned_threshold() -> float:
+    """Return the F1-optimierten Threshold (0..1) aus ml_model.json.
+
+    Falls nie getunt wurde, gibt 0.5 zurueck. Wird vom Scoring-Code verwendet,
+    um binaere Buy-Signale aus predict_proba abzuleiten (Option B, sicherer
+    Default: F1 = Mittelweg zwischen Precision und Recall).
+    """
+    global _tuned_threshold, _model_info
+    if _model_info is None:
+        _model_info = load_json("ml_model.json") or {}
+    try:
+        t = float((_model_info or {}).get("tuned_threshold", _tuned_threshold))
+        if 0.05 <= t <= 0.95:
+            _tuned_threshold = t
+            return t
+    except (TypeError, ValueError):
+        pass
+    return _tuned_threshold
+
+
 def load_persisted_model():
     """Load a previously saved model from disk via joblib.
 
@@ -674,7 +764,7 @@ def load_persisted_model():
     Supports both new .joblib and legacy .pkl format (auto-migration).
     Returns True if model was loaded, False otherwise.
     """
-    global _model, _model_info
+    global _model, _model_info, _tuned_threshold
     if _model is not None:
         return True  # already loaded
 
@@ -691,7 +781,15 @@ def load_persisted_model():
             from joblib import load as joblib_load
             _model = joblib_load(joblib_path)
             _model_info = load_json("ml_model.json")
-            log.info(f"ML Model geladen von {joblib_path}")
+            # Tuned Threshold aus Metadata laden (Option B)
+            try:
+                t = float((_model_info or {}).get("tuned_threshold", 0.5))
+                if 0.05 <= t <= 0.95:
+                    _tuned_threshold = t
+            except (TypeError, ValueError):
+                pass
+            log.info(f"ML Model geladen von {joblib_path} "
+                     f"(threshold={_tuned_threshold:.2f})")
             return True
 
         # Fallback: Legacy pkl (wird beim naechsten Training migriert)

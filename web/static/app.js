@@ -74,11 +74,56 @@ function fmtTime(iso) {
            ' ' + d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
 }
 
+// === BENCHMARK (Bot vs. SPY) ===
+let _lastPnlPeriods = null; // Cache fuer Alpha-Berechnung
+
+function renderBenchmark(benchData) {
+    const grid = document.getElementById('benchmark-grid');
+    const meta = document.getElementById('benchmark-meta');
+    if (!grid) return;
+
+    if (!benchData || benchData.error || !Array.isArray(benchData.periods)) {
+        grid.innerHTML = '<div class="pnl-period-cell"><div class="pnl-label">Benchmark nicht verfuegbar</div></div>';
+        if (meta) meta.textContent = benchData?.error || 'SPY-Daten konnten nicht geladen werden';
+        return;
+    }
+
+    // Portfolio-Returns aus dem Cache ziehen (gleiche Window-Keys)
+    const portfolioByKey = {};
+    if (_lastPnlPeriods && Array.isArray(_lastPnlPeriods.periods)) {
+        _lastPnlPeriods.periods.forEach(p => { portfolioByKey[p.key] = p.pnl_pct; });
+    }
+
+    grid.innerHTML = benchData.periods.map(p => {
+        const spy = (p.spy_pct == null) ? null : p.spy_pct;
+        const bot = portfolioByKey[p.key];
+        const alpha = (spy != null && bot != null) ? (bot - spy) : null;
+        const alphaCls = alpha == null ? '' : (alpha >= 0 ? 'positive' : 'negative');
+        const botTxt = bot == null ? '--' : fmtPct(bot);
+        const spyTxt = spy == null ? '--' : fmtPct(spy);
+        const alphaTxt = alpha == null ? '--' : fmtPct(alpha);
+        return `
+            <div class="pnl-period-cell" style="text-align:left;">
+                <div class="pnl-label" style="text-align:center;margin-bottom:4px;">${p.label}</div>
+                <div class="bench-cell-row"><span class="bench-label">Bot</span><span class="bench-value ${bot == null ? '' : (bot >= 0 ? 'positive' : 'negative')}">${botTxt}</span></div>
+                <div class="bench-cell-row"><span class="bench-label">SPY</span><span class="bench-value ${spy == null ? '' : (spy >= 0 ? 'positive' : 'negative')}">${spyTxt}</span></div>
+                <div class="bench-cell-row bench-alpha"><span class="bench-label">α</span><span class="bench-value ${alphaCls}">${alphaTxt}</span></div>
+            </div>
+        `;
+    }).join('');
+
+    if (meta) {
+        const stale = benchData.latest_close_date ? `Stand: ${benchData.latest_close_date}` : '';
+        meta.textContent = `α (Alpha) = Bot − SPY. Positiv = Bot schlaegt den Markt. ${stale}`;
+    }
+}
+
 // === P&L MULTI-PERIOD ===
 function renderPnlPeriods(data) {
     const grid = document.getElementById('pnl-periods-grid');
     const meta = document.getElementById('pnl-periods-meta');
     if (!grid || !data || !Array.isArray(data.periods)) return;
+    _lastPnlPeriods = data; // fuer Benchmark-Alpha-Berechnung
 
     grid.innerHTML = data.periods.map(p => {
         const cls = (p.pnl_usd || 0) >= 0 ? 'positive' : 'negative';
@@ -115,7 +160,7 @@ document.addEventListener('click', (e) => {
 // === DASHBOARD ===
 async function loadDashboard() {
     try {
-        const [portfolioRes, brainRes, statusRes, regimeRes, trailRes, sectorRes, pnlPeriodsRes] = await Promise.all([
+        const [portfolioRes, brainRes, statusRes, regimeRes, trailRes, sectorRes, pnlPeriodsRes, benchmarkRes] = await Promise.all([
             apiFetch('/api/portfolio'),
             apiFetch('/api/brain'),
             apiFetch('/api/trading/status'),
@@ -123,14 +168,24 @@ async function loadDashboard() {
             apiFetch('/api/trailing-sl'),
             apiFetch('/api/sectors'),
             apiFetch('/api/pnl-periods'),
+            apiFetch('/api/benchmark'),
         ]);
 
-        // P&L Multi-Period Card
+        // P&L Multi-Period Card (muss VOR Benchmark gerendert werden,
+        // weil Benchmark die Portfolio-Returns aus dem Cache liest)
         if (pnlPeriodsRes) {
             try {
                 const pp = await pnlPeriodsRes.json();
                 renderPnlPeriods(pp);
             } catch(e) { console.error('pnl-periods render:', e); }
+        }
+
+        // Benchmark Card (Bot vs. SPY)
+        if (benchmarkRes) {
+            try {
+                const bench = await benchmarkRes.json();
+                renderBenchmark(bench);
+            } catch(e) { console.error('benchmark render:', e); }
         }
 
         if (portfolioRes) {
@@ -412,6 +467,7 @@ function onStrategyPreset(name) {
 
 // === SETTINGS ===
 async function loadSettings() {
+    load2FAStatus(); // parallel
     const res = await apiFetch('/api/config');
     if (!res) return;
     const cfg = await res.json();
@@ -1135,3 +1191,99 @@ async function askQuestion() {
         }
     }, 30000);
 })();
+
+// === 2FA / TOTP ===
+async function load2FAStatus() {
+    const res = await apiFetch('/api/auth/2fa/status');
+    if (!res) return;
+    const data = await res.json();
+    const statusEl = document.getElementById('twofa-status');
+    const setupSection = document.getElementById('twofa-setup-section');
+    const wizard = document.getElementById('twofa-setup-wizard');
+    const disableSection = document.getElementById('twofa-disable-section');
+    const remEl = document.getElementById('twofa-recovery-remaining');
+    if (!statusEl) return;
+
+    wizard.style.display = 'none';
+    if (data.enabled) {
+        statusEl.textContent = `Aktiviert seit ${data.setup_at ? new Date(data.setup_at).toLocaleDateString('de-CH') : '?'}`;
+        statusEl.style.color = 'var(--green)';
+        setupSection.style.display = 'none';
+        disableSection.style.display = 'block';
+        if (remEl) remEl.textContent = data.recovery_codes_remaining;
+    } else {
+        statusEl.textContent = 'Aktuell nicht aktiviert. Empfohlen fuer mehr Sicherheit.';
+        statusEl.style.color = 'var(--text-dim)';
+        setupSection.style.display = 'block';
+        disableSection.style.display = 'none';
+    }
+}
+
+async function start2FASetup() {
+    const res = await apiFetch('/api/auth/2fa/setup', { method: 'POST' });
+    if (!res) return;
+    if (!res.ok) {
+        const err = await res.json();
+        showToast(err.detail || 'Setup fehlgeschlagen');
+        return;
+    }
+    const data = await res.json();
+    document.getElementById('twofa-secret').textContent = data.secret;
+    document.getElementById('twofa-qr-img').src = 'data:image/svg+xml;base64,' + data.qr_svg_b64;
+    const codesEl = document.getElementById('twofa-recovery-codes');
+    codesEl.innerHTML = data.recovery_codes.map(c => `<div>${c}</div>`).join('');
+
+    document.getElementById('twofa-setup-section').style.display = 'none';
+    document.getElementById('twofa-setup-wizard').style.display = 'block';
+}
+
+async function confirm2FASetup() {
+    const code = document.getElementById('twofa-confirm-code').value.trim();
+    if (code.length !== 6) {
+        showToast('Bitte 6-stelligen Code eingeben');
+        return;
+    }
+    const res = await apiFetch('/api/auth/2fa/setup/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+    });
+    if (!res) return;
+    if (!res.ok) {
+        const err = await res.json();
+        showToast(err.detail || 'Code falsch — bitte den AKTUELLEN Code aus der App eingeben');
+        return;
+    }
+    showToast('2FA aktiviert! Beim naechsten Login wird der Code abgefragt.');
+    document.getElementById('twofa-confirm-code').value = '';
+    load2FAStatus();
+}
+
+function cancel2FASetup() {
+    document.getElementById('twofa-setup-wizard').style.display = 'none';
+    document.getElementById('twofa-setup-section').style.display = 'block';
+    document.getElementById('twofa-confirm-code').value = '';
+}
+
+async function disable2FA() {
+    const code = document.getElementById('twofa-disable-code').value.trim();
+    if (code.length !== 6) {
+        showToast('Bitte aktuellen 6-stelligen TOTP-Code eingeben');
+        return;
+    }
+    if (!confirm('2FA wirklich deaktivieren? Damit ist dein Account nur noch durch das Passwort geschuetzt.')) {
+        return;
+    }
+    const res = await apiFetch('/api/auth/2fa/disable', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+    });
+    if (!res) return;
+    if (!res.ok) {
+        const err = await res.json();
+        showToast(err.detail || 'Code falsch');
+        return;
+    }
+    showToast('2FA deaktiviert');
+    document.getElementById('twofa-disable-code').value = '';
+    load2FAStatus();
+}
