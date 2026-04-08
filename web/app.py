@@ -958,24 +958,108 @@ async def api_ml_model(user=Depends(require_auth)):
         return {"error": "ML Module nicht verfuegbar", "is_active": False}
 
 
-@app.post("/api/ml-model/train")
-async def api_train_ml(user=Depends(require_auth)):
-    """ML-Modell neu trainieren."""
+def _run_ml_training_task():
+    """Background-Task fuer ML-Training (non-blocking, vermeidet Render 100s Timeout).
+
+    Schreibt Fortschritt in ml_training_status.json damit das Frontend per Polling
+    den Status anzeigen kann. Faengt alle Exceptions ab und persistiert sie ins
+    Status-File statt sie stillschweigend zu verlieren.
+    """
+    from datetime import datetime
+    from app.config_manager import load_json, save_json
+
+    def _write(state: str, **kwargs):
+        status = {"state": state, "updated_at": datetime.now().isoformat(), **kwargs}
+        save_json("ml_training_status.json", status)
+
     try:
+        _write("running", phase="download", message="Lade 5 Jahre Historie...")
         from app.backtester import download_history
         from app.ml_scorer import train_model
 
         histories = download_history(years=5)
         if not histories:
-            raise HTTPException(status_code=500, detail="Keine historischen Daten")
+            _write("error", error="Keine historischen Daten")
+            return
 
+        _write("running", phase="train", message=f"Training auf {len(histories)} Symbolen...")
         result = train_model(histories)
-        if "error" in result:
-            raise HTTPException(status_code=500, detail=result["error"])
 
-        return {"status": "ok", "model_info": result}
+        if isinstance(result, dict) and "error" in result:
+            _write("error", error=result["error"])
+            return
+
+        _write(
+            "done",
+            message="ML-Modell trainiert",
+            model_info=result,
+            finished_at=datetime.now().isoformat(),
+        )
+        log.info("ML Training (background) abgeschlossen")
+    except MemoryError:
+        _write("error", error="Out of Memory — Render Free-Tier hat nur 512MB. "
+                               "Trainiere weniger Symbole oder upgrade.")
+        log.error("ML Training OOM")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _write("error", error=str(e))
+        log.error(f"ML Training Exception: {e}", exc_info=True)
+
+
+@app.post("/api/ml-model/train")
+async def api_train_ml(background_tasks: BackgroundTasks, user=Depends(require_auth)):
+    """ML-Modell neu trainieren — non-blocking im Hintergrund.
+
+    Antwortet sofort mit 202 und startet das Training als Background-Task.
+    Frontend soll /api/ml-model/train/status pollen um Fortschritt zu sehen.
+    """
+    from datetime import datetime
+    from app.config_manager import load_json, save_json
+
+    # Stale-Lock-Recovery: laufendes Training > 30 Min = tot (OOM/Crash/Redeploy)
+    STALE_LOCK_MINUTES = 30
+    status = load_json("ml_training_status.json") or {}
+    if status.get("state") == "running":
+        updated = status.get("updated_at")
+        is_stale = False
+        if updated:
+            try:
+                age_min = (datetime.now() - datetime.fromisoformat(updated)).total_seconds() / 60
+                if age_min > STALE_LOCK_MINUTES:
+                    is_stale = True
+                    log.warning(f"Stale ML-Training Lock erkannt ({age_min:.0f} Min)")
+            except Exception:
+                pass
+        if not is_stale:
+            return {
+                "status": "already_running",
+                "message": "ML-Training laeuft bereits",
+                "updated_at": updated,
+            }
+
+    # Initial-Status schreiben damit das Polling sofort was sieht
+    save_json("ml_training_status.json", {
+        "state": "running",
+        "phase": "queued",
+        "message": "Training wird gestartet...",
+        "updated_at": datetime.now().isoformat(),
+    })
+
+    background_tasks.add_task(_run_ml_training_task)
+    return {
+        "status": "started",
+        "message": "ML-Training laeuft im Hintergrund. "
+                   "Pruefe /api/ml-model/train/status fuer Fortschritt.",
+    }
+
+
+@app.get("/api/ml-model/train/status")
+async def api_train_ml_status(user=Depends(require_auth)):
+    """Status des aktuellen/letzten ML-Training-Background-Laufs."""
+    from app.config_manager import load_json
+    status = load_json("ml_training_status.json")
+    if not status:
+        return {"state": "idle", "message": "Noch kein Training gestartet"}
+    return status
 
 
 # ============================================================

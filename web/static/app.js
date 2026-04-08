@@ -938,24 +938,56 @@ async function runBacktest() {
 async function trainML() {
     const btn = document.getElementById('btn-train-ml');
     btn.disabled = true;
-    btn.textContent = 'Training laeuft...';
-    showToast('ML-Modell wird trainiert...');
+    btn.textContent = 'Training startet...';
+    showToast('ML-Training wird gestartet...');
 
     try {
         const res = await apiFetch('/api/ml-model/train', { method: 'POST' });
-        if (res && res.ok) {
-            const data = await res.json();
-            showToast('ML-Modell trainiert!');
-            if (data.model_info) renderMLModel(data.model_info);
-        } else {
+        if (!res || !res.ok) {
             const err = await res?.json();
-            showToast('ML Training Fehler: ' + (err?.detail || 'Unbekannt'));
+            showToast('Start fehlgeschlagen: ' + (err?.detail || 'Unbekannt'));
+            btn.disabled = false;
+            btn.textContent = 'ML-Modell trainieren';
+            return;
+        }
+        const startData = await res.json();
+        if (startData.status === 'already_running') {
+            showToast('Training laeuft bereits im Hintergrund');
+        }
+        // Status-Polling bis done oder error (max 10 min = 120 * 5s)
+        const MAX_POLLS = 120;
+        for (let i = 0; i < MAX_POLLS; i++) {
+            await new Promise(r => setTimeout(r, 5000));
+            const sRes = await apiFetch('/api/ml-model/train/status');
+            if (!sRes || !sRes.ok) continue;
+            const s = await sRes.json();
+            if (s.state === 'running') {
+                btn.textContent = s.phase === 'download' ? 'Lade Historie...'
+                                : s.phase === 'train' ? 'Trainiere Modell...'
+                                : 'Training laeuft...';
+            } else if (s.state === 'done') {
+                showToast('ML-Modell trainiert!');
+                if (s.model_info) renderMLModel(s.model_info);
+                // Sicherheitshalber auch /api/ml-model neu laden
+                try {
+                    const mRes = await apiFetch('/api/ml-model');
+                    if (mRes && mRes.ok) {
+                        const mData = await mRes.json();
+                        if (mData && !mData.error) renderMLModel(mData);
+                    }
+                } catch {}
+                break;
+            } else if (s.state === 'error') {
+                showToast('ML Training Fehler: ' + (s.error || 'Unbekannt'));
+                console.error('ML training error:', s);
+                break;
+            }
         }
     } catch (e) {
         showToast('ML Training Fehler: ' + e.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Train ML Model';
+        btn.textContent = 'ML-Modell trainieren';
     }
 }
 
