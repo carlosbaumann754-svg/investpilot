@@ -341,11 +341,15 @@ def restore_for_optimizer():
         # version is always stale for this key)
         _git_disabled_symbols = None
         try:
-            _git_cfg = load_json("config.json", default={})
+            _git_cfg = load_json("config.json")
             if isinstance(_git_cfg, dict) and "disabled_symbols" in _git_cfg:
                 _git_disabled_symbols = _git_cfg.get("disabled_symbols")
-        except Exception:
-            pass
+                log.info(
+                    f"restore_for_optimizer: git-committed disabled_symbols "
+                    f"gefunden ({len(_git_disabled_symbols)} Symbols)"
+                )
+        except Exception as _e:
+            log.warning(f"restore_for_optimizer: git config preload fehler: {_e}")
         for filename in BACKUP_FILES:
             if filename in NO_RESTORE_FILES:
                 continue
