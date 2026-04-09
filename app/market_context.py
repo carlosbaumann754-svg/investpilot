@@ -267,11 +267,24 @@ def fetch_economic_calendar(config=None):
             "time": "14:30 CET",
         })
 
-    # 2. Versuche externe API (Trading Economics / Alpha Vantage)
-    api_key = config.get("market_context", {}).get("alpha_vantage_key") or \
-              os.environ.get("ALPHA_VANTAGE_KEY", "") if 'os' in dir() else ""
+    # 2. Finnhub Economic Calendar (gratis, hohe Qualitaet)
+    try:
+        from app import finnhub_client
+        if finnhub_client.is_available():
+            fh_events = finnhub_client.fetch_economic_calendar(days_ahead=1)
+            # Filter: nur heute (auch todayaelter als jetzt duerfen raus)
+            today_str = now.strftime("%Y-%m-%d")
+            for ev in fh_events:
+                t = ev.get("time") or ""
+                # Finnhub Time-Format: "YYYY-MM-DD HH:MM:SS" (UTC)
+                if today_str in t:
+                    # Duplikat-Check vs static NFP
+                    if not any(e.get("name") == ev.get("name") for e in events):
+                        events.append(ev)
+    except Exception as e:
+        log.debug(f"Finnhub-Calendar Fehler: {e}")
 
-    # Fallback: Manuelle Events aus Config
+    # 3. Fallback: Manuelle Events aus Config
     manual_events = config.get("market_context", {}).get("manual_events", [])
     for event in manual_events:
         event_date = event.get("date", "")

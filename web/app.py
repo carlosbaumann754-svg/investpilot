@@ -1947,6 +1947,35 @@ async def api_sectors(user=Depends(require_auth)):
 
 
 # ============================================================
+# NEWS SOURCES STATUS (Finnhub / Anthropic / VADER / yfinance)
+# ============================================================
+
+@app.get("/api/news-sources")
+async def api_news_sources(user=Depends(require_auth)):
+    """Welche Sentiment-/News-Quellen sind aktuell live?"""
+    try:
+        from app import sentiment as _sent
+        status = _sent.get_sources_status()
+        # Ermittle primaere Quelle (die erste aktive in Prioritaetsreihenfolge)
+        priority = ["finnhub", "anthropic_haiku", "vader", "yfinance"]
+        primary = next((s for s in priority if status.get(s)), "none")
+        labels = {
+            "finnhub": "Finnhub (News + Sentiment API)",
+            "anthropic_haiku": "Claude Haiku LLM",
+            "vader": "VADER (lokal)",
+            "yfinance": "Yahoo Finance (Fallback)",
+            "none": "Keine Quelle aktiv",
+        }
+        return {
+            "sources": status,
+            "primary": primary,
+            "primary_label": labels.get(primary, primary),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================
 # v12 FEATURE STATUS (Universe, Kelly, Meta-Labeler, Time-Stop, ...)
 # ============================================================
 

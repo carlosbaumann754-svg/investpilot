@@ -297,6 +297,7 @@ async function loadDashboard() {
 
         // v12 Feature Status + Universe Health (unabhaengig vom restlichen Load)
         loadV12Status();
+        loadNewsSources();
 
         // Sector Strength
         if (sectorRes) {
@@ -1546,4 +1547,33 @@ async function saveDisabledSymbols() {
     showToast(`Gespeichert: ${data.count} Symbols blockiert`);
     loadDisabledSymbols();
     loadV12Status();
+}
+
+// === NEWS SOURCES STATUS ===
+async function loadNewsSources() {
+    const res = await apiFetch('/api/news-sources');
+    if (!res) return;
+    let data;
+    try { data = await res.json(); } catch (e) { return; }
+    if (!data || data.error) return;
+
+    const sources = data.sources || {};
+    const primaryEl = document.getElementById('news-primary');
+    const badgesEl = document.getElementById('news-badges');
+
+    if (primaryEl) {
+        primaryEl.innerHTML = `Aktiv: <strong>${data.primary_label || '--'}</strong>`;
+    }
+
+    if (badgesEl) {
+        const items = [
+            ['Finnhub', sources.finnhub],
+            ['Claude Haiku', sources.anthropic_haiku],
+            ['VADER', sources.vader],
+            ['Yahoo Finance', sources.yfinance],
+        ];
+        badgesEl.innerHTML = items.map(([label, on]) =>
+            `<span class="badge ${on ? 'badge-green' : 'badge-blue'}" style="opacity:${on ? 1 : 0.5};">${label}${on ? '' : ' · off'}</span>`
+        ).join('');
+    }
 }

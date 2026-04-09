@@ -1,15 +1,24 @@
 """
-Sentiment Analysis for InvestPilot — v12 LLM Edition.
+Sentiment Analysis for InvestPilot — v12.1 Multi-Source Edition.
 
-Fetches news via yfinance (free) and classifies them via Claude Haiku
-(ANTHROPIC_API_KEY).  Falls back to keyword scoring if the SDK or the
-key are missing, so the bot keeps running in degraded mode.
+Liefert Sentiment-Scores pro Symbol. Funktioniert vollstaendig ohne
+Anthropic-Tokens dank 3-stufiger Scorer-Cascade + multiplen News-Quellen.
 
-Public API (unchanged):
-  - get_sentiment(symbol) -> {score, articles, summary}
+News-Quellen (Prioritaet):
+  1. Finnhub /news-sentiment      — direkt gescored (wenn FINNHUB_API_KEY)
+  2. Finnhub /company-news        — Headlines -> lokaler Scorer
+  3. yfinance ticker.news         — Headlines -> lokaler Scorer
+
+Scorer-Cascade (Prioritaet):
+  1. Claude Haiku LLM    — wenn ANTHROPIC_API_KEY valide & Guthaben
+  2. VADER               — lexikon-basiert, offline, gratis, gut
+  3. Keyword-Fallback    — primitive Wortliste, letzter Rettungsanker
+
+Public API (stabil):
+  - get_sentiment(symbol) -> {score, articles, summary, source, ...}
   - get_market_sentiment() -> {score, components, summary}
 
-Cache: 4h per symbol to keep Claude API costs under ~$5/month.
+Cache: 4h pro Symbol.
 """
 
 import json
@@ -19,21 +28,39 @@ import time
 
 log = logging.getLogger("Sentiment")
 
+# ------------------------------------------------------------
+# Optional Dependencies
+# ------------------------------------------------------------
 try:
     import yfinance as yf
 except ImportError:
     yf = None
-    log.warning("yfinance nicht verfuegbar — Sentiment-Analyse deaktiviert")
+    log.warning("yfinance nicht verfuegbar — yfinance-News-Fallback deaktiviert")
 
 try:
     import anthropic
 except ImportError:
     anthropic = None
 
-_sentiment_cache = {}
+try:
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    _vader_analyzer = SentimentIntensityAnalyzer()
+except Exception as e:
+    _vader_analyzer = None
+    log.info(f"VADER nicht verfuegbar: {e}")
+
+try:
+    from app import finnhub_client
+except ImportError:
+    finnhub_client = None
+
+# ------------------------------------------------------------
+# Cache & Constants
+# ------------------------------------------------------------
+_sentiment_cache: dict = {}
 _CACHE_TTL_SECONDS = 4 * 60 * 60  # 4h
 
-# Fallback keyword lists (only used if Claude API unavailable)
+# Fallback keyword lists (letzter Rettungsanker)
 _POSITIVE_WORDS = {"beat", "growth", "upgrade", "bullish", "profit", "strong",
                    "surpass", "outperform", "rally", "gain", "record", "boost",
                    "optimistic", "buy", "positive", "exceed", "revenue"}
@@ -46,8 +73,12 @@ _MAX_HEADLINES = 8
 _MAX_INPUT_CHARS = 2000
 
 
-def _score_text_keyword(text):
-    """Fallback keyword scorer: returns float in [-1, 1]."""
+# ============================================================
+# Scorers (Cascade)
+# ============================================================
+
+def _score_text_keyword(text: str) -> float:
+    """Stufe 3 (Fallback): primitive Keyword-Methode. Returns [-1, 1]."""
     if not text:
         return 0.0
     words = set(text.lower().split())
@@ -56,6 +87,41 @@ def _score_text_keyword(text):
     if pos + neg == 0:
         return 0.0
     return (pos - neg) / (pos + neg)
+
+
+def _score_headlines_vader(headlines: list) -> dict | None:
+    """Stufe 2: VADER lexikon-basiert. Schnell, offline, gratis.
+
+    Returns dict {score, label, confidence, rationale} oder None.
+    """
+    if _vader_analyzer is None or not headlines:
+        return None
+    try:
+        compound_scores = []
+        for h in headlines[:_MAX_HEADLINES]:
+            vs = _vader_analyzer.polarity_scores(h[:300])
+            compound_scores.append(vs["compound"])  # bereits -1..1
+        if not compound_scores:
+            return None
+        avg = sum(compound_scores) / len(compound_scores)
+        avg = max(-1.0, min(1.0, avg))
+        # Confidence = Magnitude (|avg|) * Headline-Count-Faktor
+        conf = min(1.0, abs(avg) * (len(compound_scores) / _MAX_HEADLINES + 0.5))
+        if avg > 0.2:
+            label = "bullish"
+        elif avg < -0.2:
+            label = "bearish"
+        else:
+            label = "neutral"
+        return {
+            "score": round(avg, 3),
+            "label": label,
+            "confidence": round(conf, 2),
+            "rationale": f"VADER avg over {len(compound_scores)} headlines",
+        }
+    except Exception as e:
+        log.debug(f"VADER-Scoring fehlgeschlagen: {e}")
+        return None
 
 
 def _get_anthropic_client():
@@ -72,17 +138,15 @@ def _get_anthropic_client():
         return None
 
 
-def _score_with_llm(symbol, headlines):
-    """Use Claude Haiku to classify a batch of headlines for one symbol.
+def _score_with_llm(symbol: str, headlines: list) -> dict | None:
+    """Stufe 1: Claude Haiku. Beste Qualitaet, benoetigt Guthaben.
 
-    Returns dict {score: float in [-1,1], label: str, confidence: float,
-    rationale: str} or None on failure.
+    Bei 401/insufficient_credits returniert None -> Cascade faellt durch auf VADER.
     """
     client = _get_anthropic_client()
     if client is None or not headlines:
         return None
 
-    # Trim headlines so we stay well inside Haiku's budget
     joined = "\n".join(f"- {h[:200]}" for h in headlines[:_MAX_HEADLINES])
     joined = joined[:_MAX_INPUT_CHARS]
 
@@ -105,7 +169,6 @@ def _score_with_llm(symbol, headlines):
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text.strip()
-        # Strip markdown fences if Claude adds them despite instructions
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -125,8 +188,12 @@ def _score_with_llm(symbol, headlines):
         return None
 
 
-def _fetch_headlines(symbol):
-    """Pull a list of headline strings via yfinance.  Empty list on error."""
+# ============================================================
+# Headline-Quellen (Finnhub -> yfinance)
+# ============================================================
+
+def _fetch_headlines_yfinance(symbol: str) -> list:
+    """Fallback-News-Quelle: yfinance ticker.news."""
     if yf is None:
         return []
     try:
@@ -141,16 +208,33 @@ def _fetch_headlines(symbol):
                 headlines.append(combined)
         return headlines
     except Exception as e:
-        log.debug(f"Headline-Fetch fuer {symbol} fehlgeschlagen: {e}")
+        log.debug(f"yfinance-Headline-Fetch fuer {symbol} fehlgeschlagen: {e}")
         return []
 
 
-def get_sentiment(symbol):
+def _fetch_headlines(symbol: str) -> tuple[list, str]:
+    """Versuche Finnhub zuerst, fallback auf yfinance.
+    Returns (headlines, source_name).
+    """
+    if finnhub_client is not None and finnhub_client.is_available():
+        headlines = finnhub_client.fetch_company_news(symbol, days=7)
+        if headlines:
+            return headlines, "finnhub"
+    return _fetch_headlines_yfinance(symbol), "yfinance"
+
+
+# ============================================================
+# Public API
+# ============================================================
+
+def get_sentiment(symbol: str) -> dict:
     """Return sentiment dict for a symbol.
 
     Shape:
-        {score: float -1..1, articles: int, summary: str,
-         label?: str, confidence?: float, source: "llm"|"keyword"|"none"}
+        {score, articles, summary, source,
+         label?, confidence?, rationale?}
+
+    source ∈ {"llm", "vader", "keyword", "finnhub_api", "none"}
     """
     now = time.time()
 
@@ -160,32 +244,70 @@ def get_sentiment(symbol):
 
     neutral = {"score": 0.0, "articles": 0, "summary": "Keine Daten", "source": "none"}
 
-    headlines = _fetch_headlines(symbol)
+    # ---- Fast-Path: Finnhub /news-sentiment (fertig skaliert) ----
+    if finnhub_client is not None and finnhub_client.is_available():
+        try:
+            fh_sent = finnhub_client.fetch_news_sentiment(symbol)
+            if fh_sent is not None:
+                score = fh_sent["score"]
+                label = ("bullish" if score > 0.2
+                         else "bearish" if score < -0.2 else "neutral")
+                mood_de = {"bullish": "bullisch", "bearish": "baerisch",
+                           "neutral": "neutral"}.get(label, label)
+                result = {
+                    "score": score,
+                    "articles": fh_sent.get("buzz_weekly", 0),
+                    "label": label,
+                    "confidence": min(1.0, abs(score) + 0.3),
+                    "rationale": "Finnhub companyNewsScore",
+                    "summary": f"{mood_de} (Finnhub API-Score={score:+.2f}, "
+                               f"{fh_sent.get('buzz_weekly', 0)} Artikel/Woche)",
+                    "source": "finnhub_api",
+                }
+                _sentiment_cache[symbol] = {"result": result, "fetched_at": now}
+                return result
+        except Exception as e:
+            log.debug(f"Finnhub-Sentiment fuer {symbol} fehlgeschlagen: {e}")
+
+    # ---- Headlines holen (Finnhub news -> yfinance) ----
+    headlines, news_source = _fetch_headlines(symbol)
     if not headlines:
         _sentiment_cache[symbol] = {"result": neutral, "fetched_at": now}
         return neutral
 
-    # Try LLM first
+    # ---- Scorer-Cascade: Haiku -> VADER -> Keyword ----
+    scored = None
+    scorer = None
+
     llm_result = _score_with_llm(symbol, headlines)
     if llm_result is not None:
-        score = llm_result["score"]
-        label = llm_result["label"]
+        scored = llm_result
+        scorer = "llm"
+    else:
+        vader_result = _score_headlines_vader(headlines)
+        if vader_result is not None:
+            scored = vader_result
+            scorer = "vader"
+
+    if scored is not None:
+        score = scored["score"]
+        label = scored.get("label", "neutral")
         mood_de = {"bullish": "bullisch", "bearish": "baerisch",
                    "neutral": "neutral", "noise": "rauschen"}.get(label, label)
         result = {
             "score": round(score, 3),
             "articles": len(headlines),
             "label": label,
-            "confidence": round(llm_result["confidence"], 2),
-            "rationale": llm_result["rationale"],
-            "summary": f"{mood_de} ({len(headlines)} Artikel, LLM-Score={score:+.2f}, "
-                       f"Conf={llm_result['confidence']:.2f})",
-            "source": "llm",
+            "confidence": round(scored.get("confidence", 0.0), 2),
+            "rationale": scored.get("rationale", ""),
+            "summary": f"{mood_de} ({len(headlines)} Artikel via {news_source}, "
+                       f"{scorer.upper()}-Score={score:+.2f})",
+            "source": scorer,
         }
         _sentiment_cache[symbol] = {"result": result, "fetched_at": now}
         return result
 
-    # Fallback: keyword scoring (same logic as pre-v12)
+    # ---- Letzter Rettungsanker: primitiver Keyword-Scorer ----
     scores = [_score_text_keyword(h) for h in headlines]
     if not scores:
         _sentiment_cache[symbol] = {"result": neutral, "fetched_at": now}
@@ -195,14 +317,15 @@ def get_sentiment(symbol):
     result = {
         "score": round(avg, 3),
         "articles": len(scores),
-        "summary": f"{mood} ({len(scores)} Artikel, Keyword-Score={avg:+.2f})",
+        "summary": f"{mood} ({len(scores)} Artikel via {news_source}, "
+                   f"Keyword-Score={avg:+.2f})",
         "source": "keyword",
     }
     _sentiment_cache[symbol] = {"result": result, "fetched_at": now}
     return result
 
 
-def get_market_sentiment():
+def get_market_sentiment() -> dict:
     """Aggregated market sentiment across major names."""
     market_symbols = ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
     components = {}
@@ -226,4 +349,14 @@ def get_market_sentiment():
         "score": round(avg, 3),
         "components": components,
         "summary": f"{mood} (Score={avg:+.2f})",
+    }
+
+
+def get_sources_status() -> dict:
+    """Diagnose-Endpoint: welche Sentiment-Quellen sind live?"""
+    return {
+        "finnhub": bool(finnhub_client and finnhub_client.is_available()),
+        "anthropic_haiku": bool(_get_anthropic_client()),
+        "vader": _vader_analyzer is not None,
+        "yfinance": yf is not None,
     }
