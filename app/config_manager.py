@@ -12,8 +12,26 @@ from pathlib import Path
 
 log = logging.getLogger("ConfigManager")
 
-# Data-Verzeichnis: im Docker /app/data, lokal relativ zum Projekt
-DATA_DIR = Path(os.environ.get("INVESTPILOT_DATA_DIR", Path(__file__).parent.parent / "data"))
+# Data-Verzeichnis Resolution (Priority):
+#   1) INVESTPILOT_DATA_DIR env var (explicit override)
+#   2) /data (Render Persistent Disk mount — auto-detect if present)
+#   3) <repo>/data (local dev / CI / containers without disk)
+def _resolve_data_dir() -> Path:
+    explicit = os.environ.get("INVESTPILOT_DATA_DIR")
+    if explicit:
+        return Path(explicit)
+    persistent = Path("/data")
+    if persistent.exists() and persistent.is_dir():
+        return persistent
+    return Path(__file__).parent.parent / "data"
+
+
+DATA_DIR = _resolve_data_dir()
+log.info(f"DATA_DIR resolved to: {DATA_DIR}")
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception as _e:
+    log.warning(f"DATA_DIR mkdir failed: {_e}")
 
 # Thread-Lock fuer JSON-Dateizugriffe (verhindert Race Conditions
 # zwischen Scheduler-Thread und Web-API)
