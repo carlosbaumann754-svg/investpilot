@@ -165,7 +165,7 @@ def _evaluate_combo_worker(combo):
     Returns: result-dict oder None bei Fehler/leerem WF.
     """
     try:
-        from app.backtester import simulate_trades_fast, calculate_metrics
+        from app.backtester import simulate_trades_fast, calculate_metrics, _build_position_sizing_from_config
 
         train_pre = _WORKER_STATE["train_pre"]
         test_pre = _WORKER_STATE["test_pre"]
@@ -195,8 +195,12 @@ def _evaluate_combo_worker(combo):
             use_realistic_filters=use_filters,
         )
 
-        ins = calculate_metrics(train_trades)
-        oos = calculate_metrics(test_trades)
+        # v12.1 Fix: Position-Sizing aus Test-Config (mit allen Grid-Overrides)
+        # ableiten — sonst sind die gemeldeten oos_return/oos_max_dd Trillionen.
+        # Sharpe-Ranking ist scale-invariant, also keine Verschiebung der Top-Combos.
+        pos_sizing = _build_position_sizing_from_config(test_config)
+        ins = calculate_metrics(train_trades, position_sizing=pos_sizing)
+        oos = calculate_metrics(test_trades, position_sizing=pos_sizing)
 
         return {
             "params": {

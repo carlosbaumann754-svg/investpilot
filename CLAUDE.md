@@ -722,6 +722,35 @@ Bot darf nur mit echtem Geld live gehen wenn ALLE Kriterien erfuellt:
   `regime_strategies`, `hedging`
 - `leverage.trailing_sl_*` + `leverage.tp_tranches`
 
+## v12.1 — Backtest Position-Sizing Fix (2026-04-09)
+
+**Bug:** Erster v12-Backtest-Run lieferte Rendite **+1'696'401'623'234%**
+(1.7 Billionen Prozent) und Kosten **588.9%**. Architektur war OK
+(GH-Action-Offload funktioniert), aber `calculate_metrics()`,
+`build_equity_curve()` und `calc_monthly_returns()` kompoundierten jeden
+einzelnen Trade als ob 100% des Kapitals deployed waeren. Bei 1326 Trades
+ueber 5 Jahre × ~1.5% Avg-Return → (1.015)^1326 ≈ 4×10^8 → exakt der Bug.
+
+**Root Cause:** `calculate_metrics(trades)` hatte zwar bereits einen
+optionalen `position_sizing`-Pfad (Trade-Returns × kelly_fraction), aber
+KEINE der 5 Aufrufstellen hat ihn gesetzt. Live-Bot deployt
+`kelly_sizing.max_fraction = 0.01` (1% pro Trade).
+
+**Fix (`app/backtester.py` + `app/optimizer.py`):**
+- Neuer Helper `_build_position_sizing_from_config(config)` extrahiert
+  `kelly_fraction` aus `kelly_sizing.max_fraction` (Default 0.01)
+- `build_equity_curve(trades, kelly_fraction=1.0)` skaliert Trade-Returns
+- `calc_monthly_returns(trades, kelly_fraction=1.0)` skaliert ebenfalls
+- `calculate_metrics()` skaliert `total_costs_pct` mit kelly_fraction
+  (Gebuehren werden nur auf den deployten Slice gezahlt, nicht aufs
+  gesamte Portfolio)
+- Wiring in `walk_forward_validate`, `quick_walk_forward`,
+  `run_full_backtest` und `optimizer._evaluate_combo_worker`
+
+**Sharpe-Ratio bleibt unveraendert** — er ist scale-invariant
+(`mean(r*k)/std(r*k) = mean(r)/std(r)`). Optimizer-Ranking war daher
+nie kaputt, nur die gemeldeten Returns/MaxDD/Costs.
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`

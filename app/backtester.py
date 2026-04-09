@@ -1322,6 +1322,28 @@ def _calc_costs(entry_price, days_held):
 # METRICS CALCULATION
 # ============================================================
 
+def _build_position_sizing_from_config(config):
+    """v12.1: Reale Sizing-Annahmen aus der Live-Config rekonstruieren,
+    damit Backtest-Metriken zur tatsaechlichen Bot-Realitaet passen.
+
+    Live-Bot deployt max ~kelly_sizing.max_fraction (default 0.01 = 1%) pro
+    Trade. Ohne diese Skalierung kompoundiert calculate_metrics() jeden
+    Trade mit 100% Equity → Trillionen-Prozent Returns bei vielen Trades.
+    """
+    if not config:
+        return {"kelly_fraction": 0.01, "max_concurrent": 20}
+    k_cfg = (config.get("kelly_sizing") or {})
+    risk_cfg = (config.get("risk_management") or {})
+    # max_fraction ist der harte Cap; das ist die ehrlichste Annahme fuer
+    # die durchschnittlich eingesetzte Position-Groesse.
+    kelly_frac = k_cfg.get("max_fraction") or 0.01
+    max_concurrent = (config.get("demo_trading") or {}).get("max_positions", 20)
+    return {
+        "kelly_fraction": float(kelly_frac),
+        "max_concurrent": int(max_concurrent),
+    }
+
+
 def calculate_metrics(trades, position_sizing=None):
     """Calculate performance metrics from a list of trades.
 
@@ -1444,7 +1466,16 @@ def calculate_metrics(trades, position_sizing=None):
     avg_duration = sum(t.get("days_held", 0) for t in trades) / len(trades)
 
     # Total costs
-    total_costs = sum(t.get("cost_pct", 0) for t in trades)
+    # v12.1 Fix: Wenn position_sizing aktiv ist, hat jeder Trade nur einen
+    # Bruchteil (kelly_frac) des Equity benutzt — also wurden auch nur
+    # kelly_frac × cost_pct des Equity an Gebuehren bezahlt. Sonst summieren
+    # sich 1326 Trades × ~0.4% zu absurden 530%+ auf, obwohl in Wirklichkeit
+    # nur ~5% des Portfolios fuer Kosten draufgingen.
+    if position_sizing:
+        kelly_frac_costs = position_sizing.get("kelly_fraction", 0.01)
+        total_costs = sum(t.get("cost_pct", 0) for t in trades) * kelly_frac_costs
+    else:
+        total_costs = sum(t.get("cost_pct", 0) for t in trades)
 
     return {
         "total_return_pct": round(total_return * 100, 2),
@@ -1478,8 +1509,13 @@ def _empty_metrics():
 # EQUITY CURVE
 # ============================================================
 
-def build_equity_curve(trades):
+def build_equity_curve(trades, kelly_fraction=1.0):
     """Build daily equity curve from trade list.
+
+    v12.1 Fix: kelly_fraction skaliert jeden Trade-Return runter auf den
+    tatsaechlich eingesetzten Equity-Anteil. Default 1.0 = altes Verhalten
+    (jeder Trade benutzt 100% Equity → explodiert bei vielen Trades). Live
+    nutzt der Bot kelly_sizing.max_fraction = 0.01.
 
     Returns list of [date_str, equity_value] pairs starting at 10000.
     """
@@ -1492,7 +1528,7 @@ def build_equity_curve(trades):
     curve = []
 
     for t in sorted_trades:
-        r = t["pnl_net_pct"] / 100
+        r = (t["pnl_net_pct"] / 100) * kelly_fraction
         equity *= (1 + r)
         curve.append([t["exit_date"], round(equity, 2)])
 
@@ -1503,8 +1539,12 @@ def build_equity_curve(trades):
 # MONTHLY RETURNS
 # ============================================================
 
-def calc_monthly_returns(trades):
+def calc_monthly_returns(trades, kelly_fraction=1.0):
     """Calculate monthly return percentages.
+
+    v12.1 Fix: kelly_fraction skaliert jeden Trade-Return runter, damit
+    monatliche Returns realistisch sind (sonst kompoundiert sich jeder
+    Trade als 100%-Allokation und im Monats-Sum landet ein Vielfaches).
 
     Returns dict {"2021-01": 2.3, "2021-02": -1.1, ...}
     """
@@ -1514,7 +1554,7 @@ def calc_monthly_returns(trades):
         exit_date = t.get("exit_date", "")
         if len(exit_date) >= 7:
             month_key = exit_date[:7]  # "YYYY-MM"
-            monthly[month_key].append(t["pnl_net_pct"] / 100)
+            monthly[month_key].append((t["pnl_net_pct"] / 100) * kelly_fraction)
 
     result = {}
     for month, returns in sorted(monthly.items()):
@@ -1586,11 +1626,15 @@ def walk_forward_validate(histories, config=None, train_pct=0.8,
     train_trades = simulate_trades(train_histories, config, **sim_kwargs)
     test_trades = simulate_trades(test_histories, config, **sim_kwargs)
 
-    train_metrics = calculate_metrics(train_trades)
-    test_metrics = calculate_metrics(test_trades)
+    # v12.1 Fix: Position-Sizing aus Config ableiten und an Metriken weiterreichen
+    pos_sizing = _build_position_sizing_from_config(config)
+    kelly_frac = pos_sizing["kelly_fraction"]
 
-    train_curve = build_equity_curve(train_trades)
-    test_curve = build_equity_curve(test_trades)
+    train_metrics = calculate_metrics(train_trades, position_sizing=pos_sizing)
+    test_metrics = calculate_metrics(test_trades, position_sizing=pos_sizing)
+
+    train_curve = build_equity_curve(train_trades, kelly_fraction=kelly_frac)
+    test_curve = build_equity_curve(test_trades, kelly_fraction=kelly_frac)
 
     return {
         "in_sample": {
@@ -1635,10 +1679,11 @@ def quick_walk_forward(histories, config, use_realistic_filters=True,
         "earnings_blackouts": earnings_blackouts,
     }
     test_trades = simulate_trades(test_histories, config, **sim_kwargs)
-    test_metrics = calculate_metrics(test_trades)
+    pos_sizing = _build_position_sizing_from_config(config)
+    test_metrics = calculate_metrics(test_trades, position_sizing=pos_sizing)
 
     train_trades = simulate_trades(train_histories, config, **sim_kwargs)
-    train_metrics = calculate_metrics(train_trades)
+    train_metrics = calculate_metrics(train_trades, position_sizing=pos_sizing)
 
     return {
         "in_sample": {"metrics": train_metrics, "trades_count": len(train_trades)},
@@ -1712,9 +1757,13 @@ def run_full_backtest(config=None, symbols=None, years=5,
 
     # 2. Full simulation
     all_trades = simulate_trades(histories, config, **sim_kwargs)
-    all_metrics = calculate_metrics(all_trades)
-    equity_curve = build_equity_curve(all_trades)
-    monthly_returns = calc_monthly_returns(all_trades)
+    # v12.1 Fix: Position-Sizing aus Config ableiten — sonst kompoundiert
+    # calculate_metrics() jeden Trade mit 100% Kapital → Trillionen-Prozent
+    pos_sizing = _build_position_sizing_from_config(config)
+    kelly_frac = pos_sizing["kelly_fraction"]
+    all_metrics = calculate_metrics(all_trades, position_sizing=pos_sizing)
+    equity_curve = build_equity_curve(all_trades, kelly_fraction=kelly_frac)
+    monthly_returns = calc_monthly_returns(all_trades, kelly_fraction=kelly_frac)
 
     # 3. Walk-forward validation
     wf = walk_forward_validate(histories, config, **sim_kwargs)
