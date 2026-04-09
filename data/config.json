@@ -235,5 +235,12 @@
     "enabled": true,
     "bear_position_multiplier": 0.5,
     "defensive_sectors": ["health", "consumer", "bonds", "commodities"]
+  },
+  "regime_strategies": {
+    "enabled": false,
+    "bull_momentum_boost": 0.5,
+    "sideways_mr_boost": 0.6,
+    "bear_non_defensive_penalty": -10,
+    "_comment": "Default OFF. Nach Backtest-Validierung via GitHub Action Optimizer aktivieren."
   }
 }

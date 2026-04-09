@@ -390,6 +390,109 @@ def score_asset(analysis, use_ml=False):
 
 
 # ============================================================
+# REGIME-SPEZIFISCHE STRATEGIE-PROFILE (Phase 4.2)
+# ============================================================
+
+# Defensive Sektoren fuer Bear-Market (niedrigere Beta, Cash-Flow stabil)
+_DEFENSIVE_SECTORS = {"health", "consumer", "bonds", "commodities", "real_estate"}
+
+
+def apply_regime_strategy_modifier(score, analysis, sector, config=None):
+    """
+    Passt den Basis-Score an das aktuelle Marktregime an.
+
+    Philosophie:
+      - Bull:     Momentum-Trades verstaerken, Counter-Trend dampen
+      - Sideways: Mean-Reversion verstaerken, ueberdehnte Momentum-Trades dampen
+      - Bear:     Nur defensive Sektoren + starke Mean-Reversion
+
+    Aufruf NACH score_asset() in scan_all_assets() unter Feature-Flag
+    `regime_strategies.enabled` (Default: false).
+
+    Args:
+        score: Basis-Score aus score_asset() (-100..+100)
+        analysis: dict aus analyze_single_asset()
+        sector: Sektor-Tag des Assets (tech/consumer/finance/...)
+        config: optional bereits geladene Config
+
+    Returns:
+        (modified_score, reason_str) — reason fuer Logging/Debugging
+    """
+    try:
+        if config is None:
+            from app.config_manager import load_config
+            config = load_config()
+
+        rs_cfg = config.get("regime_strategies", {})
+        if not rs_cfg.get("enabled", False):
+            return score, None
+
+        from app.config_manager import load_json
+        brain = load_json("brain_state.json") or {}
+        regime = brain.get("market_regime", "unknown")
+
+        # Signal-Staerken aus Analysis extrahieren
+        rsi = analysis.get("rsi", 50)
+        mom5 = analysis.get("momentum_5d", 0)
+        mom20 = analysis.get("momentum_20d", 0)
+        boll = analysis.get("bollinger_pos", 0.5)
+        above_sma20 = analysis.get("above_sma20", False)
+        above_sma50 = analysis.get("above_sma50", False)
+
+        # Momentum-Staerke: positiv = Aufwaertstrend
+        mom_strength = (mom5 + mom20 * 0.5)
+        # Mean-Reversion-Staerke: positiv = Oversold-Setup
+        mr_strength = 0
+        if rsi < 35:
+            mr_strength += (35 - rsi) * 0.5  # 0..17.5
+        if boll < 0.25:
+            mr_strength += (0.25 - boll) * 20  # 0..5
+
+        reason = None
+        delta = 0
+
+        if regime == "bull":
+            boost = rs_cfg.get("bull_momentum_boost", 0.5)
+            if mom_strength > 0 and above_sma50:
+                delta += mom_strength * boost
+                reason = f"bull_momentum_boost +{delta:.1f}"
+            # Counter-Trend gegen Bull dampen (RSI<35 aber Preis unter SMA20)
+            if mr_strength > 0 and not above_sma20:
+                penalty = -mr_strength * 0.5
+                delta += penalty
+                reason = f"bull_counter_trend_penalty {penalty:.1f}"
+
+        elif regime == "sideways":
+            boost = rs_cfg.get("sideways_mr_boost", 0.6)
+            if mr_strength > 0:
+                delta += mr_strength * boost
+                reason = f"sideways_mr_boost +{delta:.1f}"
+            # Ueberdehnter Momentum-Trade in Seitwaertsmarkt = Risiko
+            if mom_strength > 8 and boll > 0.8:
+                penalty = -(mom_strength - 8) * 0.4
+                delta += penalty
+                reason = f"sideways_overextended {penalty:.1f}"
+
+        elif regime == "bear":
+            non_def_penalty = rs_cfg.get("bear_non_defensive_penalty", -10)
+            if sector not in _DEFENSIVE_SECTORS:
+                delta += non_def_penalty
+                reason = f"bear_non_defensive {non_def_penalty}"
+            # In Bear nur starke MR-Setups durchlassen (RSI<30 + Boll<0.2)
+            if mr_strength > 10:
+                delta += 3
+                reason = (reason or "") + " +bear_strong_mr +3"
+
+        if delta == 0:
+            return score, None
+
+        return round(score + delta, 1), reason
+    except Exception as e:
+        log.debug(f"apply_regime_strategy_modifier error: {e}")
+        return score, None
+
+
+# ============================================================
 # SCANNER HAUPTFUNKTION
 # ============================================================
 
@@ -443,6 +546,21 @@ def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
             continue
 
         score = score_asset(analysis, use_ml=use_ml)
+
+        # Phase 4.2: Regime-spezifische Strategie-Profile
+        try:
+            from app.config_manager import load_config as _lc
+            _cfg = _lc()
+            if _cfg.get("regime_strategies", {}).get("enabled", False):
+                sector = info.get("sector", "unknown")
+                new_score, rs_reason = apply_regime_strategy_modifier(
+                    score, analysis, sector, config=_cfg
+                )
+                if rs_reason:
+                    log.debug(f"  [regime-strat] {symbol}: {score} -> {new_score} ({rs_reason})")
+                score = new_score
+        except Exception as _e:
+            log.debug(f"regime_strategies hook failed: {_e}")
 
         # Signal bestimmen
         if score >= 25:

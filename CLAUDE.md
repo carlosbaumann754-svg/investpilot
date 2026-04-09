@@ -617,6 +617,110 @@ Push triggert nicht zuverlaessig einen Build. Nach `git push` ggf.
 manuell "Manual Deploy → Deploy latest commit" im Render Dashboard
 ausloesen.
 
+## v12 — Game-Changer Paket (2026-04-09)
+
+Grosses Feature-Bundle mit Ziel: In ~3 Wochen live-ready Trading-Maschine.
+Alle Features sind modular, mit Feature-Flags, und ohne Breaking Changes
+fuer bestehende Flows.
+
+### Phase 1 — Exit-Disziplin & Signal-Qualitaet
+- **Time-Stop Exit** (`app/trader.py` `check_stop_loss_take_profit`):
+  Schliesst Positionen die laenger als `max_days_stale` (10 Tage)
+  offen sind und < `stale_pnl_threshold_pct` (0.5%) bewegt haben.
+  Schutz vor Opportunitaetskosten durch tote Positionen.
+  Config: `time_stop.*`. Position-Open-Time wird aus eToro-API-Feldern
+  gelesen; Fallback ueber `trade_history.json` Lookup via position_id.
+- **Asymmetric R/R Tuning** (`data/config.json`):
+  `stop_loss_pct: -2.5`, `take_profit_pct: 18`, Asset-Class-Parameter
+  aktualisiert auf 1:3 R/R (z.B. stocks -3/+9, crypto -5/+15,
+  commodities -6/+18, forex -1.5/+4.5). "Winners run, losers cut."
+- **LLM-Sentiment via Claude Haiku** (`app/sentiment.py` komplett neu):
+  Model `claude-haiku-4-5-20251001`, 4h TTL-Cache, JSON-Output
+  (score/label/confidence/rationale). Keyword-Fallback bei fehlendem
+  SDK/Key. Ersetzt fehleranfaelliges Keyword-Matching.
+
+### Phase 2 — Meta-Labeling (Lopez de Prado)
+- **`app/meta_labeler.py`** (NEU, ~330 Zeilen):
+  - `train_meta_labeler()`: GradientBoosting (150 estimators, depth 3)
+    trainiert auf Scanner-BUY Subset der Trade-History.
+  - `meta_predict(signal_context, config)`: Gibt `p_win` + Decision
+    (`take` / `skip` / `shadow_take` / `shadow_skip`) zurueck.
+  - 12-dim Feature-Vektor: scanner_score, rsi, macd_hist, momentum_5d,
+    momentum_20d, volatility, volume_trend, regime_code, vix_level,
+    fear_greed, sector_code, asset_class_code.
+  - **Shadow Mode first**: Initial blockt nichts, loggt nur Entscheidungen
+    in `meta_labeling_shadow.json` (Rotation bei 1000 Eintraegen).
+  - **Auto-Activation**: `check_and_maybe_activate()` flippt
+    `shadow_mode=false` sobald auf matured Trades
+    `precision >= min_precision_to_activate` (0.65) erreicht ist bei
+    `min_trades_to_activate` (50).
+  - Retrain: Taeglich um ~03:15 via `app/scheduler.py`.
+- **Gate im Trader**: Vor jedem `client.buy()` wird `meta_predict()`
+  konsultiert. Bei `decision="skip"` wird der Trade uebersprungen
+  (nach Aktivierung) bzw. nur geloggt (im Shadow Mode).
+- Config: `meta_labeling.*`. Persistiert in `meta_model.json` +
+  `meta_labeling_shadow.json` (in BACKUP_FILES).
+
+### Phase 3 — Kelly Position Sizing
+- **`app/risk_manager.py`** neue Funktionen:
+  - `_kelly_stats_from_history()`: Berechnet (winrate, avg_win_pct,
+    avg_loss_pct, n_trades) aus Trade-History.
+  - `calculate_kelly_position_size()`: Formel `f* = (p*b - q) / b`,
+    dann Half-Kelly, dann Hard-Cap bei `max_fraction`. Score-Modulation
+    im Bereich [0.5, 1.25].
+- **Staffel-Cap** (Fat-Tail-Schutz):
+  Woche 1: `max_fraction=0.01` (1%) → Woche 2: 0.015 → Woche 3: 0.02.
+  Manuelle Erhoehung nach Validierung.
+- Aktiviert in `trader.py` als Ersatz fuer Dynamic Sizing, wenn
+  genuegend Trade-History (`min_trades=20`) vorhanden ist.
+- Config: `kelly_sizing.*`.
+
+### Phase 4 — Regime Intelligence
+- **Phase 4.1 — VIX Term Structure** (`app/market_context.py`
+  `fetch_vix_term_structure()`):
+  Pullt `^VIX9D`, `^VIX`, `^VIX3M` via yfinance und klassifiziert die
+  Kurve (`contango` / `backwardation` / `short_term_stress` / `flat`).
+  Setzt `panic_dip_buy_signal = is_backwardation and vix >= 22 and ratio > 1.20`.
+  Integriert in `update_full_context()`.
+  **Panic-Dip Override**: In `trader.py` erlaubt der Override einen
+  reduzierten Trade trotz Regime-Halt wenn
+  `panic_dip_buy_signal = True` (Position * 0.6).
+  Config: `vix_term_structure.*`.
+- **Phase 4.2 — Regime-spezifische Strategie-Profile**
+  (`app/market_scanner.py` `apply_regime_strategy_modifier()`):
+  - **Bull**: Momentum-Signale verstaerken
+    (`mom_strength * bull_momentum_boost`), Counter-Trend MR dampen
+    wenn Preis unter SMA20.
+  - **Sideways**: Mean-Reversion-Signale verstaerken
+    (`mr_strength * sideways_mr_boost`), ueberdehnte Momentum-Trades
+    (`mom_strength > 8 and boll > 0.8`) penalisieren.
+  - **Bear**: Non-defensive Sektoren erhalten `bear_non_defensive_penalty`
+    (-10). Nur sehr starke MR-Setups (`mr_strength > 10`) bekommen
+    +3 Boost.
+  - Aufruf NACH `score_asset()` in `scan_all_assets()` hinter
+    Feature-Flag `regime_strategies.enabled` (Default: **false**).
+  - Aktivierung erst nach Backtest-Validierung via GitHub Action Optimizer.
+  - Config: `regime_strategies.*`.
+
+### Hard Gates fuer Live-Gang (~30.04/01.05.2026)
+Bot darf nur mit echtem Geld live gehen wenn ALLE Kriterien erfuellt:
+- Sharpe Ratio > 1.0
+- Max Drawdown < 8%
+- Winrate > 50%
+- Profit Factor > 1.3
+- >= 60 Trades in Demo-Historie
+
+### Neue Backup-Dateien
+`app/persistence.py` BACKUP_FILES erweitert um:
+- `meta_model.json`
+- `meta_labeling_shadow.json`
+- `partial_close_state.json`
+
+### Neue Config-Sektionen (`data/config.json`)
+- `time_stop`, `meta_labeling`, `kelly_sizing`, `vix_term_structure`,
+  `regime_strategies`, `hedging`
+- `leverage.trailing_sl_*` + `leverage.tp_tranches`
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`
