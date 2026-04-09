@@ -1311,6 +1311,37 @@ async def api_admin_list_snapshots(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/admin/audit-stats")
+async def api_admin_audit_stats(user=Depends(require_auth)):
+    """Temporaere Diagnose: Row-Counts und juengste audit_log Eintraege.
+    Wird nach Disk-Migration-Verifikation wieder entfernt.
+    """
+    import sqlite3 as _sql
+    from app.config_manager import get_data_path
+    db = get_data_path("audit.db")
+    if not db.exists():
+        return {"db_exists": False, "path": str(db)}
+    try:
+        conn = _sql.connect(str(db))
+        cur = conn.cursor()
+        out = {"db_exists": True, "path": str(db), "size_bytes": db.stat().st_size}
+        for table in ("audit_log", "failed_logins", "banned_ips", "rate_limits"):
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                out[f"{table}_count"] = cur.fetchone()[0]
+            except Exception as e:
+                out[f"{table}_count"] = f"ERR: {e}"
+        try:
+            cur.execute("SELECT timestamp, username, action FROM audit_log ORDER BY id DESC LIMIT 5")
+            out["recent_audit"] = [{"ts": r[0], "user": r[1], "action": r[2]} for r in cur.fetchall()]
+        except Exception as e:
+            out["recent_audit"] = f"ERR: {e}"
+        conn.close()
+        return out
+    except Exception as e:
+        return {"db_exists": True, "error": str(e)}
+
+
 @app.post("/api/admin/snapshot/restore")
 async def api_admin_restore_snapshot(payload: dict, user=Depends(require_auth)):
     """Stellt einen Named-Snapshot wieder her.
