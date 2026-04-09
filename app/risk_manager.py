@@ -182,6 +182,104 @@ def calculate_dynamic_position_size(portfolio_value, stop_loss_pct, signal_score
     return round(base_size * scale, 2)
 
 
+def _kelly_stats_from_history(trade_history=None, min_trades=20):
+    """Empirische Win-Rate + Avg-Win/Avg-Loss aus trade_history.json.
+
+    Returns (winrate, avg_win_pct, avg_loss_pct, n_trades) oder None wenn
+    nicht genug Daten.
+    """
+    if trade_history is None:
+        trade_history = load_json("trade_history.json") or []
+
+    pnls = []
+    for t in trade_history:
+        action = (t.get("action") or "").upper()
+        if "CLOSE" not in action and "STOP_LOSS" not in action and "TAKE_PROFIT" not in action \
+                and "TIME_STOP" not in action and "TRAILING_SL" not in action:
+            continue
+        pnl = t.get("pnl_net_pct", t.get("pnl_pct", None))
+        if pnl is None:
+            continue
+        try:
+            pnls.append(float(pnl))
+        except (TypeError, ValueError):
+            continue
+
+    if len(pnls) < min_trades:
+        return None
+
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p <= 0]
+    if not wins or not losses:
+        return None
+    winrate = len(wins) / len(pnls)
+    avg_win = sum(wins) / len(wins)
+    avg_loss = abs(sum(losses) / len(losses))
+    return winrate, avg_win, avg_loss, len(pnls)
+
+
+def calculate_kelly_position_size(portfolio_value, stop_loss_pct, signal_score,
+                                   config=None, trade_history=None):
+    """v12: Half-Kelly Position Sizing mit hartem Cap.
+
+    Kelly: f* = (p*b - q) / b
+        p = winrate, q = 1-p, b = avg_win/avg_loss
+    Half-Kelly: f = 0.5 * f*
+    Hard-Cap: min(f, kelly.max_fraction) — schuetzt vor Fat-Tail-Suizid.
+
+    Fallback bei < N Trades oder Kelly <= 0: dynamic_position_size.
+    """
+    if config is None:
+        config = load_config()
+
+    k_cfg = config.get("kelly_sizing", {}) or {}
+    if not k_cfg.get("enabled", False):
+        return calculate_dynamic_position_size(
+            portfolio_value, stop_loss_pct, signal_score, config)
+
+    min_trades = int(k_cfg.get("min_trades", 20))
+    max_fraction = float(k_cfg.get("max_fraction", 0.01))
+    half_kelly = bool(k_cfg.get("half_kelly", True))
+    min_single_usd = float(k_cfg.get("min_position_usd", 50))
+
+    stats = _kelly_stats_from_history(trade_history, min_trades)
+    if stats is None:
+        log.info(f"  KELLY: zu wenig Trade-Daten, fallback auf dynamic sizing")
+        return calculate_dynamic_position_size(
+            portfolio_value, stop_loss_pct, signal_score, config)
+
+    winrate, avg_win, avg_loss, n = stats
+    b = avg_win / avg_loss if avg_loss > 0 else 1.0
+    f_star = (winrate * b - (1 - winrate)) / b if b > 0 else 0.0
+    if f_star <= 0:
+        log.info(f"  KELLY: negatives Edge (f*={f_star:.3f}, "
+                 f"winrate={winrate:.1%}, b={b:.2f}), fallback")
+        return calculate_dynamic_position_size(
+            portfolio_value, stop_loss_pct, signal_score, config)
+
+    fraction = 0.5 * f_star if half_kelly else f_star
+    fraction = min(fraction, max_fraction)  # Hard cap
+
+    # Signal-Score Modulation: leichte Skalierung basierend auf Confidence
+    ref_score = config.get("risk_management", {}).get("dynamic_sizing_reference_score", 30)
+    if ref_score > 0:
+        score_scale = max(0.5, min(1.25, signal_score / ref_score))
+        fraction *= score_scale
+
+    position_size = portfolio_value * fraction
+    max_single = config.get("demo_trading", {}).get("max_single_trade_usd", 5000)
+    position_size = min(position_size, max_single)
+
+    max_pos_pct = config.get("risk_management", {}).get("max_single_position_pct", 10)
+    position_size = min(position_size, portfolio_value * max_pos_pct / 100)
+
+    position_size = max(position_size, 0)
+    log.info(f"  KELLY: wr={winrate:.0%}, b={b:.2f}, f*={f_star:.3f}, "
+             f"f={fraction:.3f}, size=${position_size:,.0f} "
+             f"(n={n} Trades, cap={max_fraction:.1%})")
+    return round(position_size, 2)
+
+
 def calculate_leveraged_position_size(portfolio_value, stop_loss_pct, leverage, config=None):
     """Position Sizing mit Hebel: Effektives Risiko = Verlust * Hebel."""
     if config is None:

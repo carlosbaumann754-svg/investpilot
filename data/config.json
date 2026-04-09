@@ -216,6 +216,14 @@
     "decision_threshold": 0.55,
     "retrain_every_n_trades": 20
   },
+  "kelly_sizing": {
+    "enabled": true,
+    "half_kelly": true,
+    "max_fraction": 0.01,
+    "min_trades": 20,
+    "min_position_usd": 50,
+    "_comment": "Woche 1: max_fraction 0.01 (1%). Woche 2: 0.015. Woche 3: 0.02. Staffel-Cap manuell erhoehen nach Validierung."
+  },
   "hedging": {
     "enabled": true,
     "bear_position_multiplier": 0.5,

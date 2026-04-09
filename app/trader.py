@@ -944,8 +944,12 @@ def execute_scanner_trades(client, config, scan_results):
                         total_value, stop_loss_pct, leverage, config)
                     amount = min(amount, max_size)
 
-                # Dynamic Position Sizing: Score-basierte Skalierung
-                if rm and config.get("risk_management", {}).get("dynamic_sizing_enabled", False):
+                # v12: Kelly Sizing (bevorzugt) oder Dynamic Sizing
+                if rm and config.get("kelly_sizing", {}).get("enabled", False):
+                    kelly_size = rm.calculate_kelly_position_size(
+                        total_value, stop_loss_pct, candidate["score"], config)
+                    amount = min(amount, kelly_size)
+                elif rm and config.get("risk_management", {}).get("dynamic_sizing_enabled", False):
                     dynamic_size = rm.calculate_dynamic_position_size(
                         total_value, stop_loss_pct, candidate["score"], config)
                     amount = min(amount, dynamic_size)
