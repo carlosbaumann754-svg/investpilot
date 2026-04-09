@@ -40,6 +40,7 @@ BACKUP_FILES = [
     "ml_model.json",
     "optimization_history.json",
     "optimizer_status.json",
+    "auth_2fa.json",
 ]
 
 # Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.
@@ -411,3 +412,177 @@ def backup_optimizer_results():
     except Exception as e:
         log.warning(f"backup_optimizer_results Fehler: {e}")
         return False
+
+
+# ============================================================
+# NAMED SNAPSHOTS — Point-in-Time Restore Points
+# ============================================================
+# Im Gegensatz zu backup_to_cloud() (Rolling Backup, wird staendig
+# ueberschrieben) erzeugt create_named_snapshot() eine unveraenderliche
+# Kopie aller Backup-Dateien unter einem benannten Dateinamen. Diese
+# ueberlebt spaetere backup_to_cloud()-Aufrufe, weil der Dateiname ausserhalb
+# der BACKUP_FILES-Liste liegt und PATCH-Requests andere Gist-Files nie
+# anfassen. Empfohlen vor groesseren Upgrades, Migrationen oder Experimenten.
+
+SNAPSHOT_FILE_PREFIX = "snapshot_"
+
+
+def create_named_snapshot(name: str, note: str = "") -> dict:
+    """Erzeugt einen benannten Point-in-Time-Snapshot im Backup-Gist.
+
+    Args:
+        name: Menschenlesbarer Name (wird ge-sanitized fuer Dateinamen).
+        note: Optionale Beschreibung / Kontext.
+
+    Returns:
+        dict mit success/filename/file_count oder error.
+    """
+    import re
+    token = _get_token()
+    if not token or not requests:
+        return {"error": "GITHUB_TOKEN nicht gesetzt"}
+
+    # Alle aktuellen Backup-Dateien in ein Bundle packen
+    bundle = {}
+    for filename in BACKUP_FILES:
+        data = load_json(filename)
+        if data is not None:
+            bundle[filename] = data
+
+    if not bundle:
+        return {"error": "Keine Daten zum Snapshotten gefunden"}
+
+    # Sicherer Dateiname: nur [a-zA-Z0-9_-]
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.strip())[:60] or "unnamed"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    snapshot_filename = f"{SNAPSHOT_FILE_PREFIX}{safe_name}_{timestamp}.json"
+
+    snapshot_content = {
+        "name": name,
+        "note": note,
+        "created_at": datetime.now().isoformat(),
+        "file_count": len(bundle),
+        "files": bundle,
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return {"error": "Kein Backup-Gist gefunden (erst backup_to_cloud() ausfuehren)"}
+
+        payload_content = json.dumps(
+            snapshot_content, indent=2, ensure_ascii=False, default=str
+        )
+        size_kb = len(payload_content.encode("utf-8")) / 1024
+
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": {snapshot_filename: {"content": payload_content}}},
+            timeout=60,
+        )
+
+        if resp.status_code in (200, 201):
+            log.info(f"Named-Snapshot erstellt: {snapshot_filename} "
+                     f"({len(bundle)} Dateien, {size_kb:.1f} KB)")
+            return {
+                "success": True,
+                "filename": snapshot_filename,
+                "name": name,
+                "file_count": len(bundle),
+                "size_kb": round(size_kb, 1),
+                "created_at": snapshot_content["created_at"],
+            }
+        return {"error": f"Gist PATCH fehlgeschlagen: HTTP {resp.status_code}"}
+    except Exception as e:
+        log.error(f"create_named_snapshot Fehler: {e}")
+        return {"error": str(e)}
+
+
+def list_named_snapshots() -> list:
+    """Listet alle Named-Snapshots im Backup-Gist (neueste zuerst)."""
+    token = _get_token()
+    if not token or not requests:
+        return []
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return []
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return []
+        files = resp.json().get("files", {})
+        snapshots = []
+        for filename, meta in files.items():
+            if filename.startswith(SNAPSHOT_FILE_PREFIX):
+                snapshots.append({
+                    "filename": filename,
+                    "size_bytes": meta.get("size", 0),
+                })
+        return sorted(snapshots, key=lambda x: x["filename"], reverse=True)
+    except Exception as e:
+        log.warning(f"list_named_snapshots Fehler: {e}")
+        return []
+
+
+def restore_named_snapshot(filename: str) -> dict:
+    """Stellt einen benannten Snapshot wieder her.
+
+    ACHTUNG: Ueberschreibt aktuelle lokale Dateien mit dem Stand im Snapshot.
+    Nicht automatisch gebackupt — der Caller sollte vorher einen neuen
+    Snapshot des aktuellen Stands ziehen.
+    """
+    if not filename.startswith(SNAPSHOT_FILE_PREFIX):
+        return {"error": "Ungueltiger Snapshot-Dateiname"}
+
+    token = _get_token()
+    if not token or not requests:
+        return {"error": "GITHUB_TOKEN nicht gesetzt"}
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return {"error": "Kein Backup-Gist gefunden"}
+
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return {"error": f"Gist-Fetch fehlgeschlagen: HTTP {resp.status_code}"}
+
+        files = resp.json().get("files", {})
+        entry = files.get(filename)
+        if not entry:
+            return {"error": f"Snapshot '{filename}' nicht gefunden"}
+
+        content = _fetch_gist_file_content(entry, token)
+        if not content:
+            return {"error": "Snapshot-Inhalt leer"}
+
+        parsed = json.loads(content)
+        bundle = parsed.get("files", {})
+        if not bundle:
+            return {"error": "Snapshot enthaelt keine Dateien"}
+
+        restored = 0
+        for fname, fdata in bundle.items():
+            save_json(fname, fdata)
+            restored += 1
+
+        log.info(f"restore_named_snapshot: {restored} Dateien aus {filename} wiederhergestellt")
+        return {
+            "success": True,
+            "restored_files": restored,
+            "snapshot_name": parsed.get("name"),
+            "created_at": parsed.get("created_at"),
+        }
+    except Exception as e:
+        log.error(f"restore_named_snapshot Fehler: {e}")
+        return {"error": str(e)}

@@ -1269,6 +1269,76 @@ async def api_admin_force_backup(user=Depends(require_auth)):
 
 
 # ============================================================
+# ADMIN: NAMED SNAPSHOTS (Point-in-Time Restore Points)
+# ============================================================
+
+@app.post("/api/admin/snapshot")
+async def api_admin_create_snapshot(payload: dict, user=Depends(require_auth)):
+    """Erzeugt einen benannten Point-in-Time-Snapshot im Backup-Gist.
+
+    Body: {"name": "pre_disk_migration", "note": "optional"}
+    """
+    try:
+        from app.persistence import create_named_snapshot
+        name = (payload.get("name") or "").strip()
+        note = payload.get("note", "") or ""
+        if not name:
+            raise HTTPException(status_code=400, detail="name required")
+        result = create_named_snapshot(name, note)
+        try:
+            from web.security import log_audit
+            await log_audit(user, "ADMIN_CREATE_SNAPSHOT",
+                            f"name={name} result={result.get('success', False)}")
+        except Exception:
+            pass
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return {"status": "ok", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/snapshot/list")
+async def api_admin_list_snapshots(user=Depends(require_auth)):
+    """Listet alle Named-Snapshots im Backup-Gist (neueste zuerst)."""
+    try:
+        from app.persistence import list_named_snapshots
+        snapshots = list_named_snapshots()
+        return {"status": "ok", "count": len(snapshots), "snapshots": snapshots}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/snapshot/restore")
+async def api_admin_restore_snapshot(payload: dict, user=Depends(require_auth)):
+    """Stellt einen Named-Snapshot wieder her.
+
+    Body: {"filename": "snapshot_pre_disk_migration_20260409_120000.json"}
+    """
+    try:
+        from app.persistence import restore_named_snapshot
+        filename = (payload.get("filename") or "").strip()
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename required")
+        result = restore_named_snapshot(filename)
+        try:
+            from web.security import log_audit
+            await log_audit(user, "ADMIN_RESTORE_SNAPSHOT",
+                            f"filename={filename} result={result.get('success', False)}")
+        except Exception:
+            pass
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return {"status": "ok", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # ADMIN: GIST INSPECT / FORCE RESTORE (Emergency Recovery)
 # ============================================================
 
