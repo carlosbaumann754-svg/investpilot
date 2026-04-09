@@ -63,6 +63,17 @@ def download_history(symbols=None, years=5):
         # Full ASSET_UNIVERSE for realistic backtesting
         symbols = list(ASSET_UNIVERSE.keys())
 
+    # Apply config-based universe filter (disabled_symbols)
+    try:
+        _cfg = load_config()
+        _disabled = set(_cfg.get("disabled_symbols", []) or [])
+        if _disabled:
+            before = len(symbols)
+            symbols = [s for s in symbols if s not in _disabled]
+            log.info(f"Universe-Filter: {before - len(symbols)} disabled_symbols ausgefiltert")
+    except Exception as _e:
+        log.debug(f"Universe-Filter skipped: {_e}")
+
     period = f"{years}y"
     histories = {}
     errors = 0
@@ -1280,8 +1291,15 @@ def _calc_costs(entry_price, days_held):
 # METRICS CALCULATION
 # ============================================================
 
-def calculate_metrics(trades):
+def calculate_metrics(trades, position_sizing=None):
     """Calculate performance metrics from a list of trades.
+
+    Args:
+        trades: list of trade dicts
+        position_sizing: optional dict with kelly sizing config:
+            {"kelly_fraction": 0.01, "max_concurrent": 20}
+            Wenn gesetzt: Equity-Curve wird mit Position-Sizing gerechnet
+            statt jeder Trade zu 100%. Realistischer fuer Live-Vergleich.
 
     Returns dict with: total_return, annual_return, sharpe_ratio,
     max_drawdown, win_rate, profit_factor, avg_trade_duration, total_trades
@@ -1289,8 +1307,22 @@ def calculate_metrics(trades):
     if not trades:
         return _empty_metrics()
 
-    net_returns = [t["pnl_net_pct"] / 100 for t in trades]
-    gross_returns = [t["pnl_pct"] / 100 for t in trades]
+    # v12: Bei Position-Sizing rechnen wir die Trade-Returns runter
+    # auf Equity-Anteil. Beispiel: Trade gewinnt 10%, Position war 1%
+    # der Equity → realer Equity-Return = 0.1%.
+    if position_sizing:
+        kelly_frac = position_sizing.get("kelly_fraction", 0.01)
+        # Trades nach exit_date sortieren fuer sequentielle Equity-Update
+        try:
+            sorted_trades = sorted(trades, key=lambda t: t.get("exit_date", ""))
+        except Exception:
+            sorted_trades = trades
+        net_returns = [(t["pnl_net_pct"] / 100) * kelly_frac for t in sorted_trades]
+        gross_returns = [(t["pnl_pct"] / 100) * kelly_frac for t in sorted_trades]
+        trades = sorted_trades
+    else:
+        net_returns = [t["pnl_net_pct"] / 100 for t in trades]
+        gross_returns = [t["pnl_pct"] / 100 for t in trades]
 
     wins = [r for r in net_returns if r > 0]
     losses = [r for r in net_returns if r <= 0]

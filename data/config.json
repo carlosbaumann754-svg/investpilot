@@ -245,5 +245,11 @@
     "sideways_mr_boost": 0.6,
     "bear_non_defensive_penalty": -10,
     "_comment": "Default OFF. Nach Backtest-Validierung via GitHub Action Optimizer aktivieren."
-  }
+  },
+  "disabled_symbols": [
+    "DIS", "ROKU", "VNQ", "UNH", "GOOGL", "MA", "ADBE", "SNAP", "PFE",
+    "PYPL", "SHOP", "MCD", "CRM", "PLTR", "NKE", "V", "DIA", "TLT",
+    "XLK", "PG", "QQQ"
+  ],
+  "_disabled_symbols_comment": "Universe-Filter: Symbols mit Sharpe<0.5 ODER PF<1.2 im per-symbol v12 backtest (2022-2026). Reversierbar durch Leerung der Liste."
 }

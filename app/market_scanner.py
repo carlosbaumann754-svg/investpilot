@@ -531,9 +531,17 @@ def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
     log.info("=" * 55)
 
     # Filtere nach aktivierten Klassen
+    try:
+        from app.config_manager import load_config as _lc
+        _cfg_ds = _lc()
+        disabled_symbols = set(_cfg_ds.get("disabled_symbols", []) or [])
+    except Exception:
+        disabled_symbols = set()
     to_scan = {s: info for s, info in ASSET_UNIVERSE.items()
-               if info["class"] in enabled_classes}
+               if info["class"] in enabled_classes and s not in disabled_symbols}
 
+    if disabled_symbols:
+        log.info(f"  Universe-Filter: {len(disabled_symbols)} disabled_symbols ausgefiltert")
     log.info(f"  Scanne {len(to_scan)} Assets...")
 
     results = []
