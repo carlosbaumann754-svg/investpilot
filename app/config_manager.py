@@ -58,7 +58,15 @@ def _bootstrap_from_image_seed():
     if not seed_dir.exists() or not seed_dir.is_dir():
         return
 
-    # Wenn config.json bereits da ist -> nicht ueberschreiben (idempotent)
+    # logs/ Subdir wird IMMER sichergestellt (auch wenn config.json schon da ist),
+    # weil scheduler.py im Modul-Scope einen FileHandler auf logs/scheduler.log oeffnet
+    # und sonst beim Boot crashed.
+    try:
+        (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
+    except Exception as le:
+        log.warning(f"Bootstrap logs/ mkdir fehlgeschlagen: {le}")
+
+    # Wenn config.json bereits da ist -> Seed-Files nicht ueberschreiben (idempotent)
     if (DATA_DIR / "config.json").exists():
         return
 
