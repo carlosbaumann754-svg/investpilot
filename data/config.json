@@ -65,9 +65,19 @@
       }
     },
     "rebalance_threshold_pct": 2,
-    "stop_loss_pct": -3,
-    "take_profit_pct": 12,
+    "stop_loss_pct": -2.5,
+    "take_profit_pct": 18,
     "use_ml_scoring": false
+  },
+  "leverage": {
+    "trailing_sl_enabled": true,
+    "trailing_sl_activation_pct": 0.8,
+    "trailing_sl_pct": 1.8,
+    "tp_tranches": [
+      {"pct_of_position": 30, "profit_target_pct": 4},
+      {"pct_of_position": 30, "profit_target_pct": 8},
+      {"pct_of_position": 40, "profit_target_pct": 15}
+    ]
   },
   "backtest": {
     "default_years": 5,
@@ -83,33 +93,33 @@
   },
   "asset_class_params": {
     "stocks": {
-      "sl_pct": -3.7,
-      "tp_pct": 7.4,
+      "sl_pct": -3.0,
+      "tp_pct": 9.0,
       "avg_volatility": 39.54
     },
     "etf": {
-      "sl_pct": -2.5,
-      "tp_pct": 5.0,
+      "sl_pct": -2.0,
+      "tp_pct": 6.0,
       "avg_volatility": 26.93
     },
     "crypto": {
-      "sl_pct": -5.9,
-      "tp_pct": 11.8,
+      "sl_pct": -5.0,
+      "tp_pct": 15.0,
       "avg_volatility": 61.93
     },
     "commodities": {
-      "sl_pct": -7.6,
-      "tp_pct": 15.2,
+      "sl_pct": -6.0,
+      "tp_pct": 18.0,
       "avg_volatility": 79.93
     },
     "forex": {
-      "sl_pct": -2,
-      "tp_pct": 4,
+      "sl_pct": -1.5,
+      "tp_pct": 4.5,
       "avg_volatility": 9.06
     },
     "indices": {
-      "sl_pct": -2,
-      "tp_pct": 4,
+      "sl_pct": -1.5,
+      "tp_pct": 4.5,
       "avg_volatility": 16.74
     }
   },
