@@ -223,6 +223,16 @@ class EtoroClient:
             or None
         )
 
+        # Open-Timestamp fuer Time-Stop Exit (v12). eToro liefert verschiedene Feldnamen
+        # je nach Endpoint — wir nehmen das erste was da ist, Trader fällt sonst auf
+        # trade_history.json zurueck.
+        open_time = (
+            pos.get("openDateTime") or pos.get("OpenDateTime")
+            or pos.get("openDate") or pos.get("OpenDate")
+            or pos.get("open_date") or pos.get("open_time")
+            or pos.get("timestamp") or None
+        )
+
         return {
             "instrument_id": iid,
             "position_id": pid,
@@ -232,4 +242,5 @@ class EtoroClient:
             "leverage": leverage,
             "current_price": current_price,
             "entry_price": entry_price,
+            "open_time": open_time,
         }

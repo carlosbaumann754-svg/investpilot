@@ -192,6 +192,12 @@
     "avoid_first_minutes": 30,
     "avoid_last_minutes": 30
   },
+  "time_stop": {
+    "enabled": true,
+    "max_days_stale": 10,
+    "stale_pnl_threshold_pct": 0.5,
+    "min_days_open": 2
+  },
   "hedging": {
     "enabled": true,
     "bear_position_multiplier": 0.5,

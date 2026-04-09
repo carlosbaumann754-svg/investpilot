@@ -22,6 +22,49 @@ def save_trade(trade_entry):
     save_json("trade_history.json", history)
 
 
+def _find_position_open_time(position_id, api_open_time=None):
+    """Ermittle wie lange eine Position offen ist (in Tagen).
+
+    Priority:
+    1) api_open_time aus eToro API (wenn Feld vorhanden)
+    2) trade_history.json Lookup nach position_id (erster BUY-Entry)
+
+    Returns (open_datetime, age_days) oder (None, None) wenn unbekannt.
+    """
+    from datetime import datetime
+
+    def _parse(ts):
+        if not ts:
+            return None
+        try:
+            s = str(ts).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
+        except Exception:
+            return None
+
+    # 1) eToro API
+    dt = _parse(api_open_time)
+
+    # 2) Fallback trade_history lookup
+    if dt is None and position_id is not None:
+        history = load_json("trade_history.json") or []
+        for entry in history:
+            if (str(entry.get("position_id")) == str(position_id)
+                    and entry.get("action") in ("BUY", "OPEN", "buy", "open")):
+                dt = _parse(entry.get("timestamp"))
+                if dt is not None:
+                    break
+
+    if dt is None:
+        return None, None
+
+    age = (datetime.now() - dt).total_seconds() / 86400.0
+    return dt, age
+
+
 # ============================================================
 # SAFE MODULE IMPORTS (Graceful Degradation)
 # ============================================================
@@ -280,6 +323,13 @@ def check_stop_loss_take_profit(client, config):
     sl_pct = dt_config.get("stop_loss_pct", -10)
     tp_pct = dt_config.get("take_profit_pct", 25)
 
+    # v12: Time-Stop Exit Config
+    ts_cfg = config.get("time_stop", {}) or {}
+    ts_enabled = ts_cfg.get("enabled", False)
+    ts_max_days = ts_cfg.get("max_days_stale", 10)
+    ts_stale_thr = ts_cfg.get("stale_pnl_threshold_pct", 0.5)
+    ts_min_days = ts_cfg.get("min_days_open", 2)
+
     lm = _import_leverage_manager()
     al = _import_alerts()
 
@@ -332,6 +382,36 @@ def check_stop_loss_take_profit(client, config):
                     if al:
                         al.alert_trade_executed(trade_entry)
                 continue  # Trailing SL hat Prioritaet, Skip fixed SL/TP
+
+        # --- v12: Time-Stop / Staleness Exit ---
+        # Schliesst Positionen die zu lange "stuck" sind und kaum P/L generieren.
+        # Opportunitaetskosten-Schutz: gebundenes Kapital waere woanders besser.
+        if ts_enabled:
+            _, age_days = _find_position_open_time(p["position_id"], p.get("open_time"))
+            if age_days is not None and age_days >= ts_max_days \
+                    and age_days >= ts_min_days \
+                    and abs(p["pnl_pct"]) < ts_stale_thr:
+                log.info(f"  TIME_STOP: Position {p['position_id']} "
+                         f"(Instrument {p['instrument_id']}) — "
+                         f"{age_days:.1f}d offen, PnL {p['pnl_pct']:+.2f}% < {ts_stale_thr}%")
+                result = client.close_position(p["position_id"], p["instrument_id"])
+                if result:
+                    trade_entry = {
+                        "timestamp": datetime.now().isoformat(),
+                        "action": "TIME_STOP_CLOSE",
+                        "instrument_id": p["instrument_id"],
+                        "position_id": p["position_id"],
+                        "pnl_pct": p["pnl_pct"],
+                        "pnl_usd": p["pnl"],
+                        "leverage": p["leverage"],
+                        "age_days": round(age_days, 2),
+                        "status": "executed",
+                    }
+                    save_trade(trade_entry)
+                    actions.append("TIME_STOP_CLOSE")
+                    if al:
+                        al.alert_trade_executed(trade_entry)
+                    continue  # Position ist zu, Rest skippen
 
         # --- Profit-Locking: Partial Close (TP-Tranchen) ---
         lev_cfg = config.get("leverage", {})
