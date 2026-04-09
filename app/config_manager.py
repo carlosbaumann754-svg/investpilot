@@ -35,6 +35,53 @@ try:
 except Exception as _e:
     log.warning(f"DATA_DIR mkdir failed: {_e}")
 
+
+def _bootstrap_from_image_seed():
+    """One-time bootstrap fuer Persistent-Disk-Migration.
+
+    Wenn DATA_DIR auf einen frisch gemounteten Persistent Disk zeigt
+    (z.B. /data) und KEIN config.json enthaelt, kopieren wir die im
+    Docker-Image gebackten Seed-Dateien aus /app/data einmalig hinueber.
+    Damit:
+      - laeuft FastAPI sofort (config.json vorhanden)
+      - kann der Scheduler-Subprocess danach Cloud-Restore aus dem Gist
+        ueberlagern (brain_state, trade_history, ...)
+    Ist /data bereits befuellt, passiert nichts (Idempotenz).
+    """
+    seed_dir = Path("/app/data")
+    # Nur aktiv wenn DATA_DIR != /app/data UND seed-Dir existiert
+    try:
+        if DATA_DIR.resolve() == seed_dir.resolve():
+            return
+    except Exception:
+        pass
+    if not seed_dir.exists() or not seed_dir.is_dir():
+        return
+
+    # Wenn config.json bereits da ist -> nicht ueberschreiben (idempotent)
+    if (DATA_DIR / "config.json").exists():
+        return
+
+    copied = []
+    try:
+        for entry in seed_dir.iterdir():
+            if entry.is_file() and entry.suffix == ".json":
+                target = DATA_DIR / entry.name
+                if target.exists():
+                    continue
+                try:
+                    target.write_bytes(entry.read_bytes())
+                    copied.append(entry.name)
+                except Exception as ce:
+                    log.warning(f"Bootstrap-Copy fehlgeschlagen fuer {entry.name}: {ce}")
+        if copied:
+            log.info(f"DATA_DIR Bootstrap: {len(copied)} Seed-Dateien kopiert von {seed_dir} -> {DATA_DIR}: {copied}")
+    except Exception as be:
+        log.warning(f"DATA_DIR Bootstrap Fehler: {be}")
+
+
+_bootstrap_from_image_seed()
+
 # Thread-Lock fuer JSON-Dateizugriffe (verhindert Race Conditions
 # zwischen Scheduler-Thread und Web-API)
 _file_locks = {}
