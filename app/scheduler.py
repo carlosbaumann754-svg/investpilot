@@ -19,6 +19,80 @@ TRADING_FLAG = get_data_path("trading_enabled.flag")
 INTERVAL_SECONDS = 300  # 5 Minuten
 
 
+def _dispatch_discovery_workflow(triggered_by: str = "scheduler-cron") -> bool:
+    """Triggert den Asset-Discovery-Workflow auf GitHub Actions.
+
+    Mirror zu web/app.py::_trigger_github_action_discovery — hier inline,
+    damit der Scheduler nicht auf FastAPI-Code zugreifen muss. Wird vom
+    Friday-17:00-Slot genutzt statt des frueheren in-process
+    run_weekly_discovery() (OOM-Risiko auf Render Free Tier 512 MB).
+    """
+    from app.config_manager import save_json
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log.error("Discovery-Dispatch: GITHUB_TOKEN fehlt — kann Workflow nicht triggern")
+        return False
+
+    repo = os.environ.get("GITHUB_REPO", "carlosbaumann754-svg/investpilot")
+    workflow_file = os.environ.get("DISCOVERY_WORKFLOW_FILE", "asset_discovery.yml")
+    ref = os.environ.get("DISCOVERY_WORKFLOW_REF", "master")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+
+    # Status initialisieren, damit der Watchdog den Lauf sehen kann
+    status = {
+        "state": "running",
+        "phase": "dispatching",
+        "message": "Scheduler-Cron: GitHub Action wird gestartet...",
+        "started_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "triggered_by": triggered_by,
+        "error": None,
+        "mode": "github-action-dispatching",
+    }
+    try:
+        save_json("discovery_status.json", status)
+    except Exception:
+        pass
+
+    try:
+        import requests
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={"ref": ref, "inputs": {"triggered_by": triggered_by}},
+            timeout=15,
+        )
+        if resp.status_code in (201, 204):
+            log.info(f"Discovery-Workflow getriggert (repo={repo}, ref={ref})")
+            status["mode"] = "github-action-running"
+            status["message"] = "GitHub Action gestartet, warte auf Runner..."
+            status["updated_at"] = datetime.now().isoformat()
+            try:
+                save_json("discovery_status.json", status)
+            except Exception:
+                pass
+            return True
+        log.error(f"Discovery-Dispatch HTTP {resp.status_code}: {resp.text[:200]}")
+        status["state"] = "error"
+        status["error"] = f"workflow_dispatch HTTP {resp.status_code}: {resp.text[:160]}"
+    except Exception as e:
+        log.exception("Discovery Workflow-Dispatch fehlgeschlagen")
+        status["state"] = "error"
+        status["error"] = f"dispatch: {type(e).__name__}: {e}"
+
+    status["finished_at"] = datetime.now().isoformat()
+    status["updated_at"] = datetime.now().isoformat()
+    try:
+        save_json("discovery_status.json", status)
+    except Exception:
+        pass
+    return False
+
+
 def is_trading_enabled():
     """Pruefe ob Trading vom Dashboard aktiviert ist."""
     # Wenn Flag-Datei nicht existiert, ist Trading standardmaessig AN
@@ -117,15 +191,36 @@ def scheduler_loop():
                 time.sleep(INTERVAL_SECONDS)
                 continue
 
-            # --- Freitag 17:00: Asset Discovery ---
+            # --- Freitag 17:00: Asset Discovery (offloaded an GitHub Actions) ---
+            # Fruehere Version rief run_weekly_discovery() in-process auf -> OOM
+            # Risiko auf Render Free Tier (512 MB). Jetzt: Dispatch an GH Action,
+            # Ergebnisse kommen via Gist + Watchdog zurueck. Guard via
+            # discovery_last_dispatched.flag verhindert Mehrfach-Dispatch
+            # innerhalb des 1-Stunden-Slots (Scheduler tickt alle 5 Min).
             from app.asset_discovery import is_friday_discovery_time
             if is_friday_discovery_time():
-                log.info(f"[{datetime.now():%H:%M}] Freitag - Starte Asset Discovery...")
+                guard = get_data_path("discovery_last_dispatched.flag")
+                today_key = datetime.now().strftime("%Y-%m-%d")
+                already = False
                 try:
-                    from app.asset_discovery import run_weekly_discovery
-                    run_weekly_discovery()
-                except Exception as e:
-                    log.error(f"Asset Discovery Fehler: {e}", exc_info=True)
+                    if guard.exists() and guard.read_text().strip() == today_key:
+                        already = True
+                except Exception:
+                    pass
+                if not already:
+                    log.info(
+                        f"[{datetime.now():%H:%M}] Freitag - Dispatche Asset Discovery "
+                        f"an GitHub Actions..."
+                    )
+                    try:
+                        ok = _dispatch_discovery_workflow(triggered_by="scheduler-friday-17")
+                        if ok:
+                            try:
+                                guard.write_text(today_key)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        log.error(f"Asset Discovery Dispatch Fehler: {e}", exc_info=True)
 
             # --- Freitag 18:00: Weekly Report ---
             from app.weekly_report import is_friday_evening

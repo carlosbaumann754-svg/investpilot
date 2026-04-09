@@ -1,13 +1,19 @@
-name: Manual ML Training
+name: ML Training
 
-# Laeuft nur auf manuellen Trigger (aus dem InvestPilot-Dashboard via
-# workflow_dispatch oder aus dem GitHub UI).
+# Laeuft auf:
+#   - manuellem Trigger (Dashboard / GitHub UI via workflow_dispatch)
+#   - wochentlichem Cron: Samstag 04:00 UTC (06:00 CEST), damit das
+#     ML-Modell ohne manuelles Eingreifen frisch bleibt. Samstag gewaehlt
+#     weil Maerkte geschlossen sind und der Gist-Backup am Sonntag frueh
+#     (Optimizer 03:00 UTC) bereits die neuen Gewichte sieht.
 #
-# Grund: Render Free Tier (512 MB RAM) kann download_history(years=5) fuer
-# 70+ Symbole + RandomForest-Training nicht ausfuehren ohne den Web-Container
-# zu OOMen (-> 502 Bad Gateway). Ein GitHub Actions Runner hat 7 GB RAM,
-# laeuft isoliert und pusht das Ergebnis (inkl. joblib base64-encoded) ueber
-# den bestehenden Backup-Gist zurueck an Render.
+# Grund fuer GH-Action-Offload: Render Free Tier (512 MB RAM) kann
+# download_history(years=5) fuer 70+ Symbole + GradientBoosting-Training
+# nicht ausfuehren ohne den Web-Container zu OOMen (-> 502 Bad Gateway).
+# Ein GitHub Actions Runner hat 7 GB RAM, laeuft isoliert und pusht das
+# Ergebnis (inkl. joblib base64-encoded) ueber den bestehenden Backup-Gist
+# zurueck an Render. Der Scheduler-Watchdog check_and_reload_ml_training_output()
+# laedt die frischen Gewichte alle 300s und forciert ml_scorer._model=None.
 
 on:
   workflow_dispatch:
@@ -16,6 +22,9 @@ on:
         description: "Trigger-Quelle (dashboard / manual / debug)"
         required: false
         default: "manual"
+  schedule:
+    # Samstag 04:00 UTC = 06:00 CEST — Markets zu, vor Optimizer (So 03:00 UTC)
+    - cron: '0 4 * * 6'
 
 # Nur ein aktiver Lauf gleichzeitig — neuere Trigger queueen.
 concurrency:
@@ -57,7 +66,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -m app.ml_training_runner github-action-${{ github.event.inputs.triggered_by || 'manual' }}
+          python -m app.ml_training_runner github-action-${{ github.event.inputs.triggered_by || (github.event_name == 'schedule' && 'weekly-cron') || 'manual' }}
 
       - name: Upload ML training artifacts
         if: always()
