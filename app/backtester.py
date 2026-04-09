@@ -79,6 +79,9 @@ def download_history(symbols=None, years=5):
     errors = 0
     batch_size = 10
 
+    # Track which symbols failed for universe-health report
+    health_report: dict[str, dict] = {}
+
     log.info(f"Downloading {len(symbols)} assets, period={period}...")
 
     for i in range(0, len(symbols), batch_size):
@@ -86,6 +89,7 @@ def download_history(symbols=None, years=5):
         for sym in batch:
             info = ASSET_UNIVERSE.get(sym)
             if not info:
+                health_report[sym] = {"status": "unknown", "reason": "not in ASSET_UNIVERSE"}
                 continue
             yf_sym = info["yf"]
             try:
@@ -94,18 +98,45 @@ def download_history(symbols=None, years=5):
                 if hist.empty or len(hist) < 100:
                     log.debug(f"  {sym}: zu wenig Daten ({len(hist)} Tage)")
                     errors += 1
+                    health_report[sym] = {
+                        "status": "insufficient_data",
+                        "days": len(hist),
+                        "yf_symbol": yf_sym,
+                    }
                     continue
                 histories[sym] = hist
+                health_report[sym] = {"status": "ok", "days": len(hist)}
                 log.debug(f"  {sym}: {len(hist)} Tage geladen")
             except Exception as e:
                 log.debug(f"  {sym} Download-Fehler: {e}")
                 errors += 1
+                health_report[sym] = {
+                    "status": "download_error",
+                    "error": str(e)[:200],
+                    "yf_symbol": yf_sym,
+                }
         # Rate limiting between batches
         if i + batch_size < len(symbols):
             import time
             time.sleep(2)
 
     log.info(f"Download fertig: {len(histories)} OK, {errors} Fehler")
+
+    # Persist health report for dashboard / diagnostics
+    if errors > 0:
+        failed = [s for s, r in health_report.items() if r.get("status") != "ok"]
+        log.warning(f"Universe-Health: {len(failed)} Symbols ohne verwertbare Daten: {failed}")
+    try:
+        save_json("universe_health.json", {
+            "generated_at": datetime.now().isoformat(),
+            "total_requested": len(symbols),
+            "ok_count": len(histories),
+            "error_count": errors,
+            "report": health_report,
+        })
+    except Exception as _e:
+        log.debug(f"universe_health.json write skipped: {_e}")
+
     return histories
 
 
@@ -1350,13 +1381,43 @@ def calculate_metrics(trades, position_sizing=None):
     annual_return = (1 + total_return) ** (1 / years) - 1 if total_return > -1 else -1
 
     # Sharpe Ratio (annualized, risk-free = 0)
-    if len(net_returns) >= 2:
+    #
+    # Bei position_sizing: aus dem Equity-Curve auf Tagesbasis rechnen.
+    # Verteilt jeden Trade-Return gleichmaessig ueber seine Holding-Days und
+    # summiert die Contribution pro Kalendertag. Das ist die ehrliche Form
+    # eines Strategy-Sharpe — scale-invariant ist nur die Trade-Level-Form.
+    sharpe = 0
+    if position_sizing and len(trades) >= 2:
+        from datetime import timedelta as _td
+        daily_contrib: dict[str, float] = {}
+        for t, r_scaled in zip(trades, net_returns):
+            try:
+                d_entry = datetime.strptime(t["entry_date"], "%Y-%m-%d")
+                d_exit = datetime.strptime(t["exit_date"], "%Y-%m-%d")
+            except (ValueError, KeyError):
+                continue
+            span_days = max((d_exit - d_entry).days, 1)
+            daily_r = r_scaled / span_days
+            cur = d_entry
+            while cur <= d_exit:
+                # Nur Werktage zaehlen (grobe Approximation des Markt-Kalenders)
+                if cur.weekday() < 5:
+                    key = cur.strftime("%Y-%m-%d")
+                    daily_contrib[key] = daily_contrib.get(key, 0.0) + daily_r
+                cur = cur + _td(days=1)
+        if len(daily_contrib) >= 2:
+            daily_rets = list(daily_contrib.values())
+            mean_d = sum(daily_rets) / len(daily_rets)
+            std_d = (sum((r - mean_d) ** 2 for r in daily_rets) / (len(daily_rets) - 1)) ** 0.5
+            if std_d > 0:
+                # 252 trading days per year
+                sharpe = (mean_d / std_d) * (252 ** 0.5)
+    elif len(net_returns) >= 2:
+        # Fallback: Trade-Level (scale-invariant, verzerrt bei Kelly-Vergleich)
         mean_r = sum(net_returns) / len(net_returns)
         std_r = (sum((r - mean_r) ** 2 for r in net_returns) / (len(net_returns) - 1)) ** 0.5
         trades_per_year = len(net_returns) / years
         sharpe = (mean_r * trades_per_year) / (std_r * (trades_per_year ** 0.5)) if std_r > 0 else 0
-    else:
-        sharpe = 0
 
     # Max Drawdown
     equity = [1.0]

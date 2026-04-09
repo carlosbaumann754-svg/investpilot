@@ -89,7 +89,7 @@ V12_SECTIONS: dict[str, dict[str, Any]] = {
         "defensive_sectors": ["health", "consumer", "bonds", "commodities"],
     },
     "regime_strategies": {
-        "enabled": False,  # Default OFF — Optimizer darf aktivieren
+        "enabled": True,  # Aktiviert 2026-04-09 nach Backtest-Validation (+0.38 Sharpe)
         "bull_momentum_boost": 0.5,
         "sideways_mr_boost": 0.6,
         "bear_non_defensive_penalty": -10,

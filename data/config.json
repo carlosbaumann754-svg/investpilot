@@ -240,11 +240,11 @@
     "defensive_sectors": ["health", "consumer", "bonds", "commodities"]
   },
   "regime_strategies": {
-    "enabled": false,
+    "enabled": true,
     "bull_momentum_boost": 0.5,
     "sideways_mr_boost": 0.6,
     "bear_non_defensive_penalty": -10,
-    "_comment": "Default OFF. Nach Backtest-Validierung via GitHub Action Optimizer aktivieren."
+    "_comment": "Aktiviert nach Backtest-Validierung (2026-04-09): Sharpe +0.38, AnnRet +2.81%, MaxDD nur +0.08% vs OFF."
   },
   "disabled_symbols": [
     "DIS", "ROKU", "VNQ", "UNH", "GOOGL", "MA", "ADBE", "SNAP", "PFE",
