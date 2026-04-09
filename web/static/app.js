@@ -282,9 +282,9 @@ async function loadDashboard() {
                     const setVal = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
                     const setBadge = (id, val, cls) => { const e = document.getElementById(id); if (e) { e.textContent = val; e.className = 'badge ' + cls; } };
                     setVal('regime-vix-value', r.vix_level != null ? r.vix_level.toFixed(1) : '--');
-                    setBadge('regime-market-value', r.brain_regime || '--',
-                        r.brain_regime === 'bear' ? 'badge-red' : r.brain_regime === 'bull' ? 'badge-green' : 'badge-orange');
-                    setVal('regime-fg-value', r.fear_greed != null ? r.fear_greed : '--');
+                    setBadge('regime-market-value', r.market_regime || '--',
+                        r.market_regime === 'bear' ? 'badge-red' : r.market_regime === 'bull' ? 'badge-green' : 'badge-orange');
+                    setVal('regime-fg-value', r.fear_greed_index != null ? r.fear_greed_index : '--');
                     setBadge('regime-recovery-value', r.recovery_mode ? 'AKTIV' : 'Nein',
                         r.recovery_mode ? 'badge-orange' : 'badge-green');
                     setBadge('regime-halt-value', r.trading_halted ? 'JA' : 'Nein',

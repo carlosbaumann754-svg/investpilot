@@ -1887,6 +1887,8 @@ async def api_regime(user=Depends(require_auth)):
             "vix_level": vix,
             "vix_regime": ctx.get("vix_regime", "unknown"),
             "market_regime": brain.get("market_regime", "unknown"),
+            "fear_greed_index": ctx.get("fear_greed_index"),
+            "fear_greed_class": ctx.get("fear_greed_class"),
             "trading_halted": vix is not None and vix > vix_halt,
             "vix_halt_threshold": vix_halt,
             "recovery_mode": recovery_active,
