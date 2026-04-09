@@ -1,0 +1,65 @@
+name: Kelly Cap Sweep
+
+# Misst empirisch wie sich verschiedene Kelly-Cap-Werte (0.01 / 0.02 / 0.04 /
+# 0.08) auf Rendite, Sharpe und MaxDD auswirken. Re-scored die gleichen Trades
+# mit unterschiedlicher position_sizing — die Trades selbst sind kelly-
+# unabhaengig, also reicht eine simulate_trades-Pass.
+
+on:
+  workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: "Trigger-Quelle (dashboard / manual / debug)"
+        required: false
+        default: "manual"
+
+concurrency:
+  group: investpilot-kelly-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: "Run Kelly Cap Sweep"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare data directory
+        run: |
+          mkdir -p data/logs
+          if [ ! -f data/config.json ]; then
+            echo "{}" > data/config.json
+          fi
+
+      - name: Run kelly sweep
+        env:
+          GITHUB_TOKEN: ${{ secrets.INVESTPILOT_GIST_TOKEN }}
+          INVESTPILOT_BACKTEST_CI: '1'
+        run: |
+          python -m app.kelly_sweep_runner github-action-${{ github.event.inputs.triggered_by || 'manual' }}
+
+      - name: Upload kelly sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kelly-sweep-result-${{ github.run_id }}
+          path: |
+            data/kelly_sweep_results.json
+            data/kelly_sweep_status.json
+            data/logs/
+          retention-days: 14
+          if-no-files-found: warn

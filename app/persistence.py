@@ -102,6 +102,14 @@ DISCOVERY_OUTPUT_FILES = [
     "discovery_status.json",
 ]
 
+# Dateien die der Kelly-Sweep-Runner (GitHub Action) modifiziert. Eigener
+# Meta-Key, isoliert vom Backtest-Push, damit ein laufender Sweep nicht den
+# regulaeren Backtest-Stand ueberschreibt.
+KELLY_SWEEP_OUTPUT_FILES = [
+    "kelly_sweep_results.json",
+    "kelly_sweep_status.json",
+]
+
 
 def _get_token():
     """GitHub Token aus Environment Variable laden."""
@@ -1170,6 +1178,121 @@ def check_and_reload_discovery_output():
 
     except Exception as e:
         log.warning(f"check_and_reload_discovery_output Fehler: {e}")
+        return False
+
+
+# ============================================================
+# KELLY-SWEEP — Isolierter Gist-Push analog Backtest/ML-Training
+# ============================================================
+
+_KELLY_SWEEP_RELOAD_STATE_FILE = "last_applied_kelly_sweep_push.json"
+
+
+def backup_kelly_sweep_results():
+    """Push NUR die Dateien, die der Kelly-Sweep-Runner modifiziert."""
+    token = _get_token()
+    if not token or not requests:
+        log.warning("backup_kelly_sweep_results: Kein GITHUB_TOKEN")
+        return False
+
+    files = {}
+    for filename in KELLY_SWEEP_OUTPUT_FILES:
+        data = load_json(filename)
+        if data is not None:
+            files[filename] = {
+                "content": json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            }
+
+    if not files:
+        log.warning("backup_kelly_sweep_results: Keine Output-Dateien")
+        return False
+
+    files["_kelly_sweep_meta.json"] = {
+        "content": json.dumps({
+            "last_kelly_sweep_push": datetime.now().isoformat(),
+            "files": list(files.keys()),
+            "source": "github-action",
+        }, indent=2)
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("backup_kelly_sweep_results: Kein Backup-Gist gefunden")
+            return False
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": files},
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"backup_kelly_sweep_results OK ({len(files)} Dateien)")
+            return True
+        log.warning(f"backup_kelly_sweep_results: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        log.warning(f"backup_kelly_sweep_results Fehler: {e}")
+        return False
+
+
+def check_and_reload_kelly_sweep_output():
+    """Watchdog-Reload analog backtest/discovery."""
+    token = _get_token()
+    if not token or not requests:
+        return False
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return False
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return False
+        gist_data = resp.json()
+        meta_entry = gist_data.get("files", {}).get("_kelly_sweep_meta.json")
+        if not meta_entry:
+            return False
+        meta_content = _fetch_gist_file_content(meta_entry, token)
+        if not meta_content:
+            return False
+        try:
+            meta = json.loads(meta_content)
+        except Exception:
+            return False
+        remote_push = meta.get("last_kelly_sweep_push")
+        if not remote_push:
+            return False
+        local_state = load_json(_KELLY_SWEEP_RELOAD_STATE_FILE) or {}
+        if local_state.get("last_applied_push") == remote_push:
+            return False
+
+        log.info(f"Kelly-Sweep-Watchdog: Neuer Push {remote_push}")
+        files_reloaded = 0
+        for filename in KELLY_SWEEP_OUTPUT_FILES:
+            if filename not in gist_data.get("files", {}):
+                continue
+            content = _fetch_gist_file_content(gist_data["files"][filename], token)
+            if not content:
+                continue
+            try:
+                save_json(filename, json.loads(content))
+                files_reloaded += 1
+            except Exception as e:
+                log.warning(f"Kelly-Sweep parse {filename}: {e}")
+
+        save_json(_KELLY_SWEEP_RELOAD_STATE_FILE, {
+            "last_applied_push": remote_push,
+            "applied_at": datetime.now().isoformat(),
+            "files_reloaded": files_reloaded,
+        })
+        log.info(f"Kelly-Sweep-Watchdog: {files_reloaded} Dateien uebernommen")
+        return files_reloaded > 0
+    except Exception as e:
+        log.warning(f"check_and_reload_kelly_sweep_output Fehler: {e}")
         return False
 
 
