@@ -382,8 +382,23 @@ def train_model(histories, train_pct=0.8):
         },
     }
 
-    # Save model info (not the model itself — we retrain on startup if needed)
+    # Persist metadata
     save_json("ml_model.json", _model_info)
+
+    # Persist model binary via joblib, damit check_and_reload_ml_training_output()
+    # das Gewicht base64-encoded in den Gist pushen kann. Ohne diesen Schritt
+    # haette Render nach einem Restart KEIN ML-Modell (Render Free Tier kann
+    # kein re-train on startup -> OOM). Fehler sind non-fatal — Metadaten sind
+    # bereits gespeichert und der Gist-Backup skippt das Weights-File graceful.
+    try:
+        from joblib import dump as joblib_dump
+        import os as _os
+        _data_dir = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data")
+        _model_path = _os.path.join(_data_dir, "ml_model.joblib")
+        joblib_dump(model, _model_path)
+        log.info(f"  Model gespeichert: {_model_path}")
+    except Exception as _e:
+        log.warning(f"  Model-Joblib speichern fehlgeschlagen: {_e}")
 
     log.info(f"ML Model trained: Train Acc={train_acc:.1%}, Test Acc={test_acc:.1%}, "
              f"F1={test_f1:.1%}")
