@@ -34,11 +34,12 @@ ASSET_CLASS_DEFAULTS = {
 # ============================================================
 
 PARAM_GRID = {
-    "min_scanner_score": [20, 30, 40, 50],
-    "stop_loss_pct":     [-3, -5, -8],
-    "take_profit_pct":   [5, 8, 12],
-    "trailing_sl_pct":   [1.5, 2.0, 3.0],
-    "trailing_sl_activation_pct": [0.5, 1.0],
+    # v12: erweitert auf asymmetrisches R/R 1:3
+    "min_scanner_score": [30, 40, 50, 60],
+    "stop_loss_pct":     [-2.0, -2.5, -3.0, -4.0, -5.0],
+    "take_profit_pct":   [6, 9, 12, 15, 18],
+    "trailing_sl_pct":   [1.5, 1.8, 2.5],
+    "trailing_sl_activation_pct": [0.5, 0.8, 1.0],
 }
 
 # Minimum expected return nach Kosten (Trade muss sich lohnen)
@@ -649,11 +650,22 @@ def run_weekly_optimization():
     changes_made = {}
     new_params = dict(current_params)
 
-    # Grid-Search Ergebnis anwenden (nur wenn OOS besser als aktuell)
-    if best and best["oos_sharpe"] > -1:
+    # Grid-Search Ergebnis anwenden — v12: nur wenn OOS Sharpe positiv.
+    # Negative Sharpe-Werte kommen typischerweise von veralteten Backtests
+    # die unsere v12-Features (Time-Stop, Meta-Labeler, Kelly, Trailing
+    # Tranchen) noch nicht modellieren. Lieber gar nichts apply'en als
+    # Garbage-In-Garbage-Out.
+    if best and best["oos_sharpe"] > 0:
         bp = best["params"]
 
-        # Nur Aenderungen wenn deutlich besser
+        # v12 Sanity-Guard: schuetze asymmetrisches R/R vor "klassischer"
+        # Optimizer-Drift. Wenn das aktuelle TP deutlich groesser ist als
+        # das beste vom Grid (z.B. wir laufen auf 18%, Grid empfiehlt 8%),
+        # ueberschreiben wir NICHT — vermutlich kennt der Optimizer-Backtest
+        # die Asymmetric-Strategy nicht (Time-Stop, Trailing, Tranchen).
+        # Zusaetzlich: nur uebernehmen wenn OOS-Sharpe positiv ist.
+        oos_sharpe_ok = (best.get("oos_sharpe") or 0) > 0
+
         if bp["min_scanner_score"] != current_params["min_scanner_score"]:
             new_params["min_scanner_score"] = bp["min_scanner_score"]
             changes_made["min_scanner_score"] = {
@@ -662,18 +674,35 @@ def run_weekly_optimization():
             }
 
         if bp["stop_loss_pct"] != current_params["stop_loss_pct"]:
-            new_params["stop_loss_pct"] = bp["stop_loss_pct"]
-            changes_made["stop_loss_pct"] = {
-                "old": current_params["stop_loss_pct"],
-                "new": bp["stop_loss_pct"],
-            }
+            cur_sl = abs(current_params["stop_loss_pct"] or 0)
+            new_sl = abs(bp["stop_loss_pct"] or 0)
+            # Nur uebernehmen wenn OOS positiv ODER neuer SL nicht radikal anders
+            if oos_sharpe_ok or (0.5 <= (new_sl / max(cur_sl, 0.1)) <= 2.0):
+                new_params["stop_loss_pct"] = bp["stop_loss_pct"]
+                changes_made["stop_loss_pct"] = {
+                    "old": current_params["stop_loss_pct"],
+                    "new": bp["stop_loss_pct"],
+                }
+            else:
+                log.info(f"  [v12-guard] SL-Aenderung blockiert: "
+                         f"{current_params['stop_loss_pct']} -> {bp['stop_loss_pct']} "
+                         f"(OOS Sharpe={best.get('oos_sharpe')})")
 
         if bp["take_profit_pct"] != current_params["take_profit_pct"]:
-            new_params["take_profit_pct"] = bp["take_profit_pct"]
-            changes_made["take_profit_pct"] = {
-                "old": current_params["take_profit_pct"],
-                "new": bp["take_profit_pct"],
-            }
+            cur_tp = current_params["take_profit_pct"] or 0
+            new_tp = bp["take_profit_pct"] or 0
+            # v12 Asymmetric-Schutz: blockiere TP-Reduktion >30% wenn OOS negativ
+            tp_drop_pct = (cur_tp - new_tp) / max(cur_tp, 0.1)
+            if oos_sharpe_ok or tp_drop_pct < 0.3:
+                new_params["take_profit_pct"] = bp["take_profit_pct"]
+                changes_made["take_profit_pct"] = {
+                    "old": current_params["take_profit_pct"],
+                    "new": bp["take_profit_pct"],
+                }
+            else:
+                log.info(f"  [v12-guard] TP-Aenderung blockiert: "
+                         f"{cur_tp} -> {new_tp} (drop={tp_drop_pct:.0%}, "
+                         f"OOS Sharpe={best.get('oos_sharpe')})")
 
     # ML Empfehlung anwenden
     if ml_comparison["recommendation"] == "switch_to_ml":
@@ -975,26 +1004,40 @@ def run_merge_optimization():
     min_return = calculate_min_expected_return()
     log.info(f"  Min Expected Return: {min_return}% (nach Kosten)")
 
-    # 7. Aenderungen ableiten
+    # 7. Aenderungen ableiten — v12: nur bei positivem OOS Sharpe + Sanity-Guards
     changes_made = {}
     new_params = dict(current_params)
-    if best and best["oos_sharpe"] > -1:
+    if best and best["oos_sharpe"] > 0:
         bp = best["params"]
+        oos_sharpe_ok = best["oos_sharpe"] > 0
+
         if bp["min_scanner_score"] != current_params["min_scanner_score"]:
             new_params["min_scanner_score"] = bp["min_scanner_score"]
             changes_made["min_scanner_score"] = {
                 "old": current_params["min_scanner_score"],
                 "new": bp["min_scanner_score"]}
+
         if bp["stop_loss_pct"] != current_params["stop_loss_pct"]:
-            new_params["stop_loss_pct"] = bp["stop_loss_pct"]
-            changes_made["stop_loss_pct"] = {
-                "old": current_params["stop_loss_pct"],
-                "new": bp["stop_loss_pct"]}
+            cur_sl = abs(current_params["stop_loss_pct"] or 0)
+            new_sl = abs(bp["stop_loss_pct"] or 0)
+            if oos_sharpe_ok or (0.5 <= (new_sl / max(cur_sl, 0.1)) <= 2.0):
+                new_params["stop_loss_pct"] = bp["stop_loss_pct"]
+                changes_made["stop_loss_pct"] = {
+                    "old": current_params["stop_loss_pct"],
+                    "new": bp["stop_loss_pct"]}
+
         if bp["take_profit_pct"] != current_params["take_profit_pct"]:
-            new_params["take_profit_pct"] = bp["take_profit_pct"]
-            changes_made["take_profit_pct"] = {
-                "old": current_params["take_profit_pct"],
-                "new": bp["take_profit_pct"]}
+            cur_tp = current_params["take_profit_pct"] or 0
+            new_tp = bp["take_profit_pct"] or 0
+            tp_drop_pct = (cur_tp - new_tp) / max(cur_tp, 0.1)
+            if oos_sharpe_ok or tp_drop_pct < 0.3:
+                new_params["take_profit_pct"] = bp["take_profit_pct"]
+                changes_made["take_profit_pct"] = {
+                    "old": current_params["take_profit_pct"],
+                    "new": bp["take_profit_pct"]}
+            else:
+                log.info(f"  [v12-guard] TP-Aenderung blockiert: "
+                         f"{cur_tp} -> {new_tp} (drop={tp_drop_pct:.0%})")
 
     if ml_comparison["recommendation"] == "switch_to_ml":
         new_params["use_ml_scoring"] = True
