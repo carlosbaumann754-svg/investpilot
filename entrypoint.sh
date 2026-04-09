@@ -8,6 +8,12 @@ echo "Data Dir: ${INVESTPILOT_DATA_DIR:-/app/data}"
 # Sicherstellen dass Data-Verzeichnisse existieren
 mkdir -p /app/data/logs
 
+# v12 Bootstrap-Migration (idempotent): injiziert fehlende Feature-Flag-
+# Sections + disabled_symbols in data/config.json ohne Optimizer-tunbare
+# Werte (sl_pct/tp_pct/min_score) anzufassen.
+echo "Starte v12 Bootstrap-Migration..."
+python -m app.bootstrap_v12 || echo "WARNUNG: bootstrap_v12 non-zero exit — fahre fort"
+
 # Trading Scheduler im Hintergrund starten
 echo "Starte Trading Scheduler..."
 python -m app.scheduler &
