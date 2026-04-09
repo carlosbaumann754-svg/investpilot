@@ -1311,49 +1311,6 @@ async def api_admin_list_snapshots(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/admin/debug-paths")
-async def api_admin_debug_paths(user=Depends(require_auth)):
-    """Diagnose-Endpoint: zeigt DATA_DIR, Env Vars und /data Mount-Status.
-    Temporaer fuer Persistent Disk Debugging.
-    """
-    import os as _os
-    from pathlib import Path as _Path
-    from app.config_manager import DATA_DIR, get_data_path
-
-    def _safe_listdir(p):
-        try:
-            return sorted(_os.listdir(p))[:50]
-        except Exception as e:
-            return f"ERR: {e}"
-
-    def _stat(p):
-        try:
-            st = _os.stat(p)
-            return {"mode_oct": oct(st.st_mode), "uid": st.st_uid, "gid": st.st_gid, "size": st.st_size}
-        except Exception as e:
-            return f"ERR: {e}"
-
-    slash_data = _Path("/data")
-    app_data = _Path("/app/data")
-    return {
-        "env_INVESTPILOT_DATA_DIR": _os.environ.get("INVESTPILOT_DATA_DIR"),
-        "DATA_DIR": str(DATA_DIR),
-        "DATA_DIR_exists": DATA_DIR.exists(),
-        "DATA_DIR_is_dir": DATA_DIR.is_dir() if DATA_DIR.exists() else None,
-        "trading_flag_path": str(get_data_path("trading_enabled.flag")),
-        "slash_data_exists": slash_data.exists(),
-        "slash_data_is_dir": slash_data.is_dir() if slash_data.exists() else None,
-        "slash_data_stat": _stat("/data"),
-        "slash_data_listing": _safe_listdir("/data"),
-        "app_data_exists": app_data.exists(),
-        "app_data_listing": _safe_listdir("/app/data"),
-        "cwd": _os.getcwd(),
-        "pid": _os.getpid(),
-        "uid": _os.getuid(),
-        "gid": _os.getgid(),
-    }
-
-
 @app.post("/api/admin/snapshot/restore")
 async def api_admin_restore_snapshot(payload: dict, user=Depends(require_auth)):
     """Stellt einen Named-Snapshot wieder her.
