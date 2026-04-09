@@ -269,8 +269,9 @@ investpilot/
 - **`GET /api/market-context`** — [NEU] VIX, Fear&Greed, Events
 - **`GET /api/execution-stats`** — [NEU] Slippage, Latenz Stats
 - **`GET /api/performance-breakdown`** — [NEU] Breakdown nach Zeit/Asset
-- **`GET /api/backtest`** — [NEU v3] Letzte Backtest-Ergebnisse
-- **`POST /api/backtest/run`** — [NEU v3] Backtest ausfuehren (async)
+- **`GET /api/backtest`** — [NEU v3] Letzte Backtest-Ergebnisse (pollt Gist-Watchdog)
+- **`POST /api/backtest/run`** — [v12] Dispatcht GitHub Action (backtest.yml). Laeuft auf 7-GB-Runner statt Render 512 MB (vermeidet OOM->502)
+- **`GET /api/backtest/status`** — [NEU v12] Status des GH-Action-Backtest-Laufs (pollt Gist-Watchdog)
 - **`GET /api/ml-model`** — [NEU v3] ML-Modell Info (Feature Importances, Accuracy)
 - **`POST /api/ml-model/train`** — [NEU v3] ML-Modell trainieren
 - **`GET /api/optimizer`** — [NEU v4] Optimizer Status und History

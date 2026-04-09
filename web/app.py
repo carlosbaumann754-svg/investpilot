@@ -914,34 +914,183 @@ async def api_performance_breakdown(days: int = 30, user=Depends(require_auth)):
 
 @app.get("/api/backtest")
 async def api_backtest(user=Depends(require_auth)):
-    """Letzte Backtest-Ergebnisse."""
+    """Letzte Backtest-Ergebnisse. Pollt vorher den Gist-Watchdog, damit
+    frische Ergebnisse eines laufenden GitHub-Action-Backtests sofort
+    sichtbar werden."""
+    try:
+        from app.persistence import check_and_reload_backtest_output
+        check_and_reload_backtest_output()
+    except Exception as e:
+        log.debug(f"check_and_reload_backtest_output skipped: {e}")
+
     result = read_json_safe("backtest_results.json")
     if result:
         return result
     return {"error": "Noch kein Backtest gelaufen. Starte einen ueber 'Run Backtest'."}
 
 
-@app.post("/api/backtest/run")
-async def api_run_backtest(user=Depends(require_auth)):
-    """Backtest manuell starten (kann 1-3 Minuten dauern)."""
+def _trigger_github_action_backtest(username: str):
+    """
+    Triggert den Manual-Backtest-Workflow auf GitHub Actions (v12).
+
+    Vorteil ggue. lokaler Ausfuehrung:
+    - Laeuft auf einem 7-GB-RAM Runner statt Render Free Tier 512 MB
+    - OOMs koennen den Web-Container nicht mehr toeten (= keine 502)
+    - Voller Walk-Forward ohne Memory-Safeguards-Abbruch
+    - Ergebnisse werden via Gist gepusht (check_and_reload_backtest_output)
+
+    Mirror zu _trigger_github_action_optimizer.
+    """
+    from datetime import datetime
+    from app.config_manager import save_json
+
+    initial_status = {
+        "state": "running",
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "triggered_by": username,
+        "action": None,
+        "error": None,
+        "mode": "github-action-dispatching",
+    }
     try:
-        from app.backtester import run_full_backtest
-        result = run_full_backtest()
-        if "error" in result:
-            raise HTTPException(status_code=500, detail=result["error"])
+        save_json("backtest_status.json", initial_status)
+    except Exception:
+        pass
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log.error("Backtest-Trigger: GITHUB_TOKEN fehlt")
+        initial_status["state"] = "error"
+        initial_status["error"] = "GITHUB_TOKEN fehlt — Workflow nicht ausloesbar"
+        initial_status["finished_at"] = datetime.now().isoformat()
+        try:
+            save_json("backtest_status.json", initial_status)
+        except Exception:
+            pass
+        return
+
+    repo = os.environ.get("GITHUB_REPO", "carlosbaumann754-svg/investpilot")
+    workflow_file = os.environ.get("BACKTEST_WORKFLOW_FILE", "backtest.yml")
+    ref = os.environ.get("BACKTEST_WORKFLOW_REF", "master")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+
+    try:
+        import requests
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "ref": ref,
+                "inputs": {"triggered_by": username},
+            },
+            timeout=15,
+        )
+        if resp.status_code in (201, 204):
+            log.info(f"Backtest-Workflow getriggert (repo={repo}, ref={ref})")
+            initial_status["mode"] = "github-action-running"
+            initial_status["action"] = "dispatched"
+        else:
+            log.error(f"Workflow-Dispatch HTTP {resp.status_code}: {resp.text[:200]}")
+            initial_status["state"] = "error"
+            initial_status["error"] = (
+                f"workflow_dispatch HTTP {resp.status_code}: {resp.text[:160]}"
+            )
+            initial_status["finished_at"] = datetime.now().isoformat()
+    except Exception as e:
+        log.exception("Backtest Workflow-Dispatch fehlgeschlagen")
+        initial_status["state"] = "error"
+        initial_status["error"] = f"dispatch: {type(e).__name__}: {e}"
+        initial_status["finished_at"] = datetime.now().isoformat()
+
+    try:
+        save_json("backtest_status.json", initial_status)
+    except Exception:
+        pass
+
+
+@app.post("/api/backtest/run")
+async def api_run_backtest(background_tasks: BackgroundTasks, user=Depends(require_auth)):
+    """Backtest im Hintergrund auf GitHub Actions starten (Render Free Tier
+    kann den Full-Backtest nicht ausfuehren ohne OOM -> 502). Mirror zum
+    Optimizer-Pattern."""
+    try:
+        from datetime import datetime
+        from app.config_manager import load_json, save_json
+
+        # Stale-Lock-Recovery analog zu /api/optimizer/run
+        STALE_LOCK_MINUTES = 60
+        status = load_json("backtest_status.json") or {}
+        if status.get("state") == "running":
+            started = status.get("started_at")
+            is_stale = False
+            if started:
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    age_min = (datetime.now() - started_dt).total_seconds() / 60
+                    if age_min > STALE_LOCK_MINUTES:
+                        is_stale = True
+                        log.warning(
+                            f"Stale Backtest-Lock erkannt ({age_min:.0f} Min alt) "
+                            f"— vermutlich Workflow-Timeout. Reset auf error."
+                        )
+                        status["state"] = "error"
+                        status["error"] = (
+                            f"Lauf abgebrochen (Lock stale nach {age_min:.0f} Min)"
+                        )
+                        status["finished_at"] = datetime.now().isoformat()
+                        save_json("backtest_status.json", status)
+                except Exception:
+                    pass
+
+            if not is_stale:
+                return {
+                    "status": "already_running",
+                    "message": f"Backtest laeuft bereits seit {started}",
+                    "started_at": started,
+                }
+
+        background_tasks.add_task(_trigger_github_action_backtest, user)
 
         try:
             from web.security import log_audit
-            metrics = result.get("full_period", {}).get("metrics", {})
-            await log_audit(user, "BACKTEST_RUN",
-                            f"Return={metrics.get('total_return_pct', 0):+.1f}%, "
-                            f"Sharpe={metrics.get('sharpe_ratio', 0):.2f}")
+            await log_audit(user, "BACKTEST_RUN_STARTED",
+                            "GitHub Action dispatched")
         except Exception:
             pass
 
-        return {"status": "ok", "results": result}
+        return {
+            "status": "started",
+            "message": ("Backtest laeuft auf GitHub Actions. "
+                        "Dauer ~5-15 Min. Status ueber /api/backtest/status."),
+            "started_at": datetime.now().isoformat(),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/backtest/status")
+async def api_backtest_status(user=Depends(require_auth)):
+    """Status des letzten/laufenden Backtest-GitHub-Action-Laufs.
+
+    Pollt vor dem Lesen den Gist (check_and_reload_backtest_output), damit
+    Ergebnisse des GH-Action-Runners zeitnah sichtbar werden ohne auf den
+    naechsten periodischen Watchdog-Zyklus zu warten.
+    """
+    try:
+        from app.persistence import check_and_reload_backtest_output
+        check_and_reload_backtest_output()
+    except Exception as e:
+        log.debug(f"check_and_reload_backtest_output skipped: {e}")
+
+    from app.config_manager import load_json
+    status = load_json("backtest_status.json")
+    if not status:
+        return {"state": "idle", "message": "Noch kein Backtest-Lauf gestartet"}
+    return status
 
 
 @app.get("/api/ml-model")

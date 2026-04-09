@@ -71,6 +71,15 @@ OPTIMIZER_OUTPUT_FILES = [
     "backtest_results.json",
 ]
 
+# Dateien die der Backtest-Runner (GitHub Action) modifiziert. Werden isoliert
+# vom Optimizer gepusht, damit ein manueller Backtest die Optimizer-Config
+# nicht ueberschreibt und umgekehrt. Mirror zum Optimizer-Pattern.
+BACKTEST_OUTPUT_FILES = [
+    "backtest_results.json",
+    "backtest_status.json",
+    "universe_health.json",
+]
+
 
 def _get_token():
     """GitHub Token aus Environment Variable laden."""
@@ -557,6 +566,170 @@ def backup_optimizer_results():
         return False
     except Exception as e:
         log.warning(f"backup_optimizer_results Fehler: {e}")
+        return False
+
+
+# ============================================================
+# BACKTEST RUNNER — GitHub Action Offload (mirrors optimizer pattern)
+# ============================================================
+# Render Free Tier hat nur 512 MB RAM. Ein Full-Backtest (71 Symbole x 5J
+# yfinance + VIX + Earnings + Full-Period + Walk-Forward) sprengt das und
+# killt den Web-Container (OOM -> 502 Bad Gateway fuer Minuten).
+#
+# Loesung (v12): Backtest laeuft als GitHub Action auf einem 7-GB-Runner.
+# Ergebnisse werden isoliert in den Backup-Gist gepusht und der Render-
+# Watchdog laedt sie im naechsten Reload-Zyklus nach.
+
+_BACKTEST_RELOAD_STATE_FILE = "last_applied_backtest_push.json"
+
+
+def backup_backtest_results():
+    """
+    Push NUR die Dateien, die der Backtest-Runner modifiziert.
+
+    Wird vom GitHub-Action-Runner am Ende eines Backtest-Laufs aufgerufen.
+    Isoliert vom Optimizer-Push (anderer Meta-Key), damit parallele Laeufe
+    sich nicht ueberschreiben und die Trading-Files unberuehrt bleiben.
+    """
+    token = _get_token()
+    if not token or not requests:
+        log.warning("backup_backtest_results: Kein GITHUB_TOKEN")
+        return False
+
+    files = {}
+    for filename in BACKTEST_OUTPUT_FILES:
+        data = load_json(filename)
+        if data is not None:
+            files[filename] = {
+                "content": json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            }
+
+    if not files:
+        log.warning("backup_backtest_results: Keine Backtest-Output-Dateien gefunden")
+        return False
+
+    files["_backtest_meta.json"] = {
+        "content": json.dumps({
+            "last_backtest_push": datetime.now().isoformat(),
+            "files": list(files.keys()),
+            "source": "github-action",
+        }, indent=2)
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("backup_backtest_results: Kein Backup-Gist gefunden")
+            return False
+
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": files},
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"backup_backtest_results OK ({len(files)} Dateien)")
+            return True
+        log.warning(f"backup_backtest_results: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        log.warning(f"backup_backtest_results Fehler: {e}")
+        return False
+
+
+def check_and_reload_backtest_output():
+    """
+    Watchdog-Reload: Prueft ob der Backtest-Runner (GitHub Action) neue
+    Ergebnisse in den Gist gepusht hat, die der laufende Render-Container
+    noch nicht uebernommen hat. Wenn ja, pulled alle BACKTEST_OUTPUT_FILES
+    aus dem Gist und speichert sie lokal.
+
+    Analog zu check_and_reload_optimizer_output(), aber mit eigenem
+    Meta-Key (_backtest_meta.json) und State-File.
+
+    Returns:
+      True  wenn neue Werte uebernommen wurden
+      False wenn kein neuer Push oder Fehler
+    """
+    token = _get_token()
+    if not token or not requests:
+        return False
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return False
+
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            log.debug(f"check_and_reload_backtest_output: HTTP {resp.status_code}")
+            return False
+
+        gist_data = resp.json()
+        meta_entry = gist_data.get("files", {}).get("_backtest_meta.json")
+        if not meta_entry:
+            return False
+
+        meta_content = _fetch_gist_file_content(meta_entry, token)
+        if not meta_content:
+            return False
+
+        try:
+            meta = json.loads(meta_content)
+        except Exception:
+            return False
+
+        remote_push = meta.get("last_backtest_push")
+        if not remote_push:
+            return False
+
+        local_state = load_json(_BACKTEST_RELOAD_STATE_FILE) or {}
+        local_applied = local_state.get("last_applied_push")
+
+        if local_applied == remote_push:
+            return False
+
+        log.info(
+            f"Backtest-Watchdog: Neuer Push erkannt (remote={remote_push}, "
+            f"local_applied={local_applied}) — lade Backtest-Output neu"
+        )
+
+        files_reloaded = 0
+        for filename in BACKTEST_OUTPUT_FILES:
+            if filename not in gist_data.get("files", {}):
+                continue
+            file_entry = gist_data["files"][filename]
+            content = _fetch_gist_file_content(file_entry, token)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+            except Exception as e:
+                log.warning(
+                    f"check_and_reload_backtest_output: parse {filename}: {e}"
+                )
+                continue
+            save_json(filename, parsed)
+            files_reloaded += 1
+
+        save_json(_BACKTEST_RELOAD_STATE_FILE, {
+            "last_applied_push": remote_push,
+            "applied_at": datetime.now().isoformat(),
+            "files_reloaded": files_reloaded,
+        })
+
+        log.info(
+            f"Backtest-Watchdog: {files_reloaded} Dateien aus Gist uebernommen"
+        )
+        return files_reloaded > 0
+
+    except Exception as e:
+        log.warning(f"check_and_reload_backtest_output Fehler: {e}")
         return False
 
 

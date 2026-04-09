@@ -922,18 +922,53 @@ function renderMLModel(ml) {
 async function runBacktest() {
     const btn = document.getElementById('btn-run-backtest');
     btn.disabled = true;
-    btn.textContent = 'Backtest laeuft...';
-    showToast('Backtest gestartet (kann 1-3 Minuten dauern)...');
+    btn.textContent = 'Backtest dispatching...';
+    showToast('Backtest wird auf GitHub Actions gestartet...');
 
     try {
         const res = await apiFetch('/api/backtest/run', { method: 'POST' });
-        if (res && res.ok) {
-            const data = await res.json();
-            showToast('Backtest abgeschlossen!');
-            if (data.results) renderBacktestResults(data.results);
-        } else {
+        if (!res || !res.ok) {
             const err = await res?.json();
-            showToast('Backtest Fehler: ' + (err?.detail || 'Unbekannt'));
+            showToast('Start fehlgeschlagen: ' + (err?.detail || 'Unbekannt'));
+            btn.disabled = false;
+            btn.textContent = 'Run Backtest';
+            return;
+        }
+        const startData = await res.json();
+        if (startData.status === 'already_running') {
+            showToast('Backtest laeuft bereits auf GitHub Actions');
+        } else {
+            showToast('Backtest laeuft auf GitHub Actions (~5-15 Min)');
+        }
+
+        // Status-Polling bis done oder error (max 20 min = 120 * 10s)
+        const MAX_POLLS = 120;
+        for (let i = 0; i < MAX_POLLS; i++) {
+            await new Promise(r => setTimeout(r, 10000));
+            const sRes = await apiFetch('/api/backtest/status');
+            if (!sRes || !sRes.ok) continue;
+            const s = await sRes.json();
+            if (s.state === 'running') {
+                const mode = s.mode || '';
+                btn.textContent = mode.includes('dispatching')
+                    ? 'Dispatching...'
+                    : 'Backtest laeuft auf GH Actions...';
+            } else if (s.state === 'done') {
+                showToast('Backtest abgeschlossen: ' + (s.summary || ''));
+                // Frische Ergebnisse laden
+                try {
+                    const bRes = await apiFetch('/api/backtest');
+                    if (bRes && bRes.ok) {
+                        const bData = await bRes.json();
+                        if (bData && !bData.error) renderBacktestResults(bData);
+                    }
+                } catch {}
+                break;
+            } else if (s.state === 'error') {
+                showToast('Backtest Fehler: ' + (s.error || 'Unbekannt'));
+                console.error('Backtest error:', s);
+                break;
+            }
         }
     } catch (e) {
         showToast('Backtest Fehler: ' + e.message);
