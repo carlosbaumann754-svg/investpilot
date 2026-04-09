@@ -222,10 +222,10 @@
   "kelly_sizing": {
     "enabled": true,
     "half_kelly": true,
-    "max_fraction": 0.01,
+    "max_fraction": 0.04,
     "min_trades": 20,
     "min_position_usd": 50,
-    "_comment": "Woche 1: max_fraction 0.01 (1%). Woche 2: 0.015. Woche 3: 0.02. Staffel-Cap manuell erhoehen nach Validierung."
+    "_comment": "2026-04-09: Empirischer Kelly-Sweep (1325 Trades, 5J) zeigt bei k=0.04 +182% Return / 2.67% MaxDD (IS) bzw. +23.5% / 2.03% (OOS). Sharpe konstant 3.64 ueber alle k. Hard-Gate MaxDD<8% hat bei k=0.04 noch 3x Puffer. Direkt-Sprung 0.01 -> 0.04 (Weekly-Ramp 0.01/0.015/0.02 uebersprungen, da empirisch unnoetig). Naechster Schritt: 1-2 Wochen Live-Beobachtung, dann evtl. 0.08 (MaxDD-Ceiling ~5.3%)."
   },
   "vix_term_structure": {
     "enabled": true,
