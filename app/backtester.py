@@ -209,6 +209,54 @@ def _build_earnings_blackout_set(symbol, earnings_dates, buffer_before=3, buffer
 # SCORING ON HISTORICAL DATA
 # ============================================================
 
+def _features_at_bar(closes, volumes, idx, lookback=60):
+    """Extrahiert v12-Backtest-Features fuer einen Bar.
+
+    Returns:
+        dict mit score, volatility, rsi, momentum_5d, momentum_20d, mr_strength
+        oder None wenn nicht genug Daten.
+    """
+    if idx < lookback:
+        return None
+    window = closes[max(0, idx - lookback):idx + 1]
+    vol_window = volumes[max(0, idx - lookback):idx + 1]
+    if len(window) < 20:
+        return None
+
+    rsi = calc_rsi(window)
+    boll_pos = calc_bollinger_position(window)
+
+    volatility = 5.0
+    if len(window) >= 20:
+        returns = [(window[i] - window[i - 1]) / window[i - 1]
+                   for i in range(max(1, len(window) - 20), len(window))]
+        volatility = (sum(r ** 2 for r in returns) / len(returns)) ** 0.5 * 100
+
+    momentum_5d = 0
+    if len(window) >= 5:
+        momentum_5d = (window[-1] - window[-5]) / window[-5] * 100
+    momentum_20d = 0
+    if len(window) >= 20:
+        momentum_20d = (window[-1] - window[-20]) / window[-20] * 100
+
+    # Mean-Reversion-Staerke (analog zu market_scanner.apply_regime_strategy_modifier)
+    mr_strength = 0
+    if rsi < 35:
+        mr_strength += (35 - rsi) * 0.5
+    if boll_pos < 0.25:
+        mr_strength += (0.25 - boll_pos) * 20
+
+    score = _score_at_bar(closes, volumes, idx, lookback)
+    return {
+        "score": score,
+        "volatility": volatility,
+        "rsi": rsi,
+        "momentum_5d": momentum_5d,
+        "momentum_20d": momentum_20d,
+        "mr_strength": mr_strength,
+    }
+
+
 def _score_at_bar(closes, volumes, idx, lookback=60):
     """Score an asset at a specific bar index using scanner logic.
 
@@ -343,9 +391,20 @@ def precompute_grid_data(histories, vix_history=None):
         # O(1) date -> idx lookup (statt list.index() O(N))
         dates_to_idx = {d: i for i, d in enumerate(dates)}
 
-        # Score-Matrix: pro Bar einmal berechnen, alle Combos lesen daraus.
-        # Score haengt NUR von closes/volumes ab, NICHT von Grid-Params!
-        scores = [_score_at_bar(closes, volumes, i) for i in range(len(closes))]
+        # v12: Score + Features-Matrix - pro Bar einmal berechnen.
+        scores = []
+        volatilities = []
+        mr_strengths = []
+        for i in range(len(closes)):
+            feats = _features_at_bar(closes, volumes, i)
+            if feats is None:
+                scores.append(0)
+                volatilities.append(5.0)
+                mr_strengths.append(0)
+            else:
+                scores.append(feats["score"])
+                volatilities.append(feats["volatility"])
+                mr_strengths.append(feats["mr_strength"])
 
         # Sektor cachen (wird sonst in jeder Combo neu nachgeschlagen)
         info = ASSET_UNIVERSE.get(sym, {})
@@ -358,6 +417,8 @@ def precompute_grid_data(histories, vix_history=None):
             "dates": dates,
             "dates_to_idx": dates_to_idx,
             "scores": scores,
+            "volatilities": volatilities,
+            "mr_strengths": mr_strengths,
             "sector": sector,
         }
         all_dates_set.update(dates)
@@ -374,10 +435,26 @@ def precompute_grid_data(histories, vix_history=None):
                 key = vix_date
             vix_by_date_norm[key] = vix_val
 
+    # v12: Regime-Lookup pro Tag aus VIX abgeleitet
+    # bull: VIX < 18 (low fear)
+    # sideways: VIX 18..25 (normal)
+    # bear: VIX > 25 (elevated/high fear)
+    regime_by_date = {}
+    for date_key, vix_val in vix_by_date_norm.items():
+        if vix_val is None:
+            regime_by_date[date_key] = "unknown"
+        elif vix_val < 18:
+            regime_by_date[date_key] = "bull"
+        elif vix_val < 25:
+            regime_by_date[date_key] = "sideways"
+        else:
+            regime_by_date[date_key] = "bear"
+
     return {
         "symbol_data": symbol_data,
         "sorted_dates": sorted_dates,
         "vix_by_date_norm": vix_by_date_norm,
+        "regime_by_date": regime_by_date,
     }
 
 
@@ -415,12 +492,32 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
     max_positions_per_sector = risk_cfg.get("max_positions_per_sector", 4)
     max_sector_allocation_pct = risk_cfg.get("max_sector_allocation_pct", 35)
 
+    # v12 Feature-Flags aus Config
+    ts_cfg = config.get("time_stop", {})
+    ts_enabled = ts_cfg.get("enabled", False)
+    ts_max_days = ts_cfg.get("max_days_stale", 10)
+    ts_pnl_thresh = ts_cfg.get("stale_pnl_threshold_pct", 0.5) / 100
+    ts_min_days = ts_cfg.get("min_days_open", 2)
+
+    rs_cfg = config.get("regime_strategies", {})
+    rs_enabled = rs_cfg.get("enabled", False)
+    rs_bull_boost = rs_cfg.get("bull_momentum_boost", 0.5)
+    rs_sideways_boost = rs_cfg.get("sideways_mr_boost", 0.6)
+    rs_bear_penalty = rs_cfg.get("bear_non_defensive_penalty", -10)
+    _DEFENSIVE = {"health", "consumer", "bonds", "commodities", "real_estate"}
+
+    ml_cfg = config.get("meta_labeling", {})
+    ml_enabled = ml_cfg.get("enabled", False) and not ml_cfg.get("shadow_mode", True)
+    ml_min_score = ml_cfg.get("backtest_min_score", 50)
+    ml_max_vol = ml_cfg.get("backtest_max_volatility", 4.5)
+
     if earnings_blackouts is None:
         earnings_blackouts = {}
 
     symbol_data = precomputed["symbol_data"]
     sorted_dates = precomputed["sorted_dates"]
     vix_by_date_norm = precomputed["vix_by_date_norm"]
+    regime_by_date = precomputed.get("regime_by_date", {})
 
     filter_stats = {
         "vix_blocked": 0,
@@ -607,6 +704,32 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
                 partial_triggered.pop(sym, None)
                 continue
 
+            # v12: Time-Stop Exit (stale Position raus)
+            if ts_enabled:
+                days_held = (current_date - pos["entry_date"]).days
+                if days_held >= ts_max_days and days_held >= ts_min_days \
+                        and abs(pnl_pct) < ts_pnl_thresh:
+                    cost = _calc_costs(entry_price, days_held)
+                    trades.append({
+                        "symbol": sym,
+                        "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
+                        "exit_date": current_date.strftime("%Y-%m-%d") if hasattr(current_date, "strftime") else str(current_date)[:10],
+                        "entry_price": round(entry_price, 4),
+                        "exit_price": round(current_price, 4),
+                        "pnl_pct": round(pnl_pct * 100, 2),
+                        "pnl_net_pct": round((pnl_pct - cost) * 100, 2),
+                        "cost_pct": round(cost * 100, 3),
+                        "days_held": days_held,
+                        "exit_reason": "TIME_STOP",
+                        "entry_score": pos["score"],
+                    })
+                    del open_positions[sym]
+                    trailing_highs.pop(sym, None)
+                    if sym in trailing_sl:
+                        del trailing_sl[sym]
+                    partial_triggered.pop(sym, None)
+                    continue
+
         # 2. Score & neue Entries
         if len(open_positions) >= max_positions:
             continue
@@ -626,6 +749,15 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
         if vix_block:
             continue
 
+        # v12: Tages-Regime aus VIX (bull/sideways/bear/unknown)
+        cur_regime = "unknown"
+        if rs_enabled and regime_by_date:
+            try:
+                date_key = current_date.date() if hasattr(current_date, "date") else current_date
+                cur_regime = regime_by_date.get(date_key, "unknown")
+            except Exception:
+                cur_regime = "unknown"
+
         scored = []
         for sym, sd in symbol_data.items():
             if sym in open_positions:
@@ -633,8 +765,33 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
             sym_idx = sd["dates_to_idx"].get(current_date, -1)
             if sym_idx < 0:
                 continue
-            # Score aus Cache statt _score_at_bar() Aufruf!
             score = sd["scores"][sym_idx]
+            volatility = sd.get("volatilities", [5.0] * (sym_idx + 1))[sym_idx] if "volatilities" in sd else 5.0
+            mr_strength = sd.get("mr_strengths", [0] * (sym_idx + 1))[sym_idx] if "mr_strengths" in sd else 0
+
+            # v12 Regime-Strategien: Score-Modifier
+            if rs_enabled and cur_regime != "unknown":
+                sector = sd.get("sector", "unknown")
+                if cur_regime == "bull":
+                    # Momentum-Boost wenn 5d-Momentum positiv (approx via mom_5d aus closes)
+                    if sym_idx >= 5:
+                        mom5 = (sd["closes"][sym_idx] - sd["closes"][sym_idx - 5]) / max(sd["closes"][sym_idx - 5], 0.01) * 100
+                        if mom5 > 0:
+                            score += min(10, mom5 * rs_bull_boost)
+                elif cur_regime == "sideways":
+                    if mr_strength > 0:
+                        score += mr_strength * rs_sideways_boost
+                elif cur_regime == "bear":
+                    if sector not in _DEFENSIVE:
+                        score += rs_bear_penalty
+                    if mr_strength > 10:
+                        score += 3
+
+            # v12 Meta-Label-Approximation: filtere Low-Score + High-Vol Setups
+            if ml_enabled:
+                if score < ml_min_score and volatility > ml_max_vol:
+                    continue
+
             if score >= min_score:
                 scored.append((sym, score, sd["closes"][sym_idx], current_date))
 

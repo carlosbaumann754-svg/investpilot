@@ -214,7 +214,10 @@
     "min_trades_to_activate": 50,
     "min_precision_to_activate": 0.65,
     "decision_threshold": 0.55,
-    "retrain_every_n_trades": 20
+    "retrain_every_n_trades": 20,
+    "backtest_min_score": 50,
+    "backtest_max_volatility": 4.5,
+    "_backtest_comment": "Im Backtest approximiert: filtert Signal wenn score<min UND vola>max. Wird nur aktiv wenn shadow_mode=false."
   },
   "kelly_sizing": {
     "enabled": true,
