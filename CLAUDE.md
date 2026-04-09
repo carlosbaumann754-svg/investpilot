@@ -564,6 +564,59 @@ GitHub Actions (Sonntag 03:00 UTC)         Render (24/7)
 - ✅ Reproduzierbar: Jeder Run hat GitHub Actions Log + Artifact
 - ✅ Skaliert mit v5+ Grid (648 Combos) ohne weitere Aenderungen
 
+## v11 — Persistent Disk Migration (2026-04-09)
+
+### Hintergrund
+Render Container-Filesystems sind ephemer: nach jedem Redeploy war
+`/app/data/` weg → Brain-State, Trade-History und 2FA mussten via
+Cloud-Restore (Gist) wiederhergestellt werden. Ein 10 GB Persistent
+Disk wird jetzt auf `/data` gemountet, sodass Daten Redeploy-stabil
+auf der Disk leben.
+
+### DATA_DIR Resolution (`app/config_manager.py`)
+`_resolve_data_dir()` priorisiert:
+1. `INVESTPILOT_DATA_DIR` Env-Var (expliziter Override)
+2. `/data` falls Mount existiert (Auto-Detect Persistent Disk)
+3. `<repo>/data` Fallback (lokal / CI)
+
+### Disk-Bootstrap (`_bootstrap_from_image_seed()`)
+Wird beim Modul-Import ausgefuehrt, sobald `DATA_DIR != /app/data` und
+`/app/data` existiert:
+- **Immer**: `mkdir DATA_DIR/logs/` — kritisch, weil `scheduler.py`
+  beim Import einen `FileHandler` auf `logs/scheduler.log` oeffnet und
+  sonst beim Boot crash-loopt.
+- **Idempotent**: Wenn `config.json` noch nicht in `DATA_DIR` liegt,
+  werden ALLE `*.json` Seed-Dateien aus `/app/data` einmalig kopiert,
+  damit FastAPI sofort startfaehig ist (Cloud-Restore aus Gist
+  ueberlagert anschliessend `brain_state` etc.)
+
+### Reihenfolge beim Container-Start
+1. `config_manager` import → `_resolve_data_dir()` → `_bootstrap_from_image_seed()`
+2. FastAPI startet (PID 1) → kann sofort `config.json` lesen
+3. Scheduler Subprocess startet (PID 8) → Cloud-Restore via Gist →
+   `brain_state.json`, `trade_history.json`, `auth_2fa.json` etc.
+4. Trading-Zyklen alle 5 Min, Backup-Loop alle X Min Push in Gist
+
+### Render-Setup
+- Disk Name: investpilot-data
+- Mount Path: `/data`
+- Size: 10 GB ($2.50/Monat)
+- WICHTIG: Disk-Attach disabled Zero-Downtime Deploys
+
+### Bekannte Edge-Cases
+- `auth_2fa.json` wird NUR via Cloud-Restore wiederhergestellt — wenn
+  2FA vor Phase B (DATA_DIR-Fix) eingerichtet wurde, lag die Datei
+  auf `/app/data` und ist nach Disk-Mount weg → 2FA muss neu
+  eingerichtet werden.
+- `audit.db` wird beim ersten FastAPI-Start auf `/data` frisch
+  initialisiert (kein Restore aus Gist, da SQLite nicht in
+  `BACKUP_FILES`).
+
+### Render Auto-Deploy ist flaky
+Push triggert nicht zuverlaessig einen Build. Nach `git push` ggf.
+manuell "Manual Deploy → Deploy latest commit" im Render Dashboard
+ausloesen.
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`
