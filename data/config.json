@@ -208,6 +208,14 @@
     "stale_pnl_threshold_pct": 0.5,
     "min_days_open": 2
   },
+  "meta_labeling": {
+    "enabled": true,
+    "shadow_mode": true,
+    "min_trades_to_activate": 50,
+    "min_precision_to_activate": 0.65,
+    "decision_threshold": 0.55,
+    "retrain_every_n_trades": 20
+  },
   "hedging": {
     "enabled": true,
     "bear_position_multiplier": 0.5,

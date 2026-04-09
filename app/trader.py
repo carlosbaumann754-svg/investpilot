@@ -1014,6 +1014,33 @@ def execute_scanner_trades(client, config, scan_results):
                             log.info(f"  SKIP {symbol}: {rr_reason}")
                             continue
 
+                # v12: Meta-Labeling Gate (Shadow- oder Live-Mode)
+                ml_decision = None
+                try:
+                    from app import meta_labeler
+                    signal_ctx = {
+                        "scanner_score": candidate["score"],
+                        "rsi": analysis.get("rsi"),
+                        "macd_hist": analysis.get("macd_histogram"),
+                        "momentum_5d": analysis.get("momentum_5d"),
+                        "momentum_20d": analysis.get("momentum_20d"),
+                        "volatility": volatility,
+                        "volume_trend": analysis.get("volume_trend"),
+                        "market_regime": market_regime,
+                        "vix_level": mc.get_current_context().get("vix_level") if mc else None,
+                        "fear_greed": mc.get_current_context().get("fear_greed_index") if mc else None,
+                        "sector": analysis.get("sector") or _lookup_sector(candidate["etoro_id"]),
+                        "asset_class": asset_class,
+                    }
+                    ml_decision = meta_labeler.meta_predict(signal_ctx, config)
+                    if ml_decision["decision"] == "skip":
+                        log.info(f"  META-SKIP {symbol}: {ml_decision['reason']}")
+                        continue
+                    log.info(f"  META: {ml_decision['reason']} -> "
+                             f"{ml_decision['decision']}")
+                except Exception as e:
+                    log.debug(f"Meta-Labeler exception (non-fatal): {e}")
+
                 log.info(f"  SCANNER BUY: {symbol} ({asset_class}) "
                          f"${amount:,.2f} {leverage}x "
                          f"(Score={candidate['score']:+.1f}, {candidate['signal']})")
@@ -1055,6 +1082,27 @@ def execute_scanner_trades(client, config, scan_results):
                     save_trade(trade_entry)
                     trades_executed.append(trade_entry)
                     credit -= amount
+
+                    # v12: Meta-Labeler Shadow-Log (matched later via position_id)
+                    if ml_decision is not None and ml_decision.get("p_win") is not None:
+                        try:
+                            from app import meta_labeler
+                            meta_labeler.log_shadow_decision({
+                                "timestamp": datetime.now().isoformat(),
+                                "position_id": order.get("positionID") or order.get("positionId"),
+                                "order_id": order.get("orderID"),
+                                "instrument_id": candidate["etoro_id"],
+                                "symbol": symbol,
+                                "p_win": ml_decision["p_win"],
+                                "threshold": ml_decision.get("threshold"),
+                                "decision": ml_decision["decision"],
+                                "shadow_mode": ml_decision.get("shadow_mode", True),
+                                "scanner_score": candidate["score"],
+                                "market_regime": market_regime,
+                            })
+                        except Exception as e:
+                            log.debug(f"Shadow-Log fehlgeschlagen: {e}")
+
                     if al:
                         al.alert_trade_executed(trade_entry)
 

@@ -163,6 +163,21 @@ def scheduler_loop():
             run_trading_cycle()
             log.info(f"[{datetime.now():%H:%M}] Trading-Zyklus abgeschlossen")
 
+            # --- v12: Meta-Labeler Retrain & Activation Check (taeglich ~03:15) ---
+            now_hm = datetime.now().strftime("%H:%M")
+            if now_hm.startswith("03:1"):  # 03:10..03:19
+                try:
+                    from app.config_manager import load_config
+                    from app import meta_labeler
+                    cfg = load_config()
+                    if (cfg.get("meta_labeling", {}) or {}).get("enabled", False):
+                        meta_labeler.train_meta_labeler()
+                        changed = meta_labeler.check_and_maybe_activate(cfg)
+                        if changed:
+                            log.info("  Meta-Labeler Shadow -> Live aktiviert")
+                except Exception as e:
+                    log.warning(f"Meta-Labeler Daily-Task Fehler: {e}")
+
         except Exception as e:
             log.error(f"Fehler im Trading-Zyklus: {e}", exc_info=True)
 

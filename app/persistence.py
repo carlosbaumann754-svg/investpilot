@@ -41,6 +41,9 @@ BACKUP_FILES = [
     "optimization_history.json",
     "optimizer_status.json",
     "auth_2fa.json",
+    "meta_model.json",
+    "meta_labeling_shadow.json",
+    "partial_close_state.json",
 ]
 
 # Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.
