@@ -70,7 +70,8 @@ def _score_one(trades, kelly_frac, max_concurrent):
     pos = {"kelly_fraction": float(kelly_frac), "max_concurrent": int(max_concurrent)}
     metrics = calculate_metrics(trades, position_sizing=pos)
     curve = build_equity_curve(trades, kelly_fraction=float(kelly_frac))
-    final_equity = curve[-1]["equity"] if curve else 1.0
+    # build_equity_curve returns [[date_str, equity_value], ...] starting at 10000
+    final_equity = (curve[-1][1] / 10000.0) if curve else 1.0
     return {
         "kelly_fraction": float(kelly_frac),
         "total_return_pct": metrics.get("total_return_pct", 0),
