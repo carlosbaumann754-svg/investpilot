@@ -336,6 +336,16 @@ def restore_for_optimizer():
 
         gist_data = resp.json()
         files_restored = 0
+        # Snapshot git-committed config.json fields that must survive restore
+        # (disabled_symbols is set via commit, not via optimizer, so the Gist
+        # version is always stale for this key)
+        _git_disabled_symbols = None
+        try:
+            _git_cfg = load_json("config.json", default={})
+            if isinstance(_git_cfg, dict) and "disabled_symbols" in _git_cfg:
+                _git_disabled_symbols = _git_cfg.get("disabled_symbols")
+        except Exception:
+            pass
         for filename in BACKUP_FILES:
             if filename in NO_RESTORE_FILES:
                 continue
@@ -350,6 +360,14 @@ def restore_for_optimizer():
             except Exception as e:
                 log.warning(f"restore_for_optimizer: parse {filename}: {e}")
                 continue
+            # Merge git-committed disabled_symbols back into config.json
+            if filename == "config.json" and _git_disabled_symbols is not None \
+               and isinstance(parsed, dict):
+                parsed["disabled_symbols"] = _git_disabled_symbols
+                log.info(
+                    f"restore_for_optimizer: disabled_symbols aus git-committed "
+                    f"config.json erhalten ({len(_git_disabled_symbols)} Symbols)"
+                )
             save_json(filename, parsed)
             files_restored += 1
         log.info(f"restore_for_optimizer: {files_restored} Dateien geladen")
