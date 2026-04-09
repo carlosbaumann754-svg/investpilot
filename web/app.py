@@ -1947,6 +1947,202 @@ async def api_sectors(user=Depends(require_auth)):
 
 
 # ============================================================
+# v12 FEATURE STATUS (Universe, Kelly, Meta-Labeler, Time-Stop, ...)
+# ============================================================
+
+@app.get("/api/v12-status")
+async def api_v12_status(user=Depends(require_auth)):
+    """Kompakter Status aller v12-Features fuer das Dashboard.
+
+    Liefert je Section:
+      - enabled: bool
+      - kompakte Kennzahlen (Konfig + laufzeit-Metriken)
+    """
+    try:
+        from datetime import datetime, timedelta
+        config = load_config()
+
+        # --- Universe ---
+        try:
+            from app.market_scanner import ASSET_UNIVERSE
+            total_universe = len(ASSET_UNIVERSE)
+        except Exception:
+            total_universe = None
+        disabled = list(config.get("disabled_symbols") or [])
+        active_universe = (total_universe - len(disabled)) if total_universe else None
+
+        # --- Universe Health (letzter yfinance Download-Report) ---
+        uh = read_json_safe("universe_health.json") or {}
+        uh_summary = uh.get("summary") or {}
+        uh_bad = [
+            s for s, d in (uh.get("symbols") or {}).items()
+            if d.get("status") not in (None, "ok")
+        ]
+
+        # --- Kelly Sizing ---
+        kelly_cfg = config.get("kelly_sizing", {}) or {}
+
+        # --- Meta-Labeler ---
+        meta_cfg = config.get("meta_labeling", {}) or {}
+        meta_info = read_json_safe("meta_model.json") or {}
+        shadow_log = read_json_safe("meta_labeling_shadow.json") or []
+        shadow_count = len(shadow_log) if isinstance(shadow_log, list) else 0
+        min_trades = int(meta_cfg.get("min_trades_to_activate", 50) or 50)
+        min_prec = float(meta_cfg.get("min_precision_to_activate", 0.65) or 0.65) * 100
+        meta_precision = meta_info.get("precision")
+        meta_progress_pct = min(100, round(shadow_count / max(min_trades, 1) * 100)) \
+            if min_trades else 0
+        meta_ready_to_activate = (
+            shadow_count >= min_trades
+            and meta_precision is not None
+            and meta_precision >= min_prec
+        )
+
+        # --- Time-Stop ---
+        ts_cfg = config.get("time_stop", {}) or {}
+        trades = read_json_safe("trade_history.json") or []
+        time_stop_exits = 0
+        try:
+            cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            for t in trades:
+                if not isinstance(t, dict):
+                    continue
+                reason = (t.get("exit_reason") or t.get("action") or "")
+                if "time_stop" in str(reason).lower():
+                    ts = t.get("timestamp") or t.get("exit_date") or ""
+                    if ts >= cutoff:
+                        time_stop_exits += 1
+        except Exception:
+            pass
+
+        # --- VIX Term Structure / Hedging / Regime-Strategies (flags only) ---
+        vts_cfg = config.get("vix_term_structure", {}) or {}
+        hedge_cfg = config.get("hedging", {}) or {}
+        regime_cfg = config.get("regime_strategies", {}) or {}
+
+        # --- Trailing SL (lives in leverage section) ---
+        lev = config.get("leverage", {}) or {}
+
+        return {
+            "universe": {
+                "total": total_universe,
+                "active": active_universe,
+                "disabled_count": len(disabled),
+                "disabled_symbols": disabled,
+                "health_last_update": uh.get("timestamp"),
+                "health_ok": uh_summary.get("ok"),
+                "health_bad": uh_bad,
+            },
+            "kelly_sizing": {
+                "enabled": bool(kelly_cfg.get("enabled")),
+                "half_kelly": bool(kelly_cfg.get("half_kelly")),
+                "max_fraction": kelly_cfg.get("max_fraction"),
+                "min_trades": kelly_cfg.get("min_trades"),
+                "min_position_usd": kelly_cfg.get("min_position_usd"),
+            },
+            "meta_labeler": {
+                "enabled": bool(meta_cfg.get("enabled")),
+                "shadow_mode": bool(meta_cfg.get("shadow_mode")),
+                "trained": bool(meta_info),
+                "trained_at": meta_info.get("trained_at"),
+                "precision": meta_precision,
+                "recall": meta_info.get("recall"),
+                "f1": meta_info.get("f1"),
+                "samples_total": meta_info.get("samples_total"),
+                "shadow_log_size": shadow_count,
+                "min_trades_to_activate": min_trades,
+                "min_precision_to_activate": min_prec,
+                "progress_pct": meta_progress_pct,
+                "ready_to_activate": meta_ready_to_activate,
+            },
+            "time_stop": {
+                "enabled": bool(ts_cfg.get("enabled")),
+                "max_days_stale": ts_cfg.get("max_days_stale"),
+                "stale_pnl_threshold_pct": ts_cfg.get("stale_pnl_threshold_pct"),
+                "min_days_open": ts_cfg.get("min_days_open"),
+                "exits_last_7d": time_stop_exits,
+            },
+            "vix_term_structure": {
+                "enabled": bool(vts_cfg.get("enabled")),
+                "panic_dip_override": bool(vts_cfg.get("panic_dip_override_enabled")),
+                "panic_dip_multiplier": vts_cfg.get("panic_dip_position_multiplier"),
+                "panic_dip_ratio": vts_cfg.get("panic_dip_ratio"),
+            },
+            "hedging": {
+                "enabled": bool(hedge_cfg.get("enabled")),
+                "bear_position_multiplier": hedge_cfg.get("bear_position_multiplier"),
+                "defensive_sectors": hedge_cfg.get("defensive_sectors") or [],
+            },
+            "regime_strategies": {
+                "enabled": bool(regime_cfg.get("enabled")),
+                "bull_momentum_boost": regime_cfg.get("bull_momentum_boost"),
+                "sideways_mr_boost": regime_cfg.get("sideways_mr_boost"),
+                "bear_non_defensive_penalty": regime_cfg.get("bear_non_defensive_penalty"),
+            },
+            "trailing_sl": {
+                "enabled": bool(lev.get("trailing_sl_enabled")),
+                "activation_pct": lev.get("trailing_sl_activation_pct"),
+                "trail_pct": lev.get("trailing_sl_pct"),
+            },
+        }
+    except Exception as e:
+        log.error(f"v12-status Fehler: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/universe-health")
+async def api_universe_health(user=Depends(require_auth)):
+    """Rohdaten aus universe_health.json (yfinance-Download-Status pro Symbol)."""
+    data = read_json_safe("universe_health.json") or {}
+    return data
+
+
+class DisabledSymbolsUpdate(BaseModel):
+    disabled_symbols: list[str]
+
+
+@app.put("/api/disabled-symbols")
+async def api_update_disabled_symbols(
+    update: DisabledSymbolsUpdate,
+    user=Depends(require_auth),
+):
+    """Universe-Filter pflegen. Ueberschreibt die komplette Liste."""
+    try:
+        config = load_config()
+        new_list = sorted({s.strip().upper() for s in update.disabled_symbols if s and s.strip()})
+        old_list = sorted(config.get("disabled_symbols") or [])
+        config["disabled_symbols"] = new_list
+        save_config(config)
+
+        # Audit log
+        try:
+            from web.security import log_audit
+            added = set(new_list) - set(old_list)
+            removed = set(old_list) - set(new_list)
+            parts = []
+            if added:
+                parts.append(f"+{','.join(sorted(added))}")
+            if removed:
+                parts.append(f"-{','.join(sorted(removed))}")
+            await log_audit(
+                user,
+                "DISABLED_SYMBOLS_CHANGE",
+                " ".join(parts) if parts else "no-op",
+            )
+        except Exception:
+            pass
+
+        return {
+            "status": "ok",
+            "disabled_symbols": new_list,
+            "count": len(new_list),
+        }
+    except Exception as e:
+        log.error(f"disabled-symbols Update Fehler: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+
+# ============================================================
 # WATCHDOG / DIAGNOSTICS
 # ============================================================
 

@@ -295,6 +295,9 @@ async function loadDashboard() {
             }
         }
 
+        // v12 Feature Status + Universe Health (unabhaengig vom restlichen Load)
+        loadV12Status();
+
         // Sector Strength
         if (sectorRes) {
             try {
@@ -387,6 +390,9 @@ function loadMoreTrades() { loadTrades(false); }
 
 // === BRAIN ===
 async function loadBrain() {
+    // Meta-Labeler-Status parallel zum Brain-Load ziehen
+    loadMetaLabelerStatus();
+
     const res = await apiFetch('/api/brain');
     if (!res) return;
     const b = await res.json();
@@ -468,6 +474,7 @@ function onStrategyPreset(name) {
 // === SETTINGS ===
 async function loadSettings() {
     load2FAStatus(); // parallel
+    loadDisabledSymbols(); // parallel
     const res = await apiFetch('/api/config');
     if (!res) return;
     const cfg = await res.json();
@@ -1318,4 +1325,225 @@ async function disable2FA() {
     showToast('2FA deaktiviert');
     document.getElementById('twofa-disable-code').value = '';
     load2FAStatus();
+}
+
+// === v12 FEATURE STATUS ===
+function _flagBadge(label, on) {
+    return `<span class="badge ${on ? 'badge-green' : 'badge-blue'}" style="opacity:${on ? 1 : 0.5};">${label}${on ? '' : ' · off'}</span>`;
+}
+
+async function loadV12Status() {
+    const res = await apiFetch('/api/v12-status');
+    if (!res) return;
+    let data;
+    try { data = await res.json(); } catch (e) { return; }
+    if (!data || data.error) return;
+
+    // Badge-Reihe oben
+    const badges = document.getElementById('v12-badges');
+    if (badges) {
+        badges.innerHTML = [
+            _flagBadge('Kelly', data.kelly_sizing?.enabled),
+            _flagBadge('Meta-Labeler', data.meta_labeler?.enabled),
+            _flagBadge('Time-Stop', data.time_stop?.enabled),
+            _flagBadge('VIX-TS', data.vix_term_structure?.enabled),
+            _flagBadge('Hedging', data.hedging?.enabled),
+            _flagBadge('Regime-Strat', data.regime_strategies?.enabled),
+            _flagBadge('Trail-SL', data.trailing_sl?.enabled),
+        ].join('');
+    }
+
+    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+
+    // Universum
+    const u = data.universe || {};
+    setTxt('v12-universe-value',
+        (u.active != null && u.total != null)
+            ? `${u.active} / ${u.total}  (−${u.disabled_count})`
+            : '--');
+
+    // Kelly
+    const k = data.kelly_sizing || {};
+    if (k.enabled) {
+        const kind = k.half_kelly ? 'Half-Kelly' : 'Full-Kelly';
+        const cap = (k.max_fraction != null) ? (k.max_fraction * 100).toFixed(1) + '%' : '--';
+        setTxt('v12-kelly-value', `${kind} · Cap ${cap}`);
+    } else {
+        setTxt('v12-kelly-value', 'aus');
+    }
+
+    // Meta-Labeler
+    const m = data.meta_labeler || {};
+    if (m.enabled) {
+        const mode = m.shadow_mode ? 'Shadow' : 'LIVE';
+        const prec = m.precision != null ? m.precision.toFixed(0) + '%' : '--';
+        setTxt('v12-meta-value', `${mode} · ${m.shadow_log_size || 0}/${m.min_trades_to_activate || 50} · P=${prec}`);
+    } else {
+        setTxt('v12-meta-value', 'aus');
+    }
+
+    // Time-Stop
+    const t = data.time_stop || {};
+    if (t.enabled) {
+        setTxt('v12-timestop-value', `${t.max_days_stale || '?'}d · ${t.exits_last_7d || 0} Exits/7d`);
+    } else {
+        setTxt('v12-timestop-value', 'aus');
+    }
+
+    // VIX Term Structure
+    const vts = data.vix_term_structure || {};
+    if (vts.enabled) {
+        const mult = vts.panic_dip_multiplier != null ? (vts.panic_dip_multiplier * 100).toFixed(0) + '%' : '--';
+        setTxt('v12-vts-value', `Panic-Dip · ${mult}`);
+    } else {
+        setTxt('v12-vts-value', 'aus');
+    }
+
+    // Hedging
+    const h = data.hedging || {};
+    if (h.enabled) {
+        const bm = h.bear_position_multiplier != null ? (h.bear_position_multiplier * 100).toFixed(0) + '%' : '--';
+        setTxt('v12-hedging-value', `Bear-Multi ${bm}`);
+    } else {
+        setTxt('v12-hedging-value', 'aus');
+    }
+
+    // Regime-Strategies
+    const rs = data.regime_strategies || {};
+    if (rs.enabled) {
+        const bull = rs.bull_momentum_boost != null ? '+' + rs.bull_momentum_boost : '?';
+        const bear = rs.bear_non_defensive_penalty != null ? rs.bear_non_defensive_penalty : '?';
+        setTxt('v12-regime-value', `Bull ${bull} · Bear ${bear}`);
+    } else {
+        setTxt('v12-regime-value', 'aus');
+    }
+
+    // Trailing SL
+    const tsl = data.trailing_sl || {};
+    if (tsl.enabled) {
+        setTxt('v12-tsl-value', `${tsl.trail_pct ?? '?'}% @ ${tsl.activation_pct ?? '?'}%`);
+    } else {
+        setTxt('v12-tsl-value', 'aus');
+    }
+
+    // Universe Health (aus dem gleichen Payload, ohne extra Call)
+    renderUniverseHealth({
+        timestamp: u.health_last_update,
+        ok: u.health_ok,
+        bad: u.health_bad || [],
+        total: u.total,
+    });
+}
+
+function renderUniverseHealth(h) {
+    const summary = document.getElementById('uh-summary');
+    const badList = document.getElementById('uh-bad-list');
+    if (!summary || !badList) return;
+
+    if (!h || h.timestamp == null) {
+        summary.textContent = 'Noch kein Scan durchgefuehrt.';
+        badList.innerHTML = '';
+        return;
+    }
+
+    const when = fmtTime(h.timestamp);
+    const okCount = h.ok != null ? h.ok : '?';
+    const badCount = (h.bad || []).length;
+    summary.innerHTML = `Letzter Check: <strong>${when}</strong> · OK: <strong>${okCount}</strong> · Probleme: <strong class="${badCount > 0 ? 'negative' : 'positive'}">${badCount}</strong>`;
+
+    if (badCount === 0) {
+        badList.innerHTML = '<span class="badge badge-green">Alle Symbole liefern Daten</span>';
+    } else {
+        badList.innerHTML = (h.bad || [])
+            .map(s => `<span class="badge badge-red">${s}</span>`)
+            .join('');
+    }
+}
+
+// === META-LABELER STATUS (Brain Tab) ===
+async function loadMetaLabelerStatus() {
+    // Wir nutzen den gleichen v12-Endpoint
+    const res = await apiFetch('/api/v12-status');
+    if (!res) return;
+    let data;
+    try { data = await res.json(); } catch (e) { return; }
+    if (!data || data.error) return;
+
+    const m = data.meta_labeler || {};
+    const badge = document.getElementById('meta-status-badge');
+    if (badge) {
+        if (!m.enabled) {
+            badge.className = 'badge badge-blue';
+            badge.textContent = 'DEAKTIVIERT';
+        } else if (m.ready_to_activate) {
+            badge.className = 'badge badge-green';
+            badge.textContent = 'BEREIT FUER LIVE';
+        } else if (m.shadow_mode) {
+            badge.className = 'badge badge-orange';
+            badge.textContent = m.trained ? 'SHADOW (trainiert)' : 'SHADOW (sammelt Daten)';
+        } else {
+            badge.className = 'badge badge-green';
+            badge.textContent = 'LIVE';
+        }
+    }
+
+    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    setTxt('meta-shadow-count', `${m.shadow_log_size || 0} / ${m.min_trades_to_activate || 50}`);
+    setTxt('meta-precision',
+        m.precision != null ? m.precision.toFixed(1) + '%' : '--');
+    setTxt('meta-samples', m.samples_total != null ? m.samples_total : '--');
+
+    const pct = m.progress_pct || 0;
+    const bar = document.getElementById('meta-progress-bar');
+    if (bar) {
+        bar.style.width = pct + '%';
+        bar.style.background = pct >= 100 ? 'var(--green)' : 'var(--orange)';
+    }
+    setTxt('meta-progress-label', `${pct}%`);
+
+    if (m.trained_at) {
+        setTxt('meta-trained-at', `Zuletzt trainiert: ${fmtTime(m.trained_at)}`);
+    } else {
+        setTxt('meta-trained-at', 'Noch nicht trainiert');
+    }
+}
+
+// === DISABLED SYMBOLS EDITOR (Settings Tab) ===
+async function loadDisabledSymbols() {
+    const res = await apiFetch('/api/v12-status');
+    if (!res) return;
+    let data;
+    try { data = await res.json(); } catch (e) { return; }
+    if (!data || data.error) return;
+
+    const u = data.universe || {};
+    const ta = document.getElementById('ds-textarea');
+    if (ta) ta.value = (u.disabled_symbols || []).join('\n');
+    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    setTxt('ds-count', u.disabled_count != null ? u.disabled_count : '--');
+    setTxt('ds-total', u.total != null ? u.total : '--');
+    setTxt('ds-active', u.active != null ? u.active : '--');
+}
+
+async function saveDisabledSymbols() {
+    const ta = document.getElementById('ds-textarea');
+    if (!ta) return;
+    const symbols = ta.value
+        .split('\n')
+        .map(s => s.trim().toUpperCase())
+        .filter(s => s.length > 0);
+
+    const res = await apiFetch('/api/disabled-symbols', {
+        method: 'PUT',
+        body: JSON.stringify({ disabled_symbols: symbols }),
+    });
+    if (!res || !res.ok) {
+        const err = res ? await res.json().catch(() => ({})) : {};
+        showToast('Fehler: ' + (err.detail || 'Speichern fehlgeschlagen'));
+        return;
+    }
+    const data = await res.json();
+    showToast(`Gespeichert: ${data.count} Symbols blockiert`);
+    loadDisabledSymbols();
+    loadV12Status();
 }

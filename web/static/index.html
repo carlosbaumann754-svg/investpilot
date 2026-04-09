@@ -123,6 +123,53 @@
             </div>
         </div>
 
+        <!-- v12 STATUS -->
+        <div class="card" id="v12-card">
+            <div class="card-title">v12 Feature Status<span class="tip" data-tip="Uebersicht ueber die neuen Schutz- und Optimierungsmechanismen: Universum-Filter, Kelly-Positionsgroesse, Meta-Labeler, Time-Stop, VIX-Schutz, Hedging und Regime-Strategien. Gruen = aktiv, Grau = aus.">?</span></div>
+            <div id="v12-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">--</div>
+            <div class="grid-2" id="v12-details" style="gap:8px;">
+                <div class="regime-detail-item">
+                    <span class="card-sub">Universum<span class="tip" data-tip="Wie viele Symbole der Bot aktuell ueberhaupt scannen darf. 'Aktiv / Gesamt': von allen bekannten Symbolen sind einige per Filter ausgeschlossen (z.B. weil sie im Backtest schlecht liefen).">?</span></span>
+                    <span id="v12-universe-value" style="font-weight:700;font-size:16px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Kelly Sizing<span class="tip" data-tip="Mathematisch optimale Positionsgroesse basierend auf Gewinnwahrscheinlichkeit und Gewinn/Verlust-Verhaeltnis. Half-Kelly = vorsichtigere Variante (halbiert). Cap = absolute Obergrenze pro Trade als Anteil des Kontos.">?</span></span>
+                    <span id="v12-kelly-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Meta-Labeler<span class="tip" data-tip="Zweites KI-Modell nach Lopez de Prado: Bewertet jeden Kauf-Signal vom ersten Modell nochmal und filtert schwache Signale heraus. Laeuft zuerst im Schatten-Modus und wird erst live, wenn genug Daten und hohe Praezision da sind.">?</span></span>
+                    <span id="v12-meta-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Time-Stop<span class="tip" data-tip="Schliesst Positionen, die zu lange 'festhaengen' (weder Gewinn noch Verlust). Verhindert, dass Kapital in toten Trades gebunden wird. Anzahl = Exits der letzten 7 Tage.">?</span></span>
+                    <span id="v12-timestop-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">VIX Term Structure<span class="tip" data-tip="Nutzt die Struktur der VIX-Terminkurve um Panik-Dips zu erkennen: Wenn kurzfristiger VIX deutlich ueber langfristigem liegt, ist es meist eine Ueberreaktion — guenstige Einstiegsgelegenheit statt Grund zur Panik.">?</span></span>
+                    <span id="v12-vts-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Hedging<span class="tip" data-tip="Bear-Markt-Schutz: Im Baeren-Regime werden neue Positionen nur halb so gross geoeffnet. Defensive Sektoren (Health, Consumer, Bonds, Commodities) bleiben verschont.">?</span></span>
+                    <span id="v12-hedging-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Regime-Strategien<span class="tip" data-tip="Passt die Score-Berechnung an das Markt-Regime an: Im Bull-Markt bekommen Momentum-Signale einen Bonus, im Sideways-Markt Mean-Reversion, im Bear-Markt werden nicht-defensive Assets bestraft.">?</span></span>
+                    <span id="v12-regime-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Trailing SL<span class="tip" data-tip="Dynamischer Stop-Loss, der bei Gewinn mit dem Kurs mitwandert. Aktivierungs-% = ab welchem Gewinn er scharfgestellt wird, Trail-% = wie viel Abstand er zum Hoechstkurs haelt.">?</span></span>
+                    <span id="v12-tsl-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- UNIVERSE HEALTH -->
+        <div class="card" id="universe-health-card">
+            <div class="card-title">Universe Health<span class="tip" data-tip="Welche Symbole beim letzten Daten-Download von Yahoo Finance Probleme hatten. 'Ok' = frische Kursdaten da, 'bad' = Symbol liefert keine brauchbaren Daten (z.B. wegen Rebranding/Delisting) und sollte in die Disabled-Liste.">?</span></div>
+            <div id="uh-summary" class="card-sub" style="margin-bottom:8px;">--</div>
+            <div id="uh-bad-list" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+
         <!-- SECTOR STRENGTH -->
         <div class="card" id="sector-card" style="display:none;">
             <div class="card-title">Sektor-Staerke<span class="tip" data-tip="Wie dein Geld auf verschiedene Branchen verteilt ist (z.B. Tech, Energie, Finanzen). Zu viel in einem Sektor = hoeheres Risiko.">?</span></div>
@@ -218,6 +265,36 @@
         <div class="card">
             <div class="card-title">Gelernte Regeln</div>
             <div id="rules-list" style="font-size:13px; color: var(--text-dim)">Keine Regeln</div>
+        </div>
+
+        <!-- META-LABELER STATUS -->
+        <div class="card" id="meta-labeler-card">
+            <div class="card-title">Meta-Labeler (Shadow-Mode)<span class="tip" data-tip="Zweites KI-Modell, das Kauf-Signale vom Haupt-Scanner filtert. Lernt aus historischen Trades: 'Wenn Score X + VIX Y + RSI Z = dieser Trade geht meist auf'. Wird erst scharfgeschaltet, wenn genug Trades gesammelt UND die Praezision hoch genug ist. Bis dahin laeuft er nur im Schatten mit und beobachtet.">?</span></div>
+            <div id="meta-status-badge" class="badge badge-blue" style="margin-bottom:12px;">--</div>
+            <div class="grid-3">
+                <div>
+                    <div class="card-sub">Shadow-Trades<span class="tip" data-tip="Wie viele Signale der Meta-Labeler bisher im Schatten-Modus beobachtet hat. Je mehr, desto zuverlaessiger die Statistik.">?</span></div>
+                    <div class="card-value" style="font-size:18px" id="meta-shadow-count">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Precision<span class="tip" data-tip="Wenn der Meta-Labeler 'kauf!' sagt — wie oft lag er richtig? Muss ueber 65% sein, damit er live gehen darf.">?</span></div>
+                    <div class="card-value" style="font-size:18px" id="meta-precision">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Samples<span class="tip" data-tip="Anzahl der abgeschlossenen Trades, auf denen der Meta-Labeler zuletzt trainiert wurde.">?</span></div>
+                    <div class="card-value" style="font-size:18px" id="meta-samples">--</div>
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <div class="card-sub" style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                    <span>Fortschritt zur Live-Schaltung<span class="tip" data-tip="Wenn beide Balken voll sind (genug Trades UND Precision hoch genug), schaltet sich der Meta-Labeler automatisch scharf und filtert dann echte Kauf-Signale.">?</span></span>
+                    <span id="meta-progress-label">--</span>
+                </div>
+                <div style="background:var(--bg-input);height:10px;border-radius:5px;overflow:hidden;">
+                    <div id="meta-progress-bar" style="height:100%;background:var(--green);width:0%;transition:width 0.4s;"></div>
+                </div>
+            </div>
+            <div class="card-sub" id="meta-trained-at" style="margin-top:8px;font-size:11px;">--</div>
         </div>
     </div>
 
@@ -536,6 +613,21 @@
         <div class="card">
             <div class="card-title">Portfolio-Allokation<span class="tip" data-tip="Hier legst du fest, welchen Anteil deines Geldes der Bot auf welche Asset-Klasse verteilen darf (z.B. 40% Aktien, 30% ETFs, 20% Krypto, 10% Cash).">?</span></div>
             <div id="allocation-editor"></div>
+        </div>
+
+        <!-- DISABLED SYMBOLS EDITOR -->
+        <div class="card">
+            <div class="card-title">Universe-Filter (Disabled Symbols)<span class="tip" data-tip="Symbole, die der Bot komplett ignoriert. Nuetzlich fuer Assets, die im Backtest schlecht liefen (Sharpe unter 0.5, Profit Factor unter 1.2) oder keine brauchbaren Daten mehr liefern. Ein Symbol pro Zeile. Aendert sich sofort beim naechsten Scan.">?</span></div>
+            <div class="card-sub" style="margin-bottom:8px;">
+                Aktuell <strong id="ds-count">--</strong> Symbole blockiert (von <strong id="ds-total">--</strong> im Universum).
+                Aktiv: <strong id="ds-active">--</strong>.
+            </div>
+            <div class="form-group">
+                <label>Disabled Symbols<span class="tip" data-tip="Ein Symbol pro Zeile. Grossbuchstaben sind egal. Leerzeilen werden ignoriert.">?</span></label>
+                <textarea id="ds-textarea" rows="8" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-family:monospace;font-size:13px;resize:vertical;" placeholder="z.B.&#10;DIS&#10;ROKU&#10;VNQ"></textarea>
+            </div>
+            <button type="button" class="btn btn-primary" onclick="saveDisabledSymbols()">Speichern</button>
+            <button type="button" class="btn btn-secondary" style="margin-left:8px;" onclick="loadDisabledSymbols()">Zuruecksetzen</button>
         </div>
 
         <!-- 2FA Setup -->
