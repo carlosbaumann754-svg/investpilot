@@ -2,6 +2,8 @@
 InvestPilot - Config Manager
 Laedt Strategie-Config aus config.json und Secrets aus Umgebungsvariablen (.env).
 API Keys werden NIE auf Disk geschrieben.
+
+Persistent Disk: DATA_DIR auto-detects /data mount (see _resolve_data_dir below).
 """
 
 import json
