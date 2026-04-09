@@ -157,6 +157,15 @@ def scheduler_loop():
                 except ImportError:
                     pass
 
+            # --- Optimizer-Watchdog: pruefe ob GitHub-Action neue Werte pushed hat ---
+            # Verhindert die Race-Condition wo Renders naechster backup_to_cloud()
+            # die Optimizer-Tunings wieder ueberschreibt.
+            try:
+                from app.persistence import check_and_reload_optimizer_output
+                check_and_reload_optimizer_output()
+            except Exception as e:
+                log.debug(f"Optimizer-Watchdog Fehler (non-fatal): {e}")
+
             # --- Trading Zyklus ---
             log.info(f"[{datetime.now():%H:%M}] Starte Trading-Zyklus...")
             from app.trader import run_trading_cycle

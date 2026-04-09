@@ -381,6 +381,127 @@ def restore_for_optimizer():
         return False
 
 
+# State file to track the last optimizer push timestamp we already applied
+_OPTIMIZER_RELOAD_STATE_FILE = "last_applied_optimizer_push.json"
+
+
+def check_and_reload_optimizer_output():
+    """
+    Watchdog-Reload: Prueft ob der Weekly Optimizer (GitHub Action) neue
+    Werte in den Gist gepusht hat, die der laufende Render-Container noch
+    nicht uebernommen hat. Wenn ja, pulled alle OPTIMIZER_OUTPUT_FILES aus
+    dem Gist und speichert sie lokal.
+
+    Verhindert die Race-Condition:
+      - Optimizer pusht sl=-2.5, tp=15 um T+0
+      - Render's naechster backup_to_cloud() um T+60s ueberschreibt Gist
+        mit den lokalen (alten) Werten sl=-3, tp=12
+      - Optimizer-Tuning geht verloren
+
+    Mit dieser Funktion erkennt Render den neuen Push und lädt die neuen
+    Werte BEVOR der naechste Backup-Zyklus startet.
+
+    Returns:
+      True  wenn neue Werte uebernommen wurden
+      False wenn kein neuer Push oder Fehler
+    """
+    token = _get_token()
+    if not token or not requests:
+        return False
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return False
+
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            log.debug(f"check_and_reload_optimizer_output: HTTP {resp.status_code}")
+            return False
+
+        gist_data = resp.json()
+        meta_entry = gist_data.get("files", {}).get("_optimizer_meta.json")
+        if not meta_entry:
+            return False
+
+        meta_content = _fetch_gist_file_content(meta_entry, token)
+        if not meta_content:
+            return False
+
+        try:
+            meta = json.loads(meta_content)
+        except Exception:
+            return False
+
+        remote_push = meta.get("last_optimizer_push")
+        if not remote_push:
+            return False
+
+        # Compare against local state
+        local_state = load_json(_OPTIMIZER_RELOAD_STATE_FILE) or {}
+        local_applied = local_state.get("last_applied_push")
+
+        if local_applied == remote_push:
+            # Already up-to-date
+            return False
+
+        log.info(
+            f"Optimizer-Watchdog: Neuer Push erkannt (remote={remote_push}, "
+            f"local_applied={local_applied}) — lade Optimizer-Output neu"
+        )
+
+        # Pull OPTIMIZER_OUTPUT_FILES from Gist. Preserve disabled_symbols
+        # from local config.json (git-authoritative) so the optimizer's config
+        # push doesn't accidentally clear our universe filter.
+        local_cfg = load_json("config.json") or {}
+        local_disabled = local_cfg.get("disabled_symbols")
+
+        files_reloaded = 0
+        for filename in OPTIMIZER_OUTPUT_FILES:
+            if filename not in gist_data.get("files", {}):
+                continue
+            file_entry = gist_data["files"][filename]
+            content = _fetch_gist_file_content(file_entry, token)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+            except Exception as e:
+                log.warning(
+                    f"check_and_reload_optimizer_output: parse {filename}: {e}"
+                )
+                continue
+
+            # Preserve local disabled_symbols in config.json
+            if (filename == "config.json"
+                    and local_disabled is not None
+                    and isinstance(parsed, dict)):
+                parsed["disabled_symbols"] = local_disabled
+
+            save_json(filename, parsed)
+            files_reloaded += 1
+
+        # Persist the applied timestamp so next poll is a no-op
+        save_json(_OPTIMIZER_RELOAD_STATE_FILE, {
+            "last_applied_push": remote_push,
+            "applied_at": datetime.now().isoformat(),
+            "files_reloaded": files_reloaded,
+        })
+
+        log.info(
+            f"Optimizer-Watchdog: {files_reloaded} Dateien aus Gist uebernommen"
+        )
+        return files_reloaded > 0
+
+    except Exception as e:
+        log.warning(f"check_and_reload_optimizer_output Fehler: {e}")
+        return False
+
+
 def backup_optimizer_results():
     """
     Push NUR die Dateien, die der Optimizer modifiziert.
