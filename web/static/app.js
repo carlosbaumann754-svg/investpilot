@@ -678,16 +678,34 @@ async function downloadReportPdf() {
 }
 
 async function runDiscovery() {
-    showToast('Asset Discovery gestartet... (kann 2-3 Min. dauern)');
+    showToast('Asset Discovery gestartet (laeuft auf GitHub Actions, ~2-10 Min)');
     try {
         const res = await apiFetch('/api/discovery/run', { method: 'POST' });
-        if (res) {
-            const data = await res.json();
-            if (data.error) {
-                showToast('Fehler: ' + data.error);
-            } else {
-                showToast(`Discovery: ${data.new_found} neue, ${data.added} hinzugefuegt`);
+        if (!res || !res.ok) {
+            const err = await res?.json();
+            showToast('Start fehlgeschlagen: ' + (err?.detail || 'Unbekannt'));
+            return;
+        }
+        const startData = await res.json();
+        if (startData.status === 'already_running') {
+            showToast('Discovery laeuft bereits im Hintergrund');
+        }
+        // Status-Polling bis done oder error (max 15 Min = 90 * 10s)
+        const MAX_POLLS = 90;
+        for (let i = 0; i < MAX_POLLS; i++) {
+            await new Promise(r => setTimeout(r, 10000));
+            const sRes = await apiFetch('/api/discovery/status');
+            if (!sRes || !sRes.ok) continue;
+            const s = await sRes.json();
+            if (s.state === 'done') {
+                const r = s.result || {};
+                showToast(`Discovery: ${r.new_found || 0} neue, ${r.added || 0} hinzugefuegt`);
                 loadReports();
+                break;
+            } else if (s.state === 'error') {
+                showToast('Discovery Fehler: ' + (s.error || 'Unbekannt'));
+                console.error('Discovery error:', s);
+                break;
             }
         }
     } catch (e) {

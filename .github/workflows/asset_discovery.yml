@@ -1,0 +1,68 @@
+name: Manual Asset Discovery
+
+# Laeuft nur auf manuellen Trigger (aus dem InvestPilot-Dashboard via
+# workflow_dispatch oder aus dem GitHub UI).
+#
+# Grund: Discovery macht viele yfinance-API-Calls + Bewertung. Offloaden
+# entkoppelt es vom Trading-Server und vermeidet Interferenzen mit dem
+# Render Free Tier. Ergebnisse kommen via isoliertem Gist-Push zurueck.
+
+on:
+  workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: "Trigger-Quelle (dashboard / manual / debug)"
+        required: false
+        default: "manual"
+
+concurrency:
+  group: investpilot-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: "Run Asset Discovery"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare data directory
+        run: |
+          mkdir -p data/logs
+          if [ ! -f data/config.json ]; then
+            echo "{}" > data/config.json
+          fi
+
+      - name: Run discovery
+        env:
+          GITHUB_TOKEN: ${{ secrets.INVESTPILOT_GIST_TOKEN }}
+          INVESTPILOT_DISCOVERY_CI: '1'
+        run: |
+          python -m app.discovery_runner github-action-${{ github.event.inputs.triggered_by || 'manual' }}
+
+      - name: Upload discovery artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-result-${{ github.run_id }}
+          path: |
+            data/discovery_result.json
+            data/discovered_assets.json
+            data/discovery_status.json
+            data/logs/
+          retention-days: 14
+          if-no-files-found: warn

@@ -180,6 +180,13 @@ def scheduler_loop():
             except Exception as e:
                 log.debug(f"ML-Training-Watchdog Fehler (non-fatal): {e}")
 
+            # --- Discovery-Watchdog (GH Action v12) ---
+            try:
+                from app.persistence import check_and_reload_discovery_output
+                check_and_reload_discovery_output()
+            except Exception as e:
+                log.debug(f"Discovery-Watchdog Fehler (non-fatal): {e}")
+
             # --- Trading Zyklus ---
             log.info(f"[{datetime.now():%H:%M}] Starte Trading-Zyklus...")
             from app.trader import run_trading_cycle

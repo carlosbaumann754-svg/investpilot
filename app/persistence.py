@@ -92,6 +92,16 @@ ML_TRAINING_OUTPUT_FILES = [
 ML_TRAINING_JOBLIB_FILE = "ml_model.joblib"
 ML_TRAINING_WEIGHTS_GIST_NAME = "ml_model_weights.json"
 
+# Dateien die der Discovery-Runner (GitHub Action) modifiziert. Werden
+# isoliert gepusht damit parallele Backtest/Optimizer/ML-Laeufe sich nicht
+# ueberschreiben. Der Render-Watchdog appliziert zusaetzlich die
+# discovered Symbole in den Live-ASSET_UNIVERSE des Trading-Prozesses.
+DISCOVERY_OUTPUT_FILES = [
+    "discovery_result.json",
+    "discovered_assets.json",
+    "discovery_status.json",
+]
+
 
 def _get_token():
     """GitHub Token aus Environment Variable laden."""
@@ -971,6 +981,195 @@ def check_and_reload_ml_training_output():
 
     except Exception as e:
         log.warning(f"check_and_reload_ml_training_output Fehler: {e}")
+        return False
+
+
+# ============================================================
+# ASSET DISCOVERY — Isolierter Gist-Push analog ML-Training
+# ============================================================
+
+_DISCOVERY_RELOAD_STATE_FILE = "last_applied_discovery_push.json"
+
+
+def backup_discovery_results():
+    """
+    Push NUR die Dateien, die der Discovery-Runner modifiziert.
+
+    Wird vom GitHub-Action-Runner am Ende eines Discovery-Laufs aufgerufen.
+    Isoliert vom Optimizer/Backtest/ML-Push (eigener Meta-Key).
+    """
+    token = _get_token()
+    if not token or not requests:
+        log.warning("backup_discovery_results: Kein GITHUB_TOKEN")
+        return False
+
+    files = {}
+    for filename in DISCOVERY_OUTPUT_FILES:
+        data = load_json(filename)
+        if data is not None:
+            files[filename] = {
+                "content": json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            }
+
+    if not files:
+        log.warning("backup_discovery_results: Keine Discovery-Output-Dateien gefunden")
+        return False
+
+    files["_discovery_meta.json"] = {
+        "content": json.dumps({
+            "last_discovery_push": datetime.now().isoformat(),
+            "files": list(files.keys()),
+            "source": "github-action",
+        }, indent=2)
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("backup_discovery_results: Kein Backup-Gist gefunden")
+            return False
+
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": files},
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"backup_discovery_results OK ({len(files)} Dateien)")
+            return True
+        log.warning(f"backup_discovery_results: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        log.warning(f"backup_discovery_results Fehler: {e}")
+        return False
+
+
+def _apply_discovery_to_live_universe():
+    """Nimmt die zuletzt discovered Symbole aus discovery_result.json und
+    appliziert sie in den laufenden ASSET_UNIVERSE-Dict des Trading-Prozesses.
+
+    Ohne diesen Schritt waere der Discovery-Offload sinnlos: der GH-Action-
+    Runner mutiert nur sein eigenes ASSET_UNIVERSE in-memory und stirbt. Der
+    Render-Prozess muss aktiv die Ergebnisse uebernehmen."""
+    try:
+        result = load_json("discovery_result.json") or {}
+        added = result.get("added_assets") or []
+        if not added:
+            return 0
+        from app import market_scanner
+        count = 0
+        for asset in added:
+            symbol = str(asset.get("symbol", "")).upper().replace(" ", "_")
+            if not symbol or symbol in market_scanner.ASSET_UNIVERSE:
+                continue
+            market_scanner.ASSET_UNIVERSE[symbol] = {
+                "etoro_id": asset.get("etoro_id"),
+                "yf": asset.get("yf_symbol") or asset.get("yf") or symbol,
+                "class": asset.get("class") or asset.get("asset_class", "stocks"),
+                "name": asset.get("name", symbol),
+            }
+            count += 1
+        if count:
+            log.info(f"Discovery-Apply: {count} Symbole in Live-ASSET_UNIVERSE eingefuegt")
+        return count
+    except Exception as e:
+        log.warning(f"Discovery-Apply fehlgeschlagen: {e}")
+        return 0
+
+
+def check_and_reload_discovery_output():
+    """
+    Watchdog-Reload: Prueft ob der Discovery-Runner neue Ergebnisse in den
+    Gist gepusht hat. Wenn ja, pulled alle DISCOVERY_OUTPUT_FILES aus dem
+    Gist, speichert sie lokal und appliziert die neuen Symbole in den
+    Live-ASSET_UNIVERSE des Trading-Prozesses.
+
+    Returns:
+      True  wenn neue Werte uebernommen wurden
+      False wenn kein neuer Push oder Fehler
+    """
+    token = _get_token()
+    if not token or not requests:
+        return False
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return False
+
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return False
+
+        gist_data = resp.json()
+        meta_entry = gist_data.get("files", {}).get("_discovery_meta.json")
+        if not meta_entry:
+            return False
+
+        meta_content = _fetch_gist_file_content(meta_entry, token)
+        if not meta_content:
+            return False
+
+        try:
+            meta = json.loads(meta_content)
+        except Exception:
+            return False
+
+        remote_push = meta.get("last_discovery_push")
+        if not remote_push:
+            return False
+
+        local_state = load_json(_DISCOVERY_RELOAD_STATE_FILE) or {}
+        local_applied = local_state.get("last_applied_push")
+
+        if local_applied == remote_push:
+            return False
+
+        log.info(
+            f"Discovery-Watchdog: Neuer Push erkannt (remote={remote_push}, "
+            f"local_applied={local_applied}) — lade Discovery-Output neu"
+        )
+
+        files_reloaded = 0
+        for filename in DISCOVERY_OUTPUT_FILES:
+            if filename not in gist_data.get("files", {}):
+                continue
+            file_entry = gist_data["files"][filename]
+            content = _fetch_gist_file_content(file_entry, token)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+            except Exception as e:
+                log.warning(
+                    f"check_and_reload_discovery_output: parse {filename}: {e}"
+                )
+                continue
+            save_json(filename, parsed)
+            files_reloaded += 1
+
+        applied = _apply_discovery_to_live_universe()
+
+        save_json(_DISCOVERY_RELOAD_STATE_FILE, {
+            "last_applied_push": remote_push,
+            "applied_at": datetime.now().isoformat(),
+            "files_reloaded": files_reloaded,
+            "symbols_added_to_universe": applied,
+        })
+
+        log.info(
+            f"Discovery-Watchdog: {files_reloaded} Dateien + "
+            f"{applied} Symbole uebernommen"
+        )
+        return files_reloaded > 0
+
+    except Exception as e:
+        log.warning(f"check_and_reload_discovery_output Fehler: {e}")
         return False
 
 

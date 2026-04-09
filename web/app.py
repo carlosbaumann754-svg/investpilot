@@ -725,21 +725,174 @@ async def api_send_weekly_report(user=Depends(require_auth)):
 @app.get("/api/discovery")
 async def api_discovery(user=Depends(require_auth)):
     """Letzte Asset Discovery Ergebnisse."""
+    try:
+        from app.persistence import check_and_reload_discovery_output
+        check_and_reload_discovery_output()
+    except Exception as e:
+        log.debug(f"check_and_reload_discovery_output skipped: {e}")
+
     result = read_json_safe("discovery_result.json")
     if result:
         return result
     return {"new_found": 0, "evaluated": 0, "added": 0, "message": "Noch keine Discovery gelaufen"}
 
 
-@app.post("/api/discovery/run")
-async def api_run_discovery(user=Depends(require_auth)):
-    """Asset Discovery manuell ausloesen."""
+def _trigger_github_action_discovery(username: str):
+    """Triggert den Manual-Discovery-Workflow auf GitHub Actions.
+
+    Mirror zu _trigger_github_action_backtest/_trigger_github_action_ml_training.
+    Entkoppelt Discovery von Render damit yfinance-Rate-Limits / viele API-Calls
+    den Trading-Server nicht beeintraechtigen. Ergebnisse kommen via Gist zurueck
+    und der Watchdog appliziert die neuen Symbole in den Live-ASSET_UNIVERSE.
+    """
+    from datetime import datetime
+    from app.config_manager import save_json
+
+    initial_status = {
+        "state": "running",
+        "phase": "dispatching",
+        "message": "GitHub Action wird gestartet...",
+        "started_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "triggered_by": username,
+        "action": None,
+        "error": None,
+        "mode": "github-action-dispatching",
+    }
     try:
-        from app.asset_discovery import run_weekly_discovery
-        result = run_weekly_discovery()
-        return {"status": "ok", **result}
+        save_json("discovery_status.json", initial_status)
+    except Exception:
+        pass
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log.error("Discovery-Trigger: GITHUB_TOKEN fehlt")
+        initial_status["state"] = "error"
+        initial_status["error"] = "GITHUB_TOKEN fehlt — Workflow nicht ausloesbar"
+        initial_status["finished_at"] = datetime.now().isoformat()
+        initial_status["updated_at"] = datetime.now().isoformat()
+        try:
+            save_json("discovery_status.json", initial_status)
+        except Exception:
+            pass
+        return
+
+    repo = os.environ.get("GITHUB_REPO", "carlosbaumann754-svg/investpilot")
+    workflow_file = os.environ.get("DISCOVERY_WORKFLOW_FILE", "asset_discovery.yml")
+    ref = os.environ.get("DISCOVERY_WORKFLOW_REF", "master")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+
+    try:
+        import requests
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "ref": ref,
+                "inputs": {"triggered_by": username},
+            },
+            timeout=15,
+        )
+        if resp.status_code in (201, 204):
+            log.info(f"Discovery-Workflow getriggert (repo={repo}, ref={ref})")
+            initial_status["mode"] = "github-action-running"
+            initial_status["action"] = "dispatched"
+            initial_status["message"] = "GitHub Action gestartet, warte auf Runner..."
+        else:
+            log.error(f"Discovery-Dispatch HTTP {resp.status_code}: {resp.text[:200]}")
+            initial_status["state"] = "error"
+            initial_status["error"] = (
+                f"workflow_dispatch HTTP {resp.status_code}: {resp.text[:160]}"
+            )
+            initial_status["finished_at"] = datetime.now().isoformat()
     except Exception as e:
-        return {"error": str(e)}
+        log.exception("Discovery Workflow-Dispatch fehlgeschlagen")
+        initial_status["state"] = "error"
+        initial_status["error"] = f"dispatch: {type(e).__name__}: {e}"
+        initial_status["finished_at"] = datetime.now().isoformat()
+
+    initial_status["updated_at"] = datetime.now().isoformat()
+    try:
+        save_json("discovery_status.json", initial_status)
+    except Exception:
+        pass
+
+
+@app.post("/api/discovery/run")
+async def api_run_discovery(background_tasks: BackgroundTasks, user=Depends(require_auth)):
+    """Asset Discovery manuell ausloesen — offloaded auf GitHub Actions."""
+    try:
+        from datetime import datetime
+        from app.config_manager import load_json, save_json
+
+        STALE_LOCK_MINUTES = 60
+        status = load_json("discovery_status.json") or {}
+        if status.get("state") == "running":
+            started = status.get("started_at") or status.get("updated_at")
+            is_stale = False
+            if started:
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    age_min = (datetime.now() - started_dt).total_seconds() / 60
+                    if age_min > STALE_LOCK_MINUTES:
+                        is_stale = True
+                        log.warning(
+                            f"Stale Discovery-Lock erkannt ({age_min:.0f} Min alt)"
+                        )
+                        status["state"] = "error"
+                        status["error"] = (
+                            f"Lauf abgebrochen (Lock stale nach {age_min:.0f} Min)"
+                        )
+                        status["finished_at"] = datetime.now().isoformat()
+                        status["updated_at"] = datetime.now().isoformat()
+                        save_json("discovery_status.json", status)
+                except Exception:
+                    pass
+
+            if not is_stale:
+                return {
+                    "status": "already_running",
+                    "message": f"Discovery laeuft bereits seit {started}",
+                    "started_at": started,
+                }
+
+        background_tasks.add_task(_trigger_github_action_discovery, user)
+
+        try:
+            from web.security import log_audit
+            await log_audit(user, "DISCOVERY_RUN_STARTED",
+                            "GitHub Action dispatched")
+        except Exception:
+            pass
+
+        return {
+            "status": "started",
+            "message": ("Discovery laeuft auf GitHub Actions. "
+                        "Dauer ~2-10 Min. Status ueber /api/discovery/status."),
+            "started_at": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/discovery/status")
+async def api_discovery_status(user=Depends(require_auth)):
+    """Status des letzten/laufenden Discovery-GitHub-Action-Laufs."""
+    try:
+        from app.persistence import check_and_reload_discovery_output
+        check_and_reload_discovery_output()
+    except Exception as e:
+        log.debug(f"check_and_reload_discovery_output skipped: {e}")
+
+    from app.config_manager import load_json
+    status = load_json("discovery_status.json")
+    if not status:
+        return {"state": "idle", "message": "Noch kein Discovery-Lauf gestartet"}
+    return status
 
 
 @app.get("/api/weekly-report/pdf")
