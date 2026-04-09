@@ -661,6 +661,37 @@ async def api_update_strategy(update: StrategyUpdate, user=Depends(require_auth)
     return {"status": "ok", "changes": changes}
 
 
+class KellyUpdate(BaseModel):
+    max_fraction: float
+
+    @validator("max_fraction")
+    def validate_max_fraction(cls, v):
+        # Hard safety bounds: 0 < k <= 0.15 (15% = absolute ceiling, weit jenseits
+        # des 8% MaxDD-Hard-Gates bei unserem Backtest-Profil)
+        if not (0 < v <= 0.15):
+            raise ValueError("kelly.max_fraction muss in (0, 0.15] liegen")
+        return v
+
+
+@app.put("/api/config/kelly")
+async def api_update_kelly(update: KellyUpdate, user=Depends(require_auth)):
+    """Kelly-Sizing max_fraction live aendern (persistiert in data/config.json)."""
+    config = load_config()
+    ks = config.setdefault("kelly_sizing", {})
+    old = ks.get("max_fraction")
+    ks["max_fraction"] = update.max_fraction
+    save_config(config)
+
+    try:
+        from web.security import log_audit
+        await log_audit(user, "CONFIG_CHANGE",
+                        f"kelly.max_fraction: {old} -> {update.max_fraction}")
+    except Exception:
+        pass
+
+    return {"status": "ok", "old": old, "new": update.max_fraction}
+
+
 @app.get("/api/trading/status")
 async def api_trading_status(user=Depends(require_auth)):
     """Trading-Status: laeuft es? Letzter Lauf?"""
