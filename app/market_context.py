@@ -78,6 +78,74 @@ def get_vix_regime(vix_value):
         return "high_fear"
 
 
+def fetch_vix_term_structure():
+    """v12: VIX Term Structure ^VIX9D (9-Tage) vs ^VIX (30d) vs ^VIX3M (90d).
+
+    Backwardation (VIX9D > VIX > VIX3M): akute kurzfristige Panik,
+        historisch oft Mean-Reversion-Signal (buy-the-dip).
+    Contango (VIX9D < VIX < VIX3M): normaler Zustand, institutionelles
+        Hedging im Hintergrund, keine akute Panik.
+    Steep Contango (VIX3M deutlich ueber VIX9D): komfortable Marktstruktur.
+
+    Returns dict oder None:
+        {vix9d, vix, vix3m, ratio_9d_vs_30d, shape, is_backwardation,
+         spike_warning, panic_dip_buy_signal}
+    """
+    if yf is None:
+        return None
+    try:
+        tickers = {"vix9d": "^VIX9D", "vix": "^VIX", "vix3m": "^VIX3M"}
+        out = {}
+        for key, sym in tickers.items():
+            try:
+                hist = yf.Ticker(sym).history(period="5d")
+                if not hist.empty:
+                    out[key] = round(float(hist["Close"].iloc[-1]), 2)
+            except Exception as e:
+                log.debug(f"VIX-Term fetch {sym}: {e}")
+        if not out.get("vix") or not out.get("vix9d"):
+            return None
+
+        vix9d = out["vix9d"]
+        vix = out["vix"]
+        vix3m = out.get("vix3m")
+        ratio = vix9d / vix if vix > 0 else 1.0
+
+        # Shape
+        if vix3m and vix9d < vix < vix3m:
+            shape = "contango"
+        elif vix3m and vix9d > vix > vix3m:
+            shape = "backwardation"
+        elif vix9d > vix:
+            shape = "short_term_stress"
+        else:
+            shape = "flat"
+
+        is_backwardation = shape == "backwardation" or shape == "short_term_stress"
+        # Spike warning: 9D liegt deutlich ueber 30D (> 1.15)
+        spike_warning = ratio > 1.15
+        # Panic dip buy signal: starke Backwardation + VIX auf Stressniveau
+        panic_dip_buy_signal = is_backwardation and vix >= 22 and ratio > 1.20
+
+        result = {
+            "vix9d": vix9d,
+            "vix": vix,
+            "vix3m": vix3m,
+            "ratio_9d_vs_30d": round(ratio, 3),
+            "shape": shape,
+            "is_backwardation": is_backwardation,
+            "spike_warning": spike_warning,
+            "panic_dip_buy_signal": panic_dip_buy_signal,
+        }
+        log.info(f"  VIX Term: 9D={vix9d} 30D={vix} 3M={vix3m} "
+                 f"ratio={ratio:.2f} shape={shape}"
+                 + (" [PANIC-DIP-BUY]" if panic_dip_buy_signal else ""))
+        return result
+    except Exception as e:
+        log.debug(f"VIX Term Structure Fehler: {e}")
+        return None
+
+
 # ============================================================
 # FEAR & GREED INDEX
 # ============================================================
@@ -366,6 +434,11 @@ def update_full_context(config=None):
     if vix is not None:
         ctx["vix_level"] = vix
         ctx["vix_regime"] = get_vix_regime(vix)
+
+    # v12: VIX Term Structure (leading regime indicator)
+    vts = fetch_vix_term_structure()
+    if vts is not None:
+        ctx["vix_term_structure"] = vts
 
     # Fear & Greed
     fg = fetch_fear_greed()

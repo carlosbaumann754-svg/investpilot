@@ -680,8 +680,20 @@ def execute_scanner_trades(client, config, scan_results):
         if not buy_allowed:
             log.warning(f"  REGIME FILTER: {regime_reason}")
             regime_halt = True
-            # Telegram: Regime Halt Notification
-            if al:
+            # v12: Panic-Dip-Buy Override — wenn VIX Term Structure auf akuter
+            # Backwardation ist (VIX9D deutlich > VIX > VIX3M) ist das historisch
+            # ein Capitulation-Signal. Wir heben den Halt auf und fahren mit
+            # reduzierter Position-Multiplier.
+            vts = ctx.get("vix_term_structure") or {}
+            vts_cfg = config.get("vix_term_structure", {}) or {}
+            if vts_cfg.get("panic_dip_override_enabled", True) and vts.get("panic_dip_buy_signal"):
+                log.warning(f"  PANIC-DIP-BUY OVERRIDE: VIX Term "
+                            f"ratio={vts.get('ratio_9d_vs_30d')} "
+                            f"shape={vts.get('shape')} — Regime Halt aufgehoben")
+                regime_halt = False
+                ctx_multiplier *= vts_cfg.get("panic_dip_position_multiplier", 0.6)
+            elif al:
+                # Telegram: Regime Halt Notification
                 al.alert_regime_halt(regime_reason, regime_data)
 
     # Hedging: Bear-Regime Schutz
