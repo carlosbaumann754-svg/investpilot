@@ -997,15 +997,18 @@ async function trainML() {
         if (startData.status === 'already_running') {
             showToast('Training laeuft bereits im Hintergrund');
         }
-        // Status-Polling bis done oder error (max 10 min = 120 * 5s)
-        const MAX_POLLS = 120;
+        // Status-Polling bis done oder error (max 25 min = 150 * 10s)
+        // GH Action dauert typ. 5-15 Min (v12 offload analog Backtest).
+        const MAX_POLLS = 150;
         for (let i = 0; i < MAX_POLLS; i++) {
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise(r => setTimeout(r, 10000));
             const sRes = await apiFetch('/api/ml-model/train/status');
             if (!sRes || !sRes.ok) continue;
             const s = await sRes.json();
             if (s.state === 'running') {
-                btn.textContent = s.phase === 'download' ? 'Lade Historie...'
+                btn.textContent = s.phase === 'dispatching' ? 'GH Action startet...'
+                                : s.phase === 'init' ? 'Runner initialisiert...'
+                                : s.phase === 'download' ? 'Lade Historie...'
                                 : s.phase === 'train' ? 'Trainiere Modell...'
                                 : 'Training laeuft...';
             } else if (s.state === 'done') {

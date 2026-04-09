@@ -80,6 +80,18 @@ BACKTEST_OUTPUT_FILES = [
     "universe_health.json",
 ]
 
+# Dateien die der ML-Training-Runner (GitHub Action) modifiziert. Werden
+# isoliert von Optimizer/Backtest gepusht. Die RandomForest-Weights liegen
+# als Binary in `ml_model.joblib` und werden separat via base64 als
+# `ml_model_weights.json` in den Gist gespiegelt (siehe
+# backup_ml_training_results / check_and_reload_ml_training_output).
+ML_TRAINING_OUTPUT_FILES = [
+    "ml_model.json",
+    "ml_training_status.json",
+]
+ML_TRAINING_JOBLIB_FILE = "ml_model.joblib"
+ML_TRAINING_WEIGHTS_GIST_NAME = "ml_model_weights.json"
+
 
 def _get_token():
     """GitHub Token aus Environment Variable laden."""
@@ -730,6 +742,235 @@ def check_and_reload_backtest_output():
 
     except Exception as e:
         log.warning(f"check_and_reload_backtest_output Fehler: {e}")
+        return False
+
+
+# ============================================================
+# ML TRAINING — Isolierter Gist-Push analog Backtest/Optimizer
+# ============================================================
+# Der ML-Training-Runner (GitHub Action) schreibt ml_model.json +
+# ml_training_status.json + ml_model.joblib (binary). Die joblib wird
+# base64-encoded und als ml_model_weights.json in den Gist gelegt (Gists
+# sind text-only). Beim Reload dekodiert der Watchdog das Binary zurueck
+# auf Disk.
+
+_ML_TRAINING_RELOAD_STATE_FILE = "last_applied_ml_training_push.json"
+
+
+def _joblib_path():
+    import os
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+    return os.path.join(data_dir, ML_TRAINING_JOBLIB_FILE)
+
+
+def backup_ml_training_results():
+    """
+    Push NUR die Dateien, die der ML-Training-Runner modifiziert.
+
+    Wird vom GitHub-Action-Runner nach einem Trainings-Lauf aufgerufen.
+    Isoliert vom Optimizer/Backtest-Push (eigener Meta-Key), damit parallele
+    Laeufe sich nicht ueberschreiben.
+    """
+    import base64
+    import os
+
+    token = _get_token()
+    if not token or not requests:
+        log.warning("backup_ml_training_results: Kein GITHUB_TOKEN")
+        return False
+
+    files = {}
+    for filename in ML_TRAINING_OUTPUT_FILES:
+        data = load_json(filename)
+        if data is not None:
+            files[filename] = {
+                "content": json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            }
+
+    # joblib-Binary (falls vorhanden) base64-encoded mitschicken
+    joblib_p = _joblib_path()
+    if os.path.exists(joblib_p):
+        try:
+            with open(joblib_p, "rb") as f:
+                raw = f.read()
+            b64 = base64.b64encode(raw).decode("ascii")
+            files[ML_TRAINING_WEIGHTS_GIST_NAME] = {
+                "content": json.dumps({
+                    "format": "joblib-b64",
+                    "size_bytes": len(raw),
+                    "encoded_at": datetime.now().isoformat(),
+                    "joblib_b64": b64,
+                })
+            }
+            log.info(
+                f"backup_ml_training_results: joblib ({len(raw)} bytes) "
+                f"eingebettet als base64"
+            )
+        except Exception as e:
+            log.warning(f"backup_ml_training_results: joblib-Encode fehlgeschlagen: {e}")
+
+    if not files:
+        log.warning("backup_ml_training_results: Keine ML-Output-Dateien gefunden")
+        return False
+
+    files["_ml_training_meta.json"] = {
+        "content": json.dumps({
+            "last_ml_training_push": datetime.now().isoformat(),
+            "files": list(files.keys()),
+            "source": "github-action",
+        }, indent=2)
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("backup_ml_training_results: Kein Backup-Gist gefunden")
+            return False
+
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": files},
+            timeout=60,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"backup_ml_training_results OK ({len(files)} Dateien)")
+            return True
+        log.warning(f"backup_ml_training_results: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        log.warning(f"backup_ml_training_results Fehler: {e}")
+        return False
+
+
+def check_and_reload_ml_training_output():
+    """
+    Watchdog-Reload: Prueft ob der ML-Training-Runner neue Ergebnisse in den
+    Gist gepusht hat. Wenn ja, pulled alle ML_TRAINING_OUTPUT_FILES aus dem
+    Gist, speichert sie lokal und dekodiert ml_model_weights.json zurueck
+    zu ml_model.joblib auf Disk.
+
+    Analog zu check_and_reload_backtest_output() mit eigenem Meta-Key.
+
+    Returns:
+      True  wenn neue Werte uebernommen wurden
+      False wenn kein neuer Push oder Fehler
+    """
+    import base64
+
+    token = _get_token()
+    if not token or not requests:
+        return False
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return False
+
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            log.debug(f"check_and_reload_ml_training_output: HTTP {resp.status_code}")
+            return False
+
+        gist_data = resp.json()
+        meta_entry = gist_data.get("files", {}).get("_ml_training_meta.json")
+        if not meta_entry:
+            return False
+
+        meta_content = _fetch_gist_file_content(meta_entry, token)
+        if not meta_content:
+            return False
+
+        try:
+            meta = json.loads(meta_content)
+        except Exception:
+            return False
+
+        remote_push = meta.get("last_ml_training_push")
+        if not remote_push:
+            return False
+
+        local_state = load_json(_ML_TRAINING_RELOAD_STATE_FILE) or {}
+        local_applied = local_state.get("last_applied_push")
+
+        if local_applied == remote_push:
+            return False
+
+        log.info(
+            f"ML-Training-Watchdog: Neuer Push erkannt (remote={remote_push}, "
+            f"local_applied={local_applied}) — lade ML-Output neu"
+        )
+
+        files_reloaded = 0
+        for filename in ML_TRAINING_OUTPUT_FILES:
+            if filename not in gist_data.get("files", {}):
+                continue
+            file_entry = gist_data["files"][filename]
+            content = _fetch_gist_file_content(file_entry, token)
+            if not content:
+                continue
+            try:
+                parsed = json.loads(content)
+            except Exception as e:
+                log.warning(
+                    f"check_and_reload_ml_training_output: parse {filename}: {e}"
+                )
+                continue
+            save_json(filename, parsed)
+            files_reloaded += 1
+
+        # joblib-Binary dekodieren
+        weights_entry = gist_data.get("files", {}).get(ML_TRAINING_WEIGHTS_GIST_NAME)
+        joblib_written = False
+        if weights_entry:
+            weights_content = _fetch_gist_file_content(weights_entry, token)
+            if weights_content:
+                try:
+                    wrap = json.loads(weights_content)
+                    b64 = wrap.get("joblib_b64", "")
+                    if b64:
+                        raw = base64.b64decode(b64)
+                        out_path = _joblib_path()
+                        import os
+                        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                        with open(out_path, "wb") as f:
+                            f.write(raw)
+                        joblib_written = True
+                        log.info(
+                            f"ML-Training-Watchdog: joblib ({len(raw)} bytes) "
+                            f"auf Disk geschrieben ({out_path})"
+                        )
+                        # Neu trainiertes Modell in den laufenden Prozess laden
+                        try:
+                            import app.ml_scorer as ml_scorer
+                            ml_scorer._model = None  # force reload
+                            ml_scorer.load_persisted_model()
+                        except Exception as e:
+                            log.warning(f"ml_scorer reload fehlgeschlagen: {e}")
+                except Exception as e:
+                    log.warning(
+                        f"check_and_reload_ml_training_output: weights decode: {e}"
+                    )
+
+        save_json(_ML_TRAINING_RELOAD_STATE_FILE, {
+            "last_applied_push": remote_push,
+            "applied_at": datetime.now().isoformat(),
+            "files_reloaded": files_reloaded,
+            "joblib_written": joblib_written,
+        })
+
+        log.info(
+            f"ML-Training-Watchdog: {files_reloaded} JSONs + "
+            f"joblib={'OK' if joblib_written else 'missing'} uebernommen"
+        )
+        return files_reloaded > 0 or joblib_written
+
+    except Exception as e:
+        log.warning(f"check_and_reload_ml_training_output Fehler: {e}")
         return False
 
 

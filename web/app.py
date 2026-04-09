@@ -1097,6 +1097,11 @@ async def api_backtest_status(user=Depends(require_auth)):
 async def api_ml_model(user=Depends(require_auth)):
     """ML-Modell Status und Feature Importances."""
     try:
+        from app.persistence import check_and_reload_ml_training_output
+        check_and_reload_ml_training_output()
+    except Exception as e:
+        log.debug(f"check_and_reload_ml_training_output skipped: {e}")
+    try:
         from app.ml_scorer import get_model_info, is_model_trained
         info = get_model_info()
         if info:
@@ -1107,103 +1112,174 @@ async def api_ml_model(user=Depends(require_auth)):
         return {"error": "ML Module nicht verfuegbar", "is_active": False}
 
 
-def _run_ml_training_task():
-    """Background-Task fuer ML-Training (non-blocking, vermeidet Render 100s Timeout).
+def _trigger_github_action_ml_training(username: str):
+    """
+    Triggert den Manual-ML-Training-Workflow auf GitHub Actions.
 
-    Schreibt Fortschritt in ml_training_status.json damit das Frontend per Polling
-    den Status anzeigen kann. Faengt alle Exceptions ab und persistiert sie ins
-    Status-File statt sie stillschweigend zu verlieren.
+    Vorteil ggue. lokaler Ausfuehrung:
+    - Laeuft auf einem 7-GB-RAM Runner statt Render Free Tier 512 MB
+    - download_history(years=5) + RandomForest kann den Web-Container
+      nicht mehr OOMen (= keine 502)
+    - Ergebnisse (inkl. joblib-Weights base64-encoded) werden via Gist
+      gepusht (check_and_reload_ml_training_output)
+
+    Mirror zu _trigger_github_action_backtest / _trigger_github_action_optimizer.
     """
     from datetime import datetime
-    from app.config_manager import load_json, save_json
+    from app.config_manager import save_json
 
-    def _write(state: str, **kwargs):
-        status = {"state": state, "updated_at": datetime.now().isoformat(), **kwargs}
-        save_json("ml_training_status.json", status)
+    initial_status = {
+        "state": "running",
+        "phase": "dispatching",
+        "message": "GitHub Action wird gestartet...",
+        "started_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "triggered_by": username,
+        "action": None,
+        "error": None,
+        "mode": "github-action-dispatching",
+    }
+    try:
+        save_json("ml_training_status.json", initial_status)
+    except Exception:
+        pass
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log.error("ML-Training-Trigger: GITHUB_TOKEN fehlt")
+        initial_status["state"] = "error"
+        initial_status["error"] = "GITHUB_TOKEN fehlt — Workflow nicht ausloesbar"
+        initial_status["finished_at"] = datetime.now().isoformat()
+        initial_status["updated_at"] = datetime.now().isoformat()
+        try:
+            save_json("ml_training_status.json", initial_status)
+        except Exception:
+            pass
+        return
+
+    repo = os.environ.get("GITHUB_REPO", "carlosbaumann754-svg/investpilot")
+    workflow_file = os.environ.get("ML_TRAINING_WORKFLOW_FILE", "ml_training.yml")
+    ref = os.environ.get("ML_TRAINING_WORKFLOW_REF", "master")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
 
     try:
-        _write("running", phase="download", message="Lade 5 Jahre Historie...")
-        from app.backtester import download_history
-        from app.ml_scorer import train_model
-
-        histories = download_history(years=5)
-        if not histories:
-            _write("error", error="Keine historischen Daten")
-            return
-
-        _write("running", phase="train", message=f"Training auf {len(histories)} Symbolen...")
-        result = train_model(histories)
-
-        if isinstance(result, dict) and "error" in result:
-            _write("error", error=result["error"])
-            return
-
-        _write(
-            "done",
-            message="ML-Modell trainiert",
-            model_info=result,
-            finished_at=datetime.now().isoformat(),
+        import requests
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "ref": ref,
+                "inputs": {"triggered_by": username},
+            },
+            timeout=15,
         )
-        log.info("ML Training (background) abgeschlossen")
-    except MemoryError:
-        _write("error", error="Out of Memory — Render Free-Tier hat nur 512MB. "
-                               "Trainiere weniger Symbole oder upgrade.")
-        log.error("ML Training OOM")
+        if resp.status_code in (201, 204):
+            log.info(f"ML-Training-Workflow getriggert (repo={repo}, ref={ref})")
+            initial_status["mode"] = "github-action-running"
+            initial_status["action"] = "dispatched"
+            initial_status["message"] = "GitHub Action gestartet, warte auf Runner..."
+        else:
+            log.error(f"ML-Training-Dispatch HTTP {resp.status_code}: {resp.text[:200]}")
+            initial_status["state"] = "error"
+            initial_status["error"] = (
+                f"workflow_dispatch HTTP {resp.status_code}: {resp.text[:160]}"
+            )
+            initial_status["finished_at"] = datetime.now().isoformat()
     except Exception as e:
-        _write("error", error=str(e))
-        log.error(f"ML Training Exception: {e}", exc_info=True)
+        log.exception("ML-Training Workflow-Dispatch fehlgeschlagen")
+        initial_status["state"] = "error"
+        initial_status["error"] = f"dispatch: {type(e).__name__}: {e}"
+        initial_status["finished_at"] = datetime.now().isoformat()
+
+    initial_status["updated_at"] = datetime.now().isoformat()
+    try:
+        save_json("ml_training_status.json", initial_status)
+    except Exception:
+        pass
 
 
 @app.post("/api/ml-model/train")
 async def api_train_ml(background_tasks: BackgroundTasks, user=Depends(require_auth)):
-    """ML-Modell neu trainieren — non-blocking im Hintergrund.
+    """ML-Modell neu trainieren — offloaded auf GitHub Actions (v12 pattern).
 
-    Antwortet sofort mit 202 und startet das Training als Background-Task.
-    Frontend soll /api/ml-model/train/status pollen um Fortschritt zu sehen.
+    Antwortet sofort mit 202 und dispatcht eine GH Action (7 GB RAM, weil
+    Render Free Tier mit 512 MB bei download_history(years=5) zuverlaessig
+    OOMed). Frontend pollt /api/ml-model/train/status fuer Fortschritt.
     """
-    from datetime import datetime
-    from app.config_manager import load_json, save_json
+    try:
+        from datetime import datetime
+        from app.config_manager import load_json, save_json
 
-    # Stale-Lock-Recovery: laufendes Training > 30 Min = tot (OOM/Crash/Redeploy)
-    STALE_LOCK_MINUTES = 30
-    status = load_json("ml_training_status.json") or {}
-    if status.get("state") == "running":
-        updated = status.get("updated_at")
-        is_stale = False
-        if updated:
-            try:
-                age_min = (datetime.now() - datetime.fromisoformat(updated)).total_seconds() / 60
-                if age_min > STALE_LOCK_MINUTES:
-                    is_stale = True
-                    log.warning(f"Stale ML-Training Lock erkannt ({age_min:.0f} Min)")
-            except Exception:
-                pass
-        if not is_stale:
-            return {
-                "status": "already_running",
-                "message": "ML-Training laeuft bereits",
-                "updated_at": updated,
-            }
+        # Stale-Lock-Recovery analog zu /api/backtest/run und /api/optimizer/run
+        STALE_LOCK_MINUTES = 60
+        status = load_json("ml_training_status.json") or {}
+        if status.get("state") == "running":
+            started = status.get("started_at") or status.get("updated_at")
+            is_stale = False
+            if started:
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    age_min = (datetime.now() - started_dt).total_seconds() / 60
+                    if age_min > STALE_LOCK_MINUTES:
+                        is_stale = True
+                        log.warning(
+                            f"Stale ML-Training-Lock erkannt ({age_min:.0f} Min alt) "
+                            f"— vermutlich Workflow-Timeout. Reset auf error."
+                        )
+                        status["state"] = "error"
+                        status["error"] = (
+                            f"Lauf abgebrochen (Lock stale nach {age_min:.0f} Min)"
+                        )
+                        status["finished_at"] = datetime.now().isoformat()
+                        status["updated_at"] = datetime.now().isoformat()
+                        save_json("ml_training_status.json", status)
+                except Exception:
+                    pass
 
-    # Initial-Status schreiben damit das Polling sofort was sieht
-    save_json("ml_training_status.json", {
-        "state": "running",
-        "phase": "queued",
-        "message": "Training wird gestartet...",
-        "updated_at": datetime.now().isoformat(),
-    })
+            if not is_stale:
+                return {
+                    "status": "already_running",
+                    "message": f"ML-Training laeuft bereits seit {started}",
+                    "started_at": started,
+                }
 
-    background_tasks.add_task(_run_ml_training_task)
-    return {
-        "status": "started",
-        "message": "ML-Training laeuft im Hintergrund. "
-                   "Pruefe /api/ml-model/train/status fuer Fortschritt.",
-    }
+        background_tasks.add_task(_trigger_github_action_ml_training, user)
+
+        try:
+            from web.security import log_audit
+            await log_audit(user, "ML_TRAIN_STARTED",
+                            "GitHub Action dispatched")
+        except Exception:
+            pass
+
+        return {
+            "status": "started",
+            "message": ("ML-Training laeuft auf GitHub Actions. "
+                        "Dauer ~5-15 Min. Status ueber /api/ml-model/train/status."),
+            "started_at": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/ml-model/train/status")
 async def api_train_ml_status(user=Depends(require_auth)):
-    """Status des aktuellen/letzten ML-Training-Background-Laufs."""
+    """Status des aktuellen/letzten ML-Training-GitHub-Action-Laufs.
+
+    Pollt vor dem Lesen den Gist (check_and_reload_ml_training_output), damit
+    Ergebnisse des GH-Action-Runners zeitnah sichtbar werden ohne auf den
+    naechsten periodischen Watchdog-Zyklus zu warten.
+    """
+    try:
+        from app.persistence import check_and_reload_ml_training_output
+        check_and_reload_ml_training_output()
+    except Exception as e:
+        log.debug(f"check_and_reload_ml_training_output skipped: {e}")
+
     from app.config_manager import load_json
     status = load_json("ml_training_status.json")
     if not status:
