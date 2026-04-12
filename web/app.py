@@ -1661,6 +1661,176 @@ async def api_rollback(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Kelly Sweep ──────────────────────────────────────────────────────────
+
+
+def _trigger_github_action_kelly_sweep(username: str):
+    """Triggert den Kelly-Sweep-Workflow auf GitHub Actions."""
+    from datetime import datetime
+    from app.config_manager import save_json
+
+    initial_status = {
+        "state": "running",
+        "phase": "dispatching",
+        "message": "Kelly Sweep GitHub Action wird gestartet...",
+        "started_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "finished_at": None,
+        "triggered_by": username,
+        "error": None,
+        "mode": "github-action-dispatching",
+    }
+    try:
+        save_json("kelly_sweep_status.json", initial_status)
+    except Exception:
+        pass
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        log.error("Kelly-Sweep-Trigger: GITHUB_TOKEN fehlt")
+        initial_status["state"] = "error"
+        initial_status["error"] = "GITHUB_TOKEN fehlt — Workflow nicht ausloesbar"
+        initial_status["finished_at"] = datetime.now().isoformat()
+        initial_status["updated_at"] = datetime.now().isoformat()
+        try:
+            save_json("kelly_sweep_status.json", initial_status)
+        except Exception:
+            pass
+        return
+
+    repo = os.environ.get("GITHUB_REPO", "carlosbaumann754-svg/investpilot")
+    workflow_file = "kelly_sweep.yml"
+    ref = os.environ.get("KELLY_SWEEP_WORKFLOW_REF", "master")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
+
+    try:
+        import requests
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "ref": ref,
+                "inputs": {"triggered_by": username},
+            },
+            timeout=15,
+        )
+        if resp.status_code in (201, 204):
+            log.info(f"Kelly-Sweep-Workflow getriggert (repo={repo}, ref={ref})")
+            initial_status["mode"] = "github-action-running"
+            initial_status["message"] = "GitHub Action gestartet, warte auf Runner..."
+        else:
+            log.error(
+                f"Kelly-Sweep-Dispatch HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+            initial_status["state"] = "error"
+            initial_status["error"] = (
+                f"workflow_dispatch HTTP {resp.status_code}: {resp.text[:160]}"
+            )
+            initial_status["finished_at"] = datetime.now().isoformat()
+    except Exception as e:
+        log.exception("Kelly-Sweep Workflow-Dispatch fehlgeschlagen")
+        initial_status["state"] = "error"
+        initial_status["error"] = f"dispatch: {type(e).__name__}: {e}"
+        initial_status["finished_at"] = datetime.now().isoformat()
+
+    initial_status["updated_at"] = datetime.now().isoformat()
+    try:
+        save_json("kelly_sweep_status.json", initial_status)
+    except Exception:
+        pass
+
+
+@app.post("/api/kelly-sweep/run")
+async def api_run_kelly_sweep(
+    background_tasks: BackgroundTasks, user=Depends(require_auth)
+):
+    """Kelly Sweep auf GitHub Actions starten."""
+    try:
+        from datetime import datetime
+        from app.config_manager import load_json, save_json
+
+        STALE_LOCK_MINUTES = 60
+        status = load_json("kelly_sweep_status.json") or {}
+        if status.get("state") == "running":
+            started = status.get("started_at")
+            is_stale = False
+            if started:
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    age_min = (datetime.now() - started_dt).total_seconds() / 60
+                    if age_min > STALE_LOCK_MINUTES:
+                        is_stale = True
+                        log.warning(
+                            f"Stale Kelly-Sweep-Lock ({age_min:.0f} Min alt)"
+                        )
+                        status["state"] = "error"
+                        status["error"] = (
+                            f"Lauf abgebrochen (Lock stale nach {age_min:.0f} Min)"
+                        )
+                        status["finished_at"] = datetime.now().isoformat()
+                        status["updated_at"] = datetime.now().isoformat()
+                        save_json("kelly_sweep_status.json", status)
+                except Exception:
+                    pass
+
+            if not is_stale:
+                return {
+                    "status": "already_running",
+                    "message": f"Kelly Sweep laeuft bereits seit {started}",
+                    "started_at": started,
+                }
+
+        background_tasks.add_task(_trigger_github_action_kelly_sweep, user)
+
+        try:
+            from web.security import log_audit
+            await log_audit(
+                user, "KELLY_SWEEP_STARTED", "GitHub Action dispatched"
+            )
+        except Exception:
+            pass
+
+        return {
+            "status": "started",
+            "message": "Kelly Sweep laeuft auf GitHub Actions (~5-15 Min).",
+            "started_at": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/kelly-sweep/status")
+async def api_kelly_sweep_status(user=Depends(require_auth)):
+    """Status des letzten/laufenden Kelly-Sweep-Laufs."""
+    try:
+        from app.persistence import check_and_reload_kelly_sweep_output
+        check_and_reload_kelly_sweep_output()
+    except Exception:
+        pass
+    from app.config_manager import load_json
+    status = load_json("kelly_sweep_status.json")
+    if not status:
+        return {"state": "idle", "message": "Noch kein Kelly Sweep gelaufen"}
+    return status
+
+
+@app.get("/api/kelly-sweep")
+async def api_kelly_sweep_results(user=Depends(require_auth)):
+    """Letzte Kelly Sweep Ergebnisse."""
+    try:
+        from app.persistence import check_and_reload_kelly_sweep_output
+        check_and_reload_kelly_sweep_output()
+    except Exception:
+        pass
+    result = read_json_safe("kelly_sweep_results.json")
+    if result:
+        return result
+    return {"message": "Noch kein Kelly Sweep gelaufen"}
+
+
 @app.post("/api/admin/force-backup")
 async def api_admin_force_backup(user=Depends(require_auth)):
     """Triggert sofort einen Cloud-Backup (schiebt lokalen Stand als Gist HEAD)."""

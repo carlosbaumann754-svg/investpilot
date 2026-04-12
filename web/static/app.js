@@ -39,8 +39,8 @@ function switchTab(name) {
 
     if (name === 'trades') loadTrades(true);
     if (name === 'brain') loadBrain();
-    if (name === 'reports') loadReports();
-    if (name === 'backtest') { loadBacktest(); loadOptimizer(); }
+    if (name === 'reports') { loadReports(); loadLastRunTimestamps(); }
+    if (name === 'backtest') { loadBacktest(); loadOptimizer(); loadKellySweep(); loadLastRunTimestamps(); }
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
     if (name === 'ask') document.getElementById('ask-input').focus();
@@ -1178,6 +1178,142 @@ async function rollbackOptimizer() {
         }
     } catch (e) {
         showToast('Rollback Fehler: ' + e.message);
+    }
+}
+
+// === KELLY SWEEP ===
+
+async function loadKellySweep() {
+    try {
+        const res = await apiFetch('/api/kelly-sweep');
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        if (data.message) return; // Noch kein Sweep gelaufen
+        renderKellySweep(data);
+    } catch (e) {
+        console.error('Kelly Sweep load error:', e);
+    }
+}
+
+function renderKellySweep(data) {
+    // Kelly Sweep Ergebnisse werden im Kelly-Sweep-Results-Card angezeigt
+    const card = document.getElementById('kelly-sweep-card');
+    if (!card) return;
+    card.style.display = 'block';
+
+    const results = data.results || data.sweep_results || [];
+    if (!results.length) return;
+
+    const tbody = document.getElementById('kelly-sweep-table');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    for (const r of results) {
+        const k = r.kelly_fraction || r.k || '?';
+        const ret = r.total_return_pct != null ? r.total_return_pct.toFixed(1) + '%' : '--';
+        const sharpe = r.sharpe_ratio != null ? r.sharpe_ratio.toFixed(2) : '--';
+        const dd = r.max_drawdown_pct != null ? '-' + r.max_drawdown_pct.toFixed(1) + '%' : '--';
+        const tr = document.createElement('tr');
+        const isCurrent = parseFloat(k) === 0.04;
+        tr.style.fontWeight = isCurrent ? 'bold' : 'normal';
+        tr.style.background = isCurrent ? 'rgba(0,200,120,0.08)' : '';
+        tr.innerHTML = `<td>${k}</td><td>${ret}</td><td>${sharpe}</td><td>${dd}</td>`;
+        tbody.appendChild(tr);
+    }
+
+    if (data.timestamp) {
+        const tsEl = document.getElementById('kelly-sweep-timestamp');
+        if (tsEl) tsEl.textContent = 'Sweep: ' + fmtTime(data.timestamp);
+    }
+}
+
+async function runKellySweep() {
+    const btn = document.getElementById('btn-run-kelly-sweep');
+    btn.disabled = true;
+    btn.textContent = 'Sweep dispatching...';
+    showToast('Kelly Sweep wird auf GitHub Actions gestartet...');
+
+    try {
+        const res = await apiFetch('/api/kelly-sweep/run', { method: 'POST' });
+        if (!res || !res.ok) {
+            const err = await res?.json();
+            showToast('Start fehlgeschlagen: ' + (err?.detail || 'Unbekannt'));
+            btn.disabled = false;
+            btn.textContent = 'Kelly Sweep starten';
+            return;
+        }
+        const startData = await res.json();
+        if (startData.status === 'already_running') {
+            showToast('Kelly Sweep laeuft bereits auf GitHub Actions');
+        } else {
+            showToast('Kelly Sweep laeuft auf GitHub Actions (~5-15 Min)');
+        }
+
+        // Status-Polling bis done oder error (max 20 min = 120 * 10s)
+        const MAX_POLLS = 120;
+        for (let i = 0; i < MAX_POLLS; i++) {
+            await new Promise(r => setTimeout(r, 10000));
+            const sRes = await apiFetch('/api/kelly-sweep/status');
+            if (!sRes || !sRes.ok) continue;
+            const s = await sRes.json();
+            if (s.state === 'running') {
+                const mode = s.mode || '';
+                btn.textContent = mode.includes('dispatching')
+                    ? 'Dispatching...'
+                    : 'Kelly Sweep laeuft...';
+            } else if (s.state === 'done') {
+                showToast('Kelly Sweep abgeschlossen!');
+                loadKellySweep();
+                loadLastRunTimestamps();
+                break;
+            } else if (s.state === 'error') {
+                showToast('Kelly Sweep Fehler: ' + (s.error || 'Unbekannt'));
+                console.error('Kelly Sweep error:', s);
+                break;
+            }
+        }
+    } catch (e) {
+        showToast('Kelly Sweep Fehler: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Kelly Sweep starten';
+    }
+}
+
+// === LAST-RUN TIMESTAMPS ===
+
+async function loadLastRunTimestamps() {
+    // Lade Status-Endpunkte parallel und zeige "Letzter Lauf: DD.MM. HH:MM"
+    const endpoints = [
+        { id: 'btn-backtest-lastrun', url: '/api/backtest/status', label: 'Letzter Lauf' },
+        { id: 'btn-ml-lastrun', url: '/api/ml-model/train/status', label: 'Letztes Training' },
+        { id: 'btn-kelly-lastrun', url: '/api/kelly-sweep/status', label: 'Letzter Sweep' },
+        { id: 'btn-discovery-lastrun', url: '/api/discovery/status', label: 'Letzte Suche' },
+        { id: 'btn-optimizer-lastrun', url: '/api/optimizer/status', label: 'Letzter Lauf' },
+    ];
+
+    for (const ep of endpoints) {
+        try {
+            const el = document.getElementById(ep.id);
+            if (!el) continue;
+            const res = await apiFetch(ep.url);
+            if (!res || !res.ok) { el.textContent = '--'; continue; }
+            const s = await res.json();
+            if (s.state === 'done' && s.finished_at) {
+                el.textContent = ep.label + ': ' + fmtTime(s.finished_at);
+                el.style.color = 'var(--green)';
+            } else if (s.state === 'running') {
+                el.textContent = ep.label + ': laeuft...';
+                el.style.color = 'var(--orange)';
+            } else if (s.state === 'error') {
+                el.textContent = ep.label + ': Fehler';
+                el.style.color = 'var(--red)';
+            } else {
+                el.textContent = ep.label + ': --';
+            }
+        } catch {
+            // Silently skip
+        }
     }
 }
 

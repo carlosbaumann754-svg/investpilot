@@ -1,13 +1,16 @@
-name: Manual Backtest
+name: Backtest
 
-# Laeuft nur auf manuellen Trigger (aus dem InvestPilot-Dashboard via
-# workflow_dispatch oder aus dem GitHub UI). Kein Cron — das machen wir
-# im Weekly Optimizer (der hat bereits Backtest integriert).
+# Laeuft auf:
+#   - manuellem Trigger (Dashboard / GitHub UI via workflow_dispatch)
+#   - woechentlichem Cron: Sonntag 06:00 UTC (08:00 CEST), damit nach
+#     dem Optimizer-Lauf (So 03:00 UTC) automatisch validiert wird ob
+#     die neuen Parameter historisch besser performen.
 #
-# Grund: Render Free Tier (512 MB RAM) kann einen Full-Backtest nicht
-# ausfuehren ohne den Web-Container zu OOMen (-> 502 Bad Gateway).
-# Ein GitHub Actions Runner hat 7 GB RAM, laeuft isoliert und pusht das
-# Ergebnis ueber den bestehenden Backup-Gist zurueck an Render.
+# Grund fuer GH-Action-Offload: Render Free Tier (512 MB RAM) kann
+# einen Full-Backtest nicht ausfuehren ohne den Web-Container zu OOMen
+# (-> 502 Bad Gateway). Ein GitHub Actions Runner hat 7 GB RAM, laeuft
+# isoliert und pusht das Ergebnis ueber den bestehenden Backup-Gist
+# zurueck an Render.
 
 on:
   workflow_dispatch:
@@ -16,6 +19,9 @@ on:
         description: "Trigger-Quelle (dashboard / manual / debug)"
         required: false
         default: "manual"
+  schedule:
+    # Sonntag 06:00 UTC = 08:00 CEST — 3h nach Optimizer (So 03:00 UTC)
+    - cron: '0 6 * * 0'
 
 # Nur ein aktiver Lauf gleichzeitig — neuere Trigger queueen.
 concurrency:
@@ -57,7 +63,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -m app.backtest_runner github-action-${{ github.event.inputs.triggered_by || 'manual' }}
+          python -m app.backtest_runner github-action-${{ github.event.inputs.triggered_by || (github.event_name == 'schedule' && 'weekly-cron') || 'manual' }}
 
       - name: Upload backtest artifacts
         if: always()

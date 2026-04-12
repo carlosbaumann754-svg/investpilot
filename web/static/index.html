@@ -315,9 +315,10 @@
                 <button class="btn btn-secondary" style="width:100%;margin-top:8px" onclick="downloadReportPdf()">PDF herunterladen</button>
             </div>
             <div class="card">
-                <div class="card-title">Asset Discovery<span class="tip" data-tip="Der Bot sucht auf eToro nach neuen interessanten Aktien, ETFs oder Kryptos, die er noch nicht kennt, und bewertet ob sie zur Strategie passen.">?</span></div>
+                <div class="card-title">Asset Discovery<span class="tip" data-tip="Der Bot sucht auf eToro nach neuen interessanten Aktien, ETFs oder Kryptos, die er noch nicht kennt, und bewertet ob sie zur Strategie passen. Laeuft automatisch jeden Freitag 19:00 CEST.">?</span></div>
                 <div class="card-sub">eToro nach neuen Assets durchsuchen</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="runDiscovery()">Discovery starten</button>
+                <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-discovery-lastrun">--</div>
             </div>
         </div>
 
@@ -382,16 +383,24 @@
     <!-- === BACKTEST TAB === -->
     <div id="tab-backtest" class="tab-content">
         <!-- Actions -->
-        <div class="grid-2">
+        <div class="grid-3">
             <div class="card" style="text-align:center">
-                <div class="card-title">Backtest starten<span class="tip" data-tip="Simuliert die Strategie auf 5 Jahren echter Vergangenheits-Kurse, ohne echtes Geld zu riskieren. Zeigt dir wie der Bot in der Vergangenheit performt haette. Dauert ein paar Minuten.">?</span></div>
+                <div class="card-title">Backtest starten<span class="tip" data-tip="Simuliert die Strategie auf 5 Jahren echter Vergangenheits-Kurse, ohne echtes Geld zu riskieren. Zeigt dir wie der Bot in der Vergangenheit performt haette. Dauert ein paar Minuten. Laeuft automatisch jeden Sonntag 08:00 CEST nach dem Optimizer.">?</span></div>
                 <div class="card-sub">5 Jahre Historie, Walk-Forward Validation</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-run-backtest" onclick="runBacktest()">Run Backtest</button>
+                <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-backtest-lastrun">--</div>
             </div>
             <div class="card" style="text-align:center">
-                <div class="card-title">ML-Modell trainieren<span class="tip" data-tip="Trainiert das Machine-Learning-'Hirn' des Bots neu mit aktuellen Daten. Es lernt aus historischen Kursen, welche Muster zu Gewinnen fuehrten. Sollte ab und zu gemacht werden, damit das Modell aktuell bleibt.">?</span></div>
+                <div class="card-title">ML-Modell trainieren<span class="tip" data-tip="Trainiert das Machine-Learning-'Hirn' des Bots neu mit aktuellen Daten. Es lernt aus historischen Kursen, welche Muster zu Gewinnen fuehrten. Laeuft automatisch jeden Samstag 06:00 CEST.">?</span></div>
                 <div class="card-sub">Gradient Boosting auf historischen Daten</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-train-ml" onclick="trainML()">Train ML Model</button>
+                <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-ml-lastrun">--</div>
+            </div>
+            <div class="card" style="text-align:center">
+                <div class="card-title">Kelly Sweep<span class="tip" data-tip="Testet verschiedene Kelly-Fraktionen (0.01 bis 0.10) durch und zeigt welcher Wert die beste risiko-adjustierte Rendite bringt. Nutze das Ergebnis um kelly_sizing.max_fraction optimal einzustellen. Alle 4-8 Wochen manuell empfohlen.">?</span></div>
+                <div class="card-sub">Optimale Positionsgroesse finden</div>
+                <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-run-kelly-sweep" onclick="runKellySweep()">Kelly Sweep starten</button>
+                <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-kelly-lastrun">--</div>
             </div>
         </div>
 
@@ -456,6 +465,18 @@
             <div id="bt-equity-chart" style="width:100%;overflow-x:auto"></div>
         </div>
 
+        <!-- Kelly Sweep Results -->
+        <div class="card" id="kelly-sweep-card" style="display:none">
+            <div class="card-title">Kelly Sweep Ergebnisse<span class="tip" data-tip="Vergleich verschiedener Kelly-Fraktionen: Wie viel Prozent des Kontos pro Trade riskiert wird. Hoehere Fraktion = mehr Rendite, aber auch mehr Drawdown. Die gruen markierte Zeile ist dein aktueller Wert.">?</span></div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Kelly k</th><th>Return</th><th>Sharpe</th><th>Max DD</th></tr></thead>
+                    <tbody id="kelly-sweep-table"></tbody>
+                </table>
+            </div>
+            <div class="card-sub" style="margin-top:8px;font-size:11px;color:var(--text-dim)" id="kelly-sweep-timestamp">--</div>
+        </div>
+
         <!-- Monthly Returns Heatmap -->
         <div class="card" id="bt-monthly-card" style="display:none">
             <div class="card-title">Monatliche Renditen (%)<span class="tip" data-tip="Heatmap mit dem Gewinn/Verlust pro Monat. Gruen = Plus-Monat, Rot = Minus-Monat. Hilft zu sehen, ob der Bot in bestimmten Jahreszeiten besser oder schlechter laeuft.">?</span></div>
@@ -517,12 +538,13 @@
         <!-- Optimizer Section -->
         <div class="card" style="border-color:var(--orange)">
             <div class="card-title" style="color:var(--orange)">Self-Improvement Optimizer<span class="tip" data-tip="Der Selbst-Verbesserer: Laeuft jeden Sonntag automatisch und probiert hunderte Parameter-Kombinationen durch, um die beste Strategie fuer die aktuelle Marktlage zu finden. Aenderungen werden nur uebernommen wenn sie auch bei unbekannten Daten funktionieren.">?</span></div>
-            <div class="card-sub" style="margin-bottom:12px">Automatische Parameter-Optimierung (woechentlich Sonntag 02:00)</div>
+            <div class="card-sub" style="margin-bottom:12px">Automatische Parameter-Optimierung (woechentlich Sonntag 05:00 CEST)</div>
             <div class="grid-3">
                 <button class="btn btn-primary" id="btn-run-optimizer" onclick="runOptimizer()" style="background:var(--orange)">Optimizer starten</button>
                 <button class="btn btn-secondary" onclick="loadOptimizer()">Status laden</button>
                 <button class="btn btn-danger" id="btn-rollback" onclick="rollbackOptimizer()">Rollback</button>
             </div>
+            <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-optimizer-lastrun">--</div>
         </div>
 
         <div class="card" id="opt-status-card" style="display:none">
