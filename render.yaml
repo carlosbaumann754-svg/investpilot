@@ -7,8 +7,10 @@ services:
     envVars:
       - key: TZ
         value: Europe/Zurich
-      - key: INVESTPILOT_DATA_DIR
-        value: /app/data
+      # INVESTPILOT_DATA_DIR bewusst NICHT gesetzt — sonst ueberschreibt es
+      # die Auto-Detection in app/config_manager.py:25-26 und der Bot schreibt
+      # nach /app/data (Container-FS, weg bei Restart) statt /data
+      # (10 GB Persistent Disk, Starter-Plan, taegl. Snapshot 02:00 UTC).
       - key: PYTHONPATH
         value: /app
       - key: ETORO_PUBLIC_KEY
