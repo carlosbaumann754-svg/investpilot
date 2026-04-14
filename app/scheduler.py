@@ -282,6 +282,16 @@ def scheduler_loop():
             except Exception as e:
                 log.debug(f"Discovery-Watchdog Fehler (non-fatal): {e}")
 
+            # --- Daily Equity Snapshot (>= 22:30 CET, einmal pro Werktag) ---
+            # Schreibt portfolio_total_value + SPY/QQQ/AGG Close in
+            # equity_history.json. Daraus baut das Frontend die Monatstabelle
+            # (Bot vs Markt). Idempotent via Daily-Guard.
+            try:
+                from app.equity_snapshot import maybe_take_snapshot
+                maybe_take_snapshot(triggered_by="scheduler-daily-2230")
+            except Exception as e:
+                log.warning(f"Equity-Snapshot Fehler (non-fatal): {e}")
+
             # --- Trading Zyklus ---
             log.info(f"[{datetime.now():%H:%M}] Starte Trading-Zyklus...")
             from app.trader import run_trading_cycle

@@ -44,6 +44,7 @@ BACKUP_FILES = [
     "meta_model.json",
     "meta_labeling_shadow.json",
     "partial_close_state.json",
+    "equity_history.json",
 ]
 
 # Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.

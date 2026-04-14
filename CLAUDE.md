@@ -751,6 +751,77 @@ KEINE der 5 Aufrufstellen hat ihn gesetzt. Live-Bot deployt
 (`mean(r*k)/std(r*k) = mean(r)/std(r)`). Optimizer-Ranking war daher
 nie kaputt, nur die gemeldeten Returns/MaxDD/Costs.
 
+## v13 — Multi-Benchmark + Equity-History (2026-04-14)
+
+**Hintergrund:** Bisher hatte das Dashboard nur Punkt-zu-Punkt Vergleiche
+"Bot vs SPY" ueber 8 Zeitfenster. Drei Luecken:
+- Nur **eine** Vergleichsgroesse — kein QQQ (Tech) oder 60/40 (Misch)
+- Keine Monatshistorie wie im Backtest — User konnte nicht sehen, ob die
+  Live-Performance der Backtest-Curve folgt
+- Keine persistente Equity-Curve fuer spaetere Chart-Visualisierung
+
+### Phase 1: Multi-Benchmark (`web/app.py` + Frontend)
+- `_BENCHMARK_CACHE` jetzt `{symbol: {data, ts}}` (Per-Symbol 1h-Cache)
+- Generisches `_fetch_ticker_closes(symbol, years=5)` ersetzt SPY-spezifisch
+- `BENCHMARK_SYMBOLS = ["SPY", "QQQ", "AGG"]`, 60/40 = 0.6*SPY + 0.4*AGG
+- `/api/benchmark` Response neu: pro Periode `spy_pct/qqq_pct/agg_pct/mix6040_pct`,
+  zusaetzlich `benchmarks: [{key,label,name}]` fuer dynamisches Frontend
+- Backwards-compat: `_fetch_spy_closes()` + `_spy_return_pct` Aliase
+- Frontend `renderBenchmark()` iteriert ueber Benchmark-Liste, rendert pro
+  Periode: Bot-Zeile + (Benchmark/Alpha) × N. Card-Tooltip erklaert alle 3.
+
+### Phase 2: Daily Equity Snapshots (`app/equity_snapshot.py` NEU)
+- Werktags >= 22:30 CET: Snapshot {date, ts, portfolio_total_value,
+  spy_close, qqq_close, agg_close, source}
+- Idempotent via Daily-Guard `equity_snapshot_last.flag`
+- Portfolio-Wert: erst aus `brain_state.performance_snapshots[-1]`,
+  Fallback Live ueber EtoroClient
+- Benchmark-Closes ueber `_fetch_ticker_closes()` Cache (gleiche Quelle wie /api/benchmark)
+- Persistenz: `data/equity_history.json` (max 1825 Eintraege, Auto-Rotation)
+- Sofortiges `backup_to_cloud()` nach jedem Snapshot
+- Scheduler: `maybe_take_snapshot(...)` als 5-Min-Tick-Hook in `scheduler_loop()`
+- `BACKUP_FILES` (`app/persistence.py`) erweitert um `equity_history.json`
+
+### API: `/api/equity-history` (`web/app.py`)
+- `_aggregate_monthly()` baut Monats-Buckets (erster + letzter Snapshot pro
+  Kalendermonat), liefert `bot_pct/spy_pct/qqq_pct/mix6040_pct + alpha_*`
+- `MIN_SNAPSHOTS_FOR_TABLE = 5` — vorher `ready: false` mit Progress-Info
+- `daily`-Reihen mitgesendet (fuer spaeteren Equity-Curve-Chart)
+- `POST /api/equity-history/snapshot-now` — manueller Trigger fuers Dashboard
+
+### Frontend: Equity-History Card (`web/static/index.html` + `app.js`)
+- Neue Card unter "Bot vs Markt" mit Tabelle:
+  Monat | Bot % | SPY % | α SPY | QQQ % | α QQQ | 60/40 % | α 60/40
+- **Tooltips auf jeder Header-Spalte** (User-Praeferenz)
+- Vor 5 Snapshots: Progress-Hinweis "X / Y Tage gesammelt"
+- `loadEquityHistory()` laeuft non-blocking nach Benchmark-Render
+
+### Datenfluss
+```
+22:30 CET Werktag
+  -> scheduler tick (5 Min)
+    -> equity_snapshot.maybe_take_snapshot()
+      -> brain_state.performance_snapshots[-1].total_value
+      -> _fetch_ticker_closes(SPY/QQQ/AGG)  [1h cache]
+      -> equity_history.json append
+      -> backup_to_cloud()  [Gist]
+
+Dashboard-Open
+  -> /api/benchmark         [Multi-Bench Perioden, 1h Cache]
+  -> /api/equity-history    [Monatstabelle + Daily Reihen]
+```
+
+### Neue Dateien
+- `app/equity_snapshot.py` (~200 LOC)
+- `data/equity_history.json` (entsteht beim ersten 22:30-Lauf)
+- `data/equity_snapshot_last.flag` (Tagesguard)
+
+### Folge-Phase (noch nicht enthalten)
+- Equity-Curve **Chart** (Liniendiagramm) — Daten werden bereits gesammelt
+  (`daily`-Feld der API-Response), Chart-Rendering ab >= 90 Snapshots sinnvoll
+- Drawdown-Vergleich Bot vs Benchmarks
+- Sharpe/Vola-Vergleich pro Monat
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`

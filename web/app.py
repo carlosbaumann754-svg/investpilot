@@ -326,24 +326,32 @@ async def api_portfolio(user=Depends(require_auth)):
 
 
 # ============================================================
-# BENCHMARK (SPY S&P 500) — In-Memory Cache mit 1h TTL
+# BENCHMARK (Multi: SPY, QQQ, AGG + 60/40-Mix) — In-Memory Cache 1h TTL
 # ============================================================
-_BENCHMARK_CACHE: dict = {"data": None, "ts": 0.0}
+# Pro Symbol ein eigener Cache-Slot, damit ein Fail (z.B. AGG) nicht den
+# Rest invalidiert. yfinance kann sporadisch 401/429 liefern.
+_BENCHMARK_CACHE: dict = {}  # {symbol: {"data": {date: close}, "ts": float}}
+
+# Symbole, die wir tracken. SPY = S&P 500 Tracker, QQQ = Nasdaq-100,
+# AGG = US Aggregate Bond Index. 60/40 wird im Endpoint berechnet
+# (0.6*SPY + 0.4*AGG) — klassisches Privat-Anleger-Portfolio.
+BENCHMARK_SYMBOLS = ["SPY", "QQQ", "AGG"]
 
 
-def _fetch_spy_closes(years: int = 5):
-    """Holt SPY-Tagesschlusskurse via yfinance, gecached fuer 1h.
+def _fetch_ticker_closes(symbol: str, years: int = 5):
+    """Holt Tagesschlusskurse fuer ein Symbol via yfinance, 1h Cache.
 
     Returns:
         dict {date: close_price} oder None bei Fehler.
     """
     import time as _time
     now_ts = _time.time()
-    if _BENCHMARK_CACHE["data"] and (now_ts - _BENCHMARK_CACHE["ts"] < 3600):
-        return _BENCHMARK_CACHE["data"]
+    cached = _BENCHMARK_CACHE.get(symbol)
+    if cached and cached.get("data") and (now_ts - cached.get("ts", 0) < 3600):
+        return cached["data"]
     try:
         import yfinance as yf
-        ticker = yf.Ticker("SPY")
+        ticker = yf.Ticker(symbol)
         hist = ticker.history(period=f"{years}y", interval="1d")
         if hist.empty:
             return None
@@ -351,17 +359,21 @@ def _fetch_spy_closes(years: int = 5):
         for date_idx, row in hist.iterrows():
             d = date_idx.to_pydatetime().replace(tzinfo=None).date()
             closes[d] = float(row["Close"])
-        _BENCHMARK_CACHE["data"] = closes
-        _BENCHMARK_CACHE["ts"] = now_ts
-        log.info(f"SPY-Cache aktualisiert: {len(closes)} Tage")
+        _BENCHMARK_CACHE[symbol] = {"data": closes, "ts": now_ts}
+        log.info(f"{symbol}-Cache aktualisiert: {len(closes)} Tage")
         return closes
     except Exception as e:
-        log.warning(f"SPY-Fetch fehlgeschlagen: {e}")
+        log.warning(f"{symbol}-Fetch fehlgeschlagen: {e}")
         return None
 
 
-def _spy_return_pct(closes: dict, start_dt, end_dt) -> float | None:
-    """Berechnet SPY-Rendite in % zwischen zwei Daten.
+def _fetch_spy_closes(years: int = 5):
+    """Backwards-compat Wrapper — Equity-Snapshot-Job nutzt das noch."""
+    return _fetch_ticker_closes("SPY", years=years)
+
+
+def _ticker_return_pct(closes: dict, start_dt, end_dt) -> float | None:
+    """Berechnet Tagesschluss-Rendite in % zwischen zwei Daten.
 
     Findet den naechstgelegenen Handelstag falls das exakte Datum
     kein Boersentag war (Wochenende, Feiertag).
@@ -400,18 +412,25 @@ def _spy_return_pct(closes: dict, start_dt, end_dt) -> float | None:
     return ((end_price - start_price) / start_price) * 100
 
 
+# Backwards-compat Alias — equity_snapshot.py & alte Calls erwarten _spy_return_pct
+_spy_return_pct = _ticker_return_pct
+
+
 @app.get("/api/benchmark")
 async def api_benchmark(user=Depends(require_auth)):
-    """Liefert SPY-Returns ueber dieselben Zeitfenster wie /api/pnl-periods.
+    """Liefert Multi-Benchmark-Returns (SPY/QQQ/AGG/60-40) ueber dieselben
+    Zeitfenster wie /api/pnl-periods.
 
-    Das Frontend berechnet Alpha (portfolio_pct - spy_pct) selbst, um
-    Code-Duplikation zu vermeiden.
+    Das Frontend berechnet Alpha pro Benchmark (portfolio_pct - bench_pct)
+    selbst — vermeidet Code-Duplikation und die Portfolio-Daten kommen eh
+    aus /api/pnl-periods.
     """
     from datetime import datetime, timedelta
     try:
-        closes = _fetch_spy_closes(years=5)
-        if not closes:
-            return {"error": "SPY-Daten nicht verfuegbar", "benchmark": "SPY", "periods": []}
+        closes_by_symbol = {sym: _fetch_ticker_closes(sym, years=5) for sym in BENCHMARK_SYMBOLS}
+        # Hauptbenchmark MUSS verfuegbar sein, AGG/QQQ duerfen fehlen
+        if not closes_by_symbol.get("SPY"):
+            return {"error": "SPY-Daten nicht verfuegbar", "benchmarks": [], "periods": []}
 
         now = datetime.now()
         windows = [
@@ -422,30 +441,170 @@ async def api_benchmark(user=Depends(require_auth)):
             ("180d", "6 Monate",     now - timedelta(days=180)),
             ("365d", "1 Jahr",       now - timedelta(days=365)),
             ("ytd",  "Jahresanfang", datetime(now.year, 1, 1)),
-            ("all",  "Gesamt",       now - timedelta(days=365 * 5)),  # max 5y SPY-Cache
+            ("all",  "Gesamt",       now - timedelta(days=365 * 5)),
         ]
 
         periods = []
         for key, label, start_dt in windows:
-            pct = _spy_return_pct(closes, start_dt, now)
-            periods.append({
-                "key": key,
-                "label": label,
-                "spy_pct": round(pct, 2) if pct is not None else None,
-            })
+            cell = {"key": key, "label": label}
+            for sym in BENCHMARK_SYMBOLS:
+                pct = _ticker_return_pct(closes_by_symbol.get(sym) or {}, start_dt, now)
+                cell[f"{sym.lower()}_pct"] = round(pct, 2) if pct is not None else None
 
-        # Jueengster Datenpunkt fuer Stale-Check
-        latest = max(closes.keys()) if closes else None
+            # 60/40 = 0.6*SPY + 0.4*AGG. Beide muessen verfuegbar sein.
+            spy_pct = cell.get("spy_pct")
+            agg_pct = cell.get("agg_pct")
+            if spy_pct is not None and agg_pct is not None:
+                cell["mix6040_pct"] = round(0.6 * spy_pct + 0.4 * agg_pct, 2)
+            else:
+                cell["mix6040_pct"] = None
+            # Backwards-compat fuer alte Frontends, die noch p.spy_pct erwarten
+            cell["spy_pct"] = cell.get("spy_pct")
+            periods.append(cell)
+
+        # Stale-Check ueber juengste Datenquelle
+        latest = None
+        for sym, closes in closes_by_symbol.items():
+            if closes:
+                m = max(closes.keys())
+                if latest is None or m > latest:
+                    latest = m
+
         return {
-            "benchmark": "SPY",
-            "benchmark_name": "S&P 500 ETF",
+            "benchmarks": [
+                {"key": "spy",       "label": "SPY",   "name": "S&P 500 ETF"},
+                {"key": "qqq",       "label": "QQQ",   "name": "Nasdaq-100 ETF"},
+                {"key": "mix6040",   "label": "60/40", "name": "60% SPY + 40% AGG (klassisch)"},
+            ],
             "periods": periods,
-            "data_points": len(closes),
+            "data_points": {sym: (len(c) if c else 0) for sym, c in closes_by_symbol.items()},
             "latest_close_date": latest.isoformat() if latest else None,
         }
     except Exception as e:
         log.error(f"Benchmark Error: {e}")
-        return {"error": str(e), "benchmark": "SPY", "periods": []}
+        return {"error": str(e), "benchmarks": [], "periods": []}
+
+
+# ============================================================
+# EQUITY HISTORY (Daily Snapshots -> Monatstabelle)
+# ============================================================
+MIN_SNAPSHOTS_FOR_TABLE = 5  # erste Monatszeile sobald genug Daten da sind
+
+
+def _aggregate_monthly(snapshots: list) -> list:
+    """Baut Monats-Buckets aus Daily-Snapshots.
+
+    Pro Kalendermonat: erster + letzter Snapshot. Daraus pct-Returns fuer
+    Portfolio + alle Benchmarks. 60/40 = 0.6*SPY + 0.4*AGG.
+    """
+    if not snapshots:
+        return []
+
+    # Sortieren nach Datum (defensiv — sollte schon sortiert sein)
+    sorted_snaps = sorted(snapshots, key=lambda s: s.get("date", ""))
+
+    # Gruppieren {YYYY-MM: [snaps...]}
+    by_month: dict = {}
+    for s in sorted_snaps:
+        d = s.get("date", "")
+        if len(d) < 7:
+            continue
+        ym = d[:7]
+        by_month.setdefault(ym, []).append(s)
+
+    def _pct(first, last, key):
+        a = first.get(key)
+        b = last.get(key)
+        if a in (None, 0) or b is None:
+            return None
+        try:
+            a, b = float(a), float(b)
+            if a == 0:
+                return None
+            return round((b - a) / a * 100, 2)
+        except Exception:
+            return None
+
+    rows = []
+    for ym in sorted(by_month.keys()):
+        snaps = by_month[ym]
+        first, last = snaps[0], snaps[-1]
+        bot = _pct(first, last, "portfolio_total_value")
+        spy = _pct(first, last, "spy_close")
+        qqq = _pct(first, last, "qqq_close")
+        agg = _pct(first, last, "agg_close")
+        mix = round(0.6 * spy + 0.4 * agg, 2) if (spy is not None and agg is not None) else None
+
+        def _alpha(b, x):
+            return round(b - x, 2) if (b is not None and x is not None) else None
+
+        rows.append({
+            "month": ym,
+            "days_in_month": len(snaps),
+            "bot_pct": bot,
+            "spy_pct": spy,
+            "qqq_pct": qqq,
+            "mix6040_pct": mix,
+            "alpha_spy": _alpha(bot, spy),
+            "alpha_qqq": _alpha(bot, qqq),
+            "alpha_mix6040": _alpha(bot, mix),
+            "first_date": first.get("date"),
+            "last_date": last.get("date"),
+        })
+    return rows
+
+
+@app.get("/api/equity-history")
+async def api_equity_history(user=Depends(require_auth)):
+    """Liefert Daily-Snapshots + Monats-Aggregation fuer den Equity-Verlauf.
+
+    Datenquelle: data/equity_history.json (geschrieben durch
+    app/equity_snapshot.py taeglich um >= 22:30 CET).
+
+    Frontend zeigt Tabelle erst ab MIN_SNAPSHOTS_FOR_TABLE Tagen — vorher
+    nur Progress-Hinweis "X / Y Tage gesammelt".
+    """
+    try:
+        from app.config_manager import load_json as _load_json
+        snaps = _load_json("equity_history.json") or []
+        if not isinstance(snaps, list):
+            snaps = []
+
+        ready = len(snaps) >= MIN_SNAPSHOTS_FOR_TABLE
+        monthly = _aggregate_monthly(snaps) if ready else []
+
+        first_iso = snaps[0]["date"] if snaps else None
+        last_iso = snaps[-1]["date"] if snaps else None
+
+        return {
+            "ready": ready,
+            "snapshots_total": len(snaps),
+            "min_required": MIN_SNAPSHOTS_FOR_TABLE,
+            "first_date": first_iso,
+            "last_date": last_iso,
+            "monthly": monthly,
+            # Daily-Reihen werden hier mitgesendet, damit ein spaeterer
+            # Equity-Curve-Chart ohne weiteren Roundtrip auskommt.
+            "daily": snaps,
+        }
+    except Exception as e:
+        log.error(f"Equity-History Error: {e}")
+        return {"error": str(e), "ready": False, "snapshots_total": 0, "monthly": [], "daily": []}
+
+
+@app.post("/api/equity-history/snapshot-now")
+async def api_equity_snapshot_now(user=Depends(require_auth)):
+    """Manueller Trigger fuer einen Snapshot — nuetzlich zum Testen oder um
+    bei einem verpassten 22:30-Slot nachzuholen. Idempotent (max 1/Tag)."""
+    try:
+        from app.equity_snapshot import take_snapshot
+        snap = take_snapshot(triggered_by="manual-dashboard")
+        if snap is None:
+            return {"ok": False, "message": "Snapshot fuer heute existiert bereits oder Portfolio-Wert nicht ermittelbar"}
+        return {"ok": True, "snapshot": snap}
+    except Exception as e:
+        log.error(f"Snapshot-Now Error: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/pnl-periods")

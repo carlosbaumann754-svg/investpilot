@@ -68,13 +68,37 @@
             <div class="card-sub" id="pnl-periods-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
-        <!-- Bot vs. Markt (Benchmark) -->
+        <!-- Bot vs. Markt (Multi-Benchmark) -->
         <div class="card">
-            <div class="card-title">Bot vs. Markt (S&amp;P 500)<span class="tip" data-tip="Vergleicht deine Performance mit dem S&amp;P 500 (SPY). Wenn der Bot besser ist als einfach den ETF zu kaufen, hat er positives 'Alpha' (gruen). Ist er schlechter, haettest du mit Buy-and-Hold mehr verdient (rot). Das ist die wichtigste Kennzahl fuer einen aktiven Bot.">?</span></div>
+            <div class="card-title">Bot vs. Markt (Multi-Benchmark)<span class="tip" data-tip="Vergleicht deine Performance mit drei Benchmarks: SPY (S&amp;P 500 ETF) = der breite US-Markt; QQQ (Nasdaq-100 ETF) = fairer Tech-Vergleich, weil dein Bot viel Tech haelt; 60/40 (60% Aktien + 40% Anleihen) = das klassische Privat-Anleger-Portfolio. Alpha (α) = Bot − Benchmark. Positiv (gruen) = Bot schlaegt den Vergleichswert. Negativ (rot) = passive Strategie waere besser gewesen.">?</span></div>
             <div class="pnl-periods-grid" id="benchmark-grid">
                 <div class="pnl-period-cell"><div class="pnl-label">--</div></div>
             </div>
             <div class="card-sub" id="benchmark-meta" style="margin-top:8px;font-size:11px;">--</div>
+        </div>
+
+        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) -->
+        <div class="card">
+            <div class="card-title">Equity-Verlauf (monatlich)<span class="tip" data-tip="Zeigt deine Portfolio-Performance Monat fuer Monat im direkten Vergleich zu SPY, QQQ und 60/40. Der Bot speichert taeglich nach Boersenschluss einen Schnappschuss vom Portfolio-Wert und allen Benchmark-Kursen, daraus wird die Tabelle gebaut. Sinnvoll wird das ab ~30 gesammelten Tagen (erste Monatszeile) und richtig aussagekraeftig ab 90 Tagen.">?</span></div>
+            <div id="equity-history-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">Daten werden noch gesammelt...</div>
+            <div id="equity-history-table-wrap" style="overflow-x:auto;">
+                <table class="data-table" id="equity-history-table" style="display:none;">
+                    <thead>
+                        <tr>
+                            <th>Monat<span class="tip" data-tip="Kalendermonat des Snapshots. Erst- und Letzt-Tag werden zur Berechnung der Monats-Rendite herangezogen.">?</span></th>
+                            <th>Bot %<span class="tip" data-tip="Prozentuale Veraenderung des gesamten Portfolio-Werts (Cash + offene Positionen + realisierte P&amp;L) vom ersten zum letzten Snapshot des Monats.">?</span></th>
+                            <th>SPY %<span class="tip" data-tip="Vergleichswert: Was haette eine reine S&amp;P-500-ETF-Position im selben Zeitraum gemacht?">?</span></th>
+                            <th>α SPY<span class="tip" data-tip="Bot-Performance minus SPY-Performance. Positiv = Bot war besser. Das ist die wichtigste Spalte.">?</span></th>
+                            <th>QQQ %<span class="tip" data-tip="Nasdaq-100 (Tech-lastig). Vergleich, falls dein Bot viele Tech-Werte haelt.">?</span></th>
+                            <th>α QQQ<span class="tip" data-tip="Bot minus QQQ. Sagt dir, ob du gegen ein Tech-Portfolio outperformst.">?</span></th>
+                            <th>60/40 %<span class="tip" data-tip="Mischportfolio aus 60% Aktien (SPY) + 40% Anleihen (AGG). Konservative Buy-and-Hold-Alternative.">?</span></th>
+                            <th>α 60/40<span class="tip" data-tip="Bot minus 60/40. Falls negativ: ein einfaches Misch-Portfolio waere stressfreier gewesen.">?</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="equity-history-tbody"></tbody>
+                </table>
+            </div>
+            <div class="card-sub" id="equity-history-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
         <div class="grid-2">

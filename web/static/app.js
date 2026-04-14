@@ -84,7 +84,7 @@ function renderBenchmark(benchData) {
 
     if (!benchData || benchData.error || !Array.isArray(benchData.periods)) {
         grid.innerHTML = '<div class="pnl-period-cell"><div class="pnl-label">Benchmark nicht verfuegbar</div></div>';
-        if (meta) meta.textContent = benchData?.error || 'SPY-Daten konnten nicht geladen werden';
+        if (meta) meta.textContent = benchData?.error || 'Benchmark-Daten konnten nicht geladen werden';
         return;
     }
 
@@ -94,27 +94,124 @@ function renderBenchmark(benchData) {
         _lastPnlPeriods.periods.forEach(p => { portfolioByKey[p.key] = p.pnl_pct; });
     }
 
+    // Benchmarks-Liste aus Backend (kann SPY/QQQ/60-40 enthalten)
+    const benches = Array.isArray(benchData.benchmarks) && benchData.benchmarks.length
+        ? benchData.benchmarks
+        : [{ key: 'spy', label: 'SPY', name: 'S&P 500 ETF' }];
+
+    const cellWithVal = (val) => {
+        if (val == null) return '<span class="bench-value">--</span>';
+        const cls = val >= 0 ? 'positive' : 'negative';
+        return `<span class="bench-value ${cls}">${fmtPct(val)}</span>`;
+    };
+
     grid.innerHTML = benchData.periods.map(p => {
-        const spy = (p.spy_pct == null) ? null : p.spy_pct;
         const bot = portfolioByKey[p.key];
-        const alpha = (spy != null && bot != null) ? (bot - spy) : null;
-        const alphaCls = alpha == null ? '' : (alpha >= 0 ? 'positive' : 'negative');
-        const botTxt = bot == null ? '--' : fmtPct(bot);
-        const spyTxt = spy == null ? '--' : fmtPct(spy);
-        const alphaTxt = alpha == null ? '--' : fmtPct(alpha);
+        const botRow = `<div class="bench-cell-row" style="border-bottom:1px solid var(--border);padding-bottom:3px;margin-bottom:3px;"><span class="bench-label" style="font-weight:600;">Bot</span>${cellWithVal(bot)}</div>`;
+
+        const benchRows = benches.map(b => {
+            const v = p[`${b.key}_pct`];
+            const a = (v != null && bot != null) ? (bot - v) : null;
+            const aCls = a == null ? '' : (a >= 0 ? 'positive' : 'negative');
+            const aTxt = a == null ? '--' : fmtPct(a);
+            return `
+                <div class="bench-cell-row"><span class="bench-label">${b.label}</span>${cellWithVal(v)}</div>
+                <div class="bench-cell-row bench-alpha" style="opacity:0.85;"><span class="bench-label">&nbsp;α</span><span class="bench-value ${aCls}">${aTxt}</span></div>
+            `;
+        }).join('');
+
         return `
             <div class="pnl-period-cell" style="text-align:left;">
                 <div class="pnl-label" style="text-align:center;margin-bottom:4px;">${p.label}</div>
-                <div class="bench-cell-row"><span class="bench-label">Bot</span><span class="bench-value ${bot == null ? '' : (bot >= 0 ? 'positive' : 'negative')}">${botTxt}</span></div>
-                <div class="bench-cell-row"><span class="bench-label">SPY</span><span class="bench-value ${spy == null ? '' : (spy >= 0 ? 'positive' : 'negative')}">${spyTxt}</span></div>
-                <div class="bench-cell-row bench-alpha"><span class="bench-label">α</span><span class="bench-value ${alphaCls}">${alphaTxt}</span></div>
+                ${botRow}
+                ${benchRows}
             </div>
         `;
     }).join('');
 
     if (meta) {
         const stale = benchData.latest_close_date ? `Stand: ${benchData.latest_close_date}` : '';
-        meta.textContent = `α (Alpha) = Bot − SPY. Positiv = Bot schlaegt den Markt. ${stale}`;
+        const benchNames = benches.map(b => `${b.label}=${b.name}`).join(' | ');
+        meta.textContent = `${benchNames} | α = Bot − Benchmark | ${stale}`;
+    }
+}
+
+// === EQUITY HISTORY (Monatstabelle Bot vs Multi-Benchmark) ===
+function renderEquityHistory(data) {
+    const status = document.getElementById('equity-history-status');
+    const table = document.getElementById('equity-history-table');
+    const tbody = document.getElementById('equity-history-tbody');
+    const meta = document.getElementById('equity-history-meta');
+    if (!status || !tbody) return;
+
+    if (!data || data.error) {
+        status.textContent = 'Equity-History nicht verfuegbar' + (data?.error ? `: ${data.error}` : '');
+        if (table) table.style.display = 'none';
+        if (meta) meta.textContent = '';
+        return;
+    }
+
+    const total = data.snapshots_total || 0;
+    const minReq = data.min_required || 5;
+
+    if (!data.ready || !Array.isArray(data.monthly) || data.monthly.length === 0) {
+        // Progress-Anzeige solange noch nicht genug Snapshots gesammelt
+        const pct = Math.min(100, Math.round((total / minReq) * 100));
+        status.innerHTML = `Daten werden gesammelt: <strong>${total} / ${minReq}</strong> Tages-Snapshots `
+            + `(${pct}%). Erste Monatszeile erscheint sobald genug Daten vorliegen. `
+            + `Snapshots laufen taeglich ~22:30 CET nach Boersenschluss.`;
+        if (table) table.style.display = 'none';
+        if (meta) {
+            meta.textContent = total > 0
+                ? `Erster Snapshot: ${data.first_date} | Letzter: ${data.last_date}`
+                : 'Noch keine Snapshots vorhanden — naechster Lauf heute Abend.';
+        }
+        return;
+    }
+
+    // Daten vorhanden -> Tabelle rendern
+    status.innerHTML = `<strong>${total}</strong> Tages-Snapshots gesammelt | `
+        + `<strong>${data.monthly.length}</strong> Monats-Zeile(n) berechnet`;
+    if (table) table.style.display = '';
+
+    const cellPct = (v) => {
+        if (v == null) return '<td>--</td>';
+        const cls = v >= 0 ? 'positive' : 'negative';
+        return `<td class="${cls}">${fmtPct(v)}</td>`;
+    };
+
+    // Neueste Monate oben
+    const rows = [...data.monthly].reverse();
+    tbody.innerHTML = rows.map(r => {
+        const monthLabel = r.month + (r.days_in_month ? ` <span style="opacity:0.6;">(${r.days_in_month}d)</span>` : '');
+        return `
+            <tr>
+                <td>${monthLabel}</td>
+                ${cellPct(r.bot_pct)}
+                ${cellPct(r.spy_pct)}
+                ${cellPct(r.alpha_spy)}
+                ${cellPct(r.qqq_pct)}
+                ${cellPct(r.alpha_qqq)}
+                ${cellPct(r.mix6040_pct)}
+                ${cellPct(r.alpha_mix6040)}
+            </tr>
+        `;
+    }).join('');
+
+    if (meta) {
+        meta.textContent = `Zeitraum: ${data.first_date} bis ${data.last_date} | `
+            + `α = Bot − Benchmark | (Xd) = Anzahl Snapshots im Monat`;
+    }
+}
+
+async function loadEquityHistory() {
+    try {
+        const res = await apiFetch('/api/equity-history');
+        if (!res) return;
+        const data = await res.json();
+        renderEquityHistory(data);
+    } catch (e) {
+        console.error('equity-history load:', e);
     }
 }
 
@@ -180,13 +277,17 @@ async function loadDashboard() {
             } catch(e) { console.error('pnl-periods render:', e); }
         }
 
-        // Benchmark Card (Bot vs. SPY)
+        // Benchmark Card (Bot vs. Multi-Benchmark: SPY/QQQ/60-40)
         if (benchmarkRes) {
             try {
                 const bench = await benchmarkRes.json();
                 renderBenchmark(bench);
             } catch(e) { console.error('benchmark render:', e); }
         }
+
+        // Equity-History Monatstabelle (Bot vs. Benchmarks im Zeitverlauf)
+        // Eigener Roundtrip — laeuft non-blocking, falls Endpoint langsam ist.
+        loadEquityHistory();
 
         if (portfolioRes) {
             const p = await portfolioRes.json();
