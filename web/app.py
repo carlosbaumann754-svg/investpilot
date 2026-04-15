@@ -354,13 +354,14 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     entry_price = position.get("entry_price") or 0
     open_time = position.get("open_time")
 
-    # Config-Parameter
-    stocks_cfg = config.get("stocks", {})
+    # Config-Parameter — Live-Bot liest aus `demo_trading`, nicht `stocks`.
+    # (Optimizer schreibt auch in demo_trading.*, siehe optimizer.py:181)
+    dt_cfg = config.get("demo_trading", {})
     lev_cfg = config.get("leverage", {})
     ts_cfg = config.get("time_stop", {})
 
-    sl_pct = stocks_cfg.get("stop_loss_pct", -2.5)
-    tp_final_pct = stocks_cfg.get("take_profit_pct", 18)
+    sl_pct = dt_cfg.get("stop_loss_pct", -2.5)
+    tp_final_pct = dt_cfg.get("take_profit_pct", 18)
     trail_enabled = lev_cfg.get("trailing_sl_enabled", True)
     trail_activation = lev_cfg.get("trailing_sl_activation_pct", 0.8)
     trail_pct = lev_cfg.get("trailing_sl_pct", 1.8)
@@ -530,8 +531,11 @@ async def api_exit_forecast(user=Depends(require_auth)):
             "count": len(forecasts),
             "positions": forecasts,
             "config_summary": {
-                "sl_pct": config.get("stocks", {}).get("stop_loss_pct", -2.5),
-                "tp_pct": config.get("stocks", {}).get("take_profit_pct", 18),
+                # Live-Bot liest aus demo_trading.* (siehe trader.py). Der
+                # Optimizer schreibt auch dorthin. 'stocks' gibt's in der
+                # Live-Config gar nicht — alte Fehlquelle fuer Diskrepanz.
+                "sl_pct": config.get("demo_trading", {}).get("stop_loss_pct", -2.5),
+                "tp_pct": config.get("demo_trading", {}).get("take_profit_pct", 18),
                 "trail_activation": config.get("leverage", {}).get("trailing_sl_activation_pct", 0.8),
                 "trail_pct": config.get("leverage", {}).get("trailing_sl_pct", 1.8),
                 "tp_tranches": config.get("leverage", {}).get("tp_tranches", []),
