@@ -509,8 +509,8 @@ async function loadDashboard() {
                     badges.innerHTML = Object.entries(s.sectors)
                         .map(([name, data]) => {
                             const pct = data.allocation_pct || 0;
-                            const cls = pct > 30 ? 'badge-red' : pct > 20 ? 'badge-orange' : 'badge-blue';
-                            return `<span class="badge ${cls}">${name} ${pct.toFixed(0)}% (${data.count})</span>`;
+                            // Farbkodierung entfernt: Kachel zeigt Scanner-Universum, kein Portfolio-Risiko
+                            return `<span class="badge badge-blue">${name} ${pct.toFixed(0)}% (${data.count})</span>`;
                         }).join('');
                 }
             } catch(e) {}
