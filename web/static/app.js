@@ -281,15 +281,20 @@ function renderExitForecast(data) {
                 <td class="${pnlCls}">${distFmt(p.pnl_pct)}</td>
                 <td><strong>${ntLabel}</strong></td>
                 <td><strong>${ntDist}</strong></td>
-                <td style="font-size:11px;line-height:1.5;">${allTriggers}</td>
+                <td style="font-size:11px;line-height:1.6;white-space:normal;word-break:break-word;min-width:220px;">${allTriggers}</td>
             </tr>
         `;
     }).join('');
 
     if (meta && data.config_summary) {
         const c = data.config_summary;
-        const tranches = (c.tp_tranches || []).map(t => `+${t.profit_target_pct}%`).join(', ');
-        meta.textContent = `Config: SL ${c.sl_pct}% | TP-Final +${c.tp_pct}% | Trailing -${c.trail_pct}% ab +${c.trail_activation}% | Tranchen: ${tranches} | Time-Stop ${c.time_stop?.max_days_stale}d`;
+        const sl = c.sl_pct ?? -2.5;
+        const tp = c.tp_pct ?? 18;
+        const trailPct = c.trail_pct ?? 1.8;
+        const trailAct = c.trail_activation ?? 0.8;
+        const tsDays = c.time_stop?.max_days_stale ?? 10;
+        const tranches = (c.tp_tranches || []).map(t => `+${t.profit_target_pct}%`).join(', ') || '--';
+        meta.textContent = `Config: SL ${sl}% | TP-Final +${tp}% | Trailing -${trailPct}% ab +${trailAct}% | Tranchen: ${tranches} | Time-Stop ${tsDays}d`;
     }
 }
 

@@ -530,12 +530,12 @@ async def api_exit_forecast(user=Depends(require_auth)):
             "count": len(forecasts),
             "positions": forecasts,
             "config_summary": {
-                "sl_pct": config.get("stocks", {}).get("stop_loss_pct"),
-                "tp_pct": config.get("stocks", {}).get("take_profit_pct"),
-                "trail_activation": config.get("leverage", {}).get("trailing_sl_activation_pct"),
-                "trail_pct": config.get("leverage", {}).get("trailing_sl_pct"),
+                "sl_pct": config.get("stocks", {}).get("stop_loss_pct", -2.5),
+                "tp_pct": config.get("stocks", {}).get("take_profit_pct", 18),
+                "trail_activation": config.get("leverage", {}).get("trailing_sl_activation_pct", 0.8),
+                "trail_pct": config.get("leverage", {}).get("trailing_sl_pct", 1.8),
                 "tp_tranches": config.get("leverage", {}).get("tp_tranches", []),
-                "time_stop": config.get("time_stop", {}),
+                "time_stop": config.get("time_stop", {"max_days_stale": 10}),
             },
         }
     except Exception as e:
