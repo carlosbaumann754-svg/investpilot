@@ -105,8 +105,8 @@
         <div class="card">
             <div class="card-title">Exit-Forecast<span class="tip" data-tip="Fuer jede offene Position: Wie weit ist sie vom naechsten Exit entfernt? Der Bot hat 7 moegliche Ausstiegs-Typen (Stop-Loss, Trailing-SL, drei TP-Tranchen, Final-TP, Time-Stop). Diese Tabelle zeigt fuer jede Position den naechsten, nahesten Trigger und wie viele Prozent fehlen. Beantwortet die Frage: Warum schliesst der Bot gerade nichts?">?</span></div>
             <div id="exit-forecast-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">--</div>
-            <div id="exit-forecast-table-wrap" style="overflow-x:auto;">
-                <table class="data-table" id="exit-forecast-table" style="display:none;">
+            <div id="exit-forecast-table-wrap" style="overflow:visible;">
+                <table class="data-table" id="exit-forecast-table" style="display:none;width:100%;">
                     <thead>
                         <tr>
                             <th>Asset<span class="tip" data-tip="Instrument-ID bei eToro. Gleiche ID = gleiches Wertpapier (mehrere Positionen bei Nachkaeufen).">?</span></th>
