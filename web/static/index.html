@@ -77,8 +77,8 @@
             <div class="card-sub" id="benchmark-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
-        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) — hidden on dashboard, kept in DOM so loader code & IDs stay valid; redundant with Gewinn/Verlust chart -->
-        <div class="card" style="display:none;">
+        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) -->
+        <div class="card">
             <div class="card-title">Equity-Verlauf (monatlich)<span class="tip" data-tip="Zeigt deine Portfolio-Performance Monat fuer Monat im direkten Vergleich zu SPY, QQQ und 60/40. Der Bot speichert taeglich nach Boersenschluss einen Schnappschuss vom Portfolio-Wert und allen Benchmark-Kursen, daraus wird die Tabelle gebaut. Sinnvoll wird das ab ~30 gesammelten Tagen (erste Monatszeile) und richtig aussagekraeftig ab 90 Tagen.">?</span></div>
             <div id="equity-history-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">Daten werden noch gesammelt...</div>
             <div id="equity-history-table-wrap" style="overflow-x:auto;">
