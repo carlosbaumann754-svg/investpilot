@@ -1548,6 +1548,59 @@ async function loadWatchdog() {
     }
 }
 
+// === v15 SIZING + CASH-DCA ===
+async function loadV15Sizing() {
+    try {
+        const res = await apiFetch('/api/risk');
+        if (!res) return;
+        const data = await res.json();
+
+        // Sizing-Card
+        const s = data.v15_sizing || {};
+        const fmtUsd = (v) => (v === null || v === undefined) ? '--' : '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+        const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+
+        setTxt('v15-max-pos', s.max_positions ?? '--');
+        setTxt('v15-current-pos', (s.current_positions ?? '--') + (s.max_positions ? ' / ' + s.max_positions : ''));
+        setTxt('v15-max-trade', fmtUsd(s.max_single_trade_usd));
+        setTxt('v15-pct', s.pct_of_portfolio != null ? (Number(s.pct_of_portfolio) * 100).toFixed(1) + '%' : '--');
+        const floor = s.floor_usd != null ? fmtUsd(s.floor_usd) : '--';
+        const cap = s.hard_cap_usd != null ? fmtUsd(s.hard_cap_usd) : 'kein';
+        setTxt('v15-floor-cap', floor + ' / ' + cap);
+        setTxt('v15-tier', s.tier_threshold_usd != null ? '≤ ' + fmtUsd(s.tier_threshold_usd) : '--');
+
+        // DCA-Card
+        const d = data.v15_cash_dca || {};
+        const badge = document.getElementById('v15-dca-badge');
+        if (badge) {
+            if (d.dca_active) {
+                badge.textContent = 'AKTIV';
+                badge.className = 'badge badge-orange';
+            } else {
+                badge.textContent = 'INAKTIV';
+                badge.className = 'badge badge-green';
+            }
+        }
+        setTxt('v15-dca-budget', fmtUsd(d.remaining_budget_usd));
+        setTxt('v15-dca-cycles', d.remaining_cycles ?? '--');
+        setTxt('v15-dca-per-cycle', d.per_cycle_usd != null ? fmtUsd(d.per_cycle_usd) : '--');
+        setTxt('v15-dca-progress', d.progress_pct != null ? d.progress_pct + '%' : '--');
+
+        const planEl = document.getElementById('v15-dca-plan');
+        if (planEl) {
+            if (d.dca_active && d.total_deposit_usd) {
+                const consumed = d.consumed_usd || 0;
+                planEl.textContent = 'Plan: ' + fmtUsd(consumed) + ' / ' + fmtUsd(d.total_deposit_usd) +
+                    ' deployed' + (d.plan_created_at ? ' (seit ' + d.plan_created_at.slice(0, 10) + ')' : '');
+            } else {
+                planEl.textContent = 'Kein aktiver DCA-Plan. Naechster Trigger bei Einzahlung > 500 USD.';
+            }
+        }
+    } catch (e) {
+        console.warn('v15 sizing load failed:', e);
+    }
+}
+
 // === ASK (Q&A Chat) ===
 async function askQuestion() {
     const input = document.getElementById('ask-input');
@@ -1612,10 +1665,12 @@ async function askQuestion() {
 
     loadDashboard();
     loadWatchdog();
+    loadV15Sizing();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
     setInterval(loadWatchdog, 300000); // Watchdog alle 5 Min
+    setInterval(loadV15Sizing, 60000); // v15 Sizing/DCA alle 1 Min
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();

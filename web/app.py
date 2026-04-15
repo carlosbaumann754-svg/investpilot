@@ -1386,7 +1386,10 @@ async def api_killswitch(user=Depends(require_auth)):
 async def api_risk(user=Depends(require_auth)):
     """Aktuelle Risiko-Zusammenfassung."""
     try:
-        from app.risk_manager import get_risk_summary, calculate_exposure, check_margin_safety
+        from app.risk_manager import (
+            get_risk_summary, calculate_exposure, check_margin_safety,
+            resolve_max_positions, resolve_max_single_trade_usd, detect_cash_deposit,
+        )
         from app.etoro_client import EtoroClient
         from app.config_manager import load_config
 
@@ -1408,6 +1411,49 @@ async def api_risk(user=Depends(require_auth)):
                 summary["exposure"] = exposure_detail
                 summary["margin_ok"] = margin_ok
                 summary["margin_reason"] = margin_reason
+
+                # v15: Prozent-basierte Sizing + Cash-DCA Metriken
+                try:
+                    dt = (config or {}).get("demo_trading", {}) or {}
+                    ps = (config or {}).get("portfolio_sizing", {}) or {}
+                    tiers = ps.get("max_positions_by_capital") or {}
+                    tier_threshold = None
+                    try:
+                        for k, _v in sorted(((float(k), int(v)) for k, v in tiers.items()), key=lambda x: x[0]):
+                            if total <= k:
+                                tier_threshold = k
+                                break
+                    except Exception:
+                        tier_threshold = None
+
+                    summary["v15_sizing"] = {
+                        "portfolio_value_usd": round(total, 2),
+                        "max_positions": resolve_max_positions(total, config),
+                        "current_positions": len(positions),
+                        "max_single_trade_usd": resolve_max_single_trade_usd(total, config),
+                        "pct_of_portfolio": dt.get("max_single_trade_pct_of_portfolio"),
+                        "floor_usd": dt.get("max_single_trade_usd_floor", 50),
+                        "hard_cap_usd": dt.get("max_single_trade_usd_hard_cap"),
+                        "tier_threshold_usd": tier_threshold,
+                    }
+
+                    dca = detect_cash_deposit(credit, config)
+                    # Für Progress-Anzeige: zusaetzlich Raw-State ziehen
+                    try:
+                        from app.config_manager import load_json
+                        raw_state = load_json("cash_dca_state.json") or {}
+                        plan = raw_state.get("active_plan") or {}
+                        if plan:
+                            dca["total_deposit_usd"] = plan.get("total_deposit_usd")
+                            dca["consumed_usd"] = plan.get("consumed_usd", 0)
+                            total_dep = float(plan.get("total_deposit_usd") or 0)
+                            consumed = float(plan.get("consumed_usd") or 0)
+                            dca["progress_pct"] = round(100.0 * consumed / total_dep, 1) if total_dep > 0 else 0
+                    except Exception:
+                        pass
+                    summary["v15_cash_dca"] = dca
+                except Exception as e:
+                    summary["v15_error"] = str(e)
 
         return summary
     except ImportError:

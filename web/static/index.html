@@ -238,6 +238,63 @@
             <div id="watchdog-details" class="card-sub" style="margin-top:8px;">--</div>
         </div>
 
+        <!-- v15 SIZING + CASH-DCA -->
+        <div class="card" id="v15-sizing-card">
+            <div class="card-title">Position Sizing (v15)<span class="tip" data-tip="Prozent-basierte Groessen-Caps, skalieren automatisch mit dem Portfolio-Wert. Max Positionen = Tier-Map aus portfolio_sizing, max Trade = % vom Gesamtwert (mit Floor/Cap).">?</span></div>
+            <div class="regime-detail-grid">
+                <div class="regime-detail-item">
+                    <span class="card-sub">Max Positionen</span>
+                    <span id="v15-max-pos" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Aktuell offen</span>
+                    <span id="v15-current-pos" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Max Trade (USD)</span>
+                    <span id="v15-max-trade" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">% vom Portfolio</span>
+                    <span id="v15-pct" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Floor / Hard-Cap</span>
+                    <span id="v15-floor-cap" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Tier-Schwelle</span>
+                    <span id="v15-tier" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" id="v15-dca-card">
+            <div class="card-title">Cash-DCA Status (v15)<span class="tip" data-tip="Staffelt neue Einzahlungen (>500 USD Trigger) ueber 5 Scheduler-Zyklen, um Timing-Risiko zu reduzieren. Inaktiv wenn keine neue Einzahlung erkannt wurde.">?</span></div>
+            <div id="v15-dca-status" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+                <div class="badge badge-blue" id="v15-dca-badge">--</div>
+            </div>
+            <div class="regime-detail-grid">
+                <div class="regime-detail-item">
+                    <span class="card-sub">Verfuegbares Budget</span>
+                    <span id="v15-dca-budget" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Restliche Zyklen</span>
+                    <span id="v15-dca-cycles" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Pro Zyklus</span>
+                    <span id="v15-dca-per-cycle" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Fortschritt</span>
+                    <span id="v15-dca-progress" style="font-weight:700;font-size:14px;">--</span>
+                </div>
+            </div>
+            <div id="v15-dca-plan" class="card-sub" style="margin-top:8px;">--</div>
+        </div>
+
         <!-- KILL SWITCH -->
         <div class="card" id="killswitch-card" style="border: 2px solid var(--red); text-align: center;">
             <div class="card-title" style="color: var(--red);">NOTAUS / Kill Switch</div>
