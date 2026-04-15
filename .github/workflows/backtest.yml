@@ -16,9 +16,13 @@ on:
   workflow_dispatch:
     inputs:
       triggered_by:
-        description: "Trigger-Quelle (dashboard / manual / debug)"
+        description: "Trigger-Quelle (dashboard / manual / debug / sensitivity)"
         required: false
         default: "manual"
+      overrides:
+        description: "Sensitivity-Overrides space-separated (z.B. 'demo_trading.min_scanner_score=35 demo_trading.max_single_trade_pct_of_portfolio=0.12')"
+        required: false
+        default: ""
   schedule:
     # Sonntag 06:00 UTC = 08:00 CEST — 3h nach Optimizer (So 03:00 UTC)
     - cron: '0 6 * * 0'
@@ -62,8 +66,15 @@ jobs:
           INVESTPILOT_BACKTEST_CI: '1'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BT_OVERRIDES: ${{ github.event.inputs.overrides }}
         run: |
-          python -m app.backtest_runner github-action-${{ github.event.inputs.triggered_by || (github.event_name == 'schedule' && 'weekly-cron') || 'manual' }}
+          TB="github-action-${{ github.event.inputs.triggered_by || (github.event_name == 'schedule' && 'weekly-cron') || 'manual' }}"
+          if [ -n "$BT_OVERRIDES" ]; then
+            echo "Running with overrides: $BT_OVERRIDES"
+            python -m app.backtest_runner "$TB" --override $BT_OVERRIDES
+          else
+            python -m app.backtest_runner "$TB"
+          fi
 
       - name: Upload backtest artifacts
         if: always()
