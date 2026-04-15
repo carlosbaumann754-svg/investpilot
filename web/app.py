@@ -106,7 +106,8 @@ class StrategyUpdate(BaseModel):
     take_profit_pct: Optional[float] = None
     rebalance_threshold_pct: Optional[float] = None
     default_leverage: Optional[int] = None
-    max_single_trade_usd: Optional[float] = None
+    max_single_trade_usd: Optional[float] = None  # Legacy, deprecated by v15 pct
+    max_single_trade_pct_of_portfolio: Optional[float] = None
     portfolio_targets: Optional[dict] = None
 
     @validator("strategy")
@@ -1029,7 +1030,17 @@ async def api_update_strategy(update: StrategyUpdate, user=Depends(require_auth)
             old = dt.get("max_single_trade_usd")
             dt["max_single_trade_usd"] = update.max_single_trade_usd
             if old != update.max_single_trade_usd:
-                changes.append(f"Max Trade: {old} -> {update.max_single_trade_usd}")
+                changes.append(f"Max Trade USD (legacy): {old} -> {update.max_single_trade_usd}")
+
+        if update.max_single_trade_pct_of_portfolio is not None:
+            # Hard-Bounds: 0 < pct <= 0.5 (50% pro Trade absolute Obergrenze)
+            pct = update.max_single_trade_pct_of_portfolio
+            if not (0 < pct <= 0.5):
+                raise HTTPException(400, "max_single_trade_pct_of_portfolio muss in (0, 0.5] liegen")
+            old = dt.get("max_single_trade_pct_of_portfolio")
+            dt["max_single_trade_pct_of_portfolio"] = pct
+            if old != pct:
+                changes.append(f"Max Trade %: {old} -> {pct}")
 
         if update.portfolio_targets is not None:
             # Validiere: Summe muss 100% sein

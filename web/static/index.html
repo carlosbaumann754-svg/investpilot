@@ -735,8 +735,9 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Max. Einzeltrade (USD)</label><span class="tip" data-tip="Die Obergrenze fuer einen einzelnen Trade. Verhindert, dass der Bot zu viel Geld auf eine Karte setzt. Beispiel: 500 USD = kein Trade wird groesser als 500 USD sein.">?</span>
-                    <input type="number" id="cfg-max-trade" step="100" min="100" max="50000">
+                    <label>Max. Einzeltrade (% vom Portfolio)</label><span class="tip" data-tip="v15 Prozent-basiert: Die Obergrenze fuer einen einzelnen Trade als Prozentsatz vom Portfolio-Wert. Beispiel: 0.15 = max 15% des Portfolios pro Trade. Skaliert automatisch mit dem Portfolio-Wachstum.">?</span>
+                    <input type="number" id="cfg-max-trade-pct" step="0.01" min="0.01" max="0.5" placeholder="0.15">
+                    <div class="card-sub" style="margin-top:4px;font-size:12px;">Aktuell effektiv: <span id="cfg-max-trade-effective" style="font-weight:700;">--</span> bei Portfolio <span id="cfg-portfolio-value">--</span></div>
                 </div>
                 <button type="submit" class="btn btn-primary">Speichern</button>
             </form>

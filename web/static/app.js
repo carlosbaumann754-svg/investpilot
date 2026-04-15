@@ -642,17 +642,17 @@ const STRATEGY_PRESETS = {
     aggressive_day_trade: {
         desc: 'Hohes Risiko, hohe Rendite. Enge SL/TP, 2x Leverage, haeufiges Rebalancing.',
         stop_loss_pct: -3, take_profit_pct: 5, rebalance_threshold_pct: 2,
-        default_leverage: 2, max_single_trade_usd: 3000,
+        default_leverage: 2, max_single_trade_pct_of_portfolio: 0.15,
     },
     balanced_growth: {
         desc: 'Mittleres Risiko. Breite Streuung, moderater Leverage, langfristiges Wachstum.',
         stop_loss_pct: -8, take_profit_pct: 15, rebalance_threshold_pct: 5,
-        default_leverage: 1, max_single_trade_usd: 5000,
+        default_leverage: 1, max_single_trade_pct_of_portfolio: 0.10,
     },
     conservative_etf: {
         desc: 'Niedriges Risiko. ETF-lastig, kein Leverage, seltenes Rebalancing.',
         stop_loss_pct: -15, take_profit_pct: 25, rebalance_threshold_pct: 10,
-        default_leverage: 1, max_single_trade_usd: 10000,
+        default_leverage: 1, max_single_trade_pct_of_portfolio: 0.05,
     },
     custom: {
         desc: 'Eigene Parameter frei konfigurieren.',
@@ -668,7 +668,7 @@ function onStrategyPreset(name) {
     document.getElementById('cfg-tp').value = preset.take_profit_pct;
     document.getElementById('cfg-rebalance').value = preset.rebalance_threshold_pct;
     document.getElementById('cfg-leverage').value = preset.default_leverage;
-    document.getElementById('cfg-max-trade').value = preset.max_single_trade_usd;
+    document.getElementById('cfg-max-trade-pct').value = preset.max_single_trade_pct_of_portfolio;
 }
 
 // === SETTINGS ===
@@ -694,7 +694,21 @@ async function loadSettings() {
     document.getElementById('cfg-tp').value = cfg.take_profit_pct;
     document.getElementById('cfg-rebalance').value = cfg.rebalance_threshold_pct;
     document.getElementById('cfg-leverage').value = cfg.default_leverage;
-    document.getElementById('cfg-max-trade').value = cfg.max_single_trade_usd || 5000;
+    document.getElementById('cfg-max-trade-pct').value = cfg.max_single_trade_pct_of_portfolio ?? 0.15;
+
+    // Effektiv-Anzeige aus /api/risk (v15_sizing)
+    try {
+        const r = await apiFetch('/api/risk');
+        if (r) {
+            const j = await r.json();
+            const s = j.v15_sizing;
+            if (s) {
+                const fmt = (v) => '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+                document.getElementById('cfg-max-trade-effective').textContent = fmt(s.max_single_trade_usd);
+                document.getElementById('cfg-portfolio-value').textContent = fmt(s.portfolio_value_usd);
+            }
+        }
+    } catch {}
 
     // Allocation editor
     const editor = document.getElementById('allocation-editor');
@@ -721,7 +735,7 @@ async function saveSettings(e) {
         take_profit_pct: parseFloat(document.getElementById('cfg-tp').value),
         rebalance_threshold_pct: parseFloat(document.getElementById('cfg-rebalance').value),
         default_leverage: parseInt(document.getElementById('cfg-leverage').value),
-        max_single_trade_usd: parseFloat(document.getElementById('cfg-max-trade').value),
+        max_single_trade_pct_of_portfolio: parseFloat(document.getElementById('cfg-max-trade-pct').value),
     };
 
     const res = await apiFetch('/api/config/strategy', {
