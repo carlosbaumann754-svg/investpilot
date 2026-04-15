@@ -918,6 +918,111 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## Live-Gang Strategie (Target: 2026-04-27)
+
+### Kapital-Plan
+- **Start:** 2'000 CHF am 27.04.2026
+- **DCA-Plan:** +1'800 CHF monatlich (Monatsanfang)
+- **Trajektorie ohne Rendite:**
+  - Monat 3 (Jul): 7'400 CHF
+  - Monat 6 (Okt): 12'800 CHF
+  - Monat 12 (Apr 2027): 23'600 CHF
+  - Monat 24 (Apr 2028): 45'200 CHF
+- **Broker:** eToro (bleibt bis 10k+ wegen Kapital-Effizienz, dann IBKR-Evaluation gemaess Roadmap Phase 4)
+
+### Sizing-Strategie: prozent-basiert statt fix
+**Kein `max_single_trade_usd` Fix-Wert** — Config skaliert automatisch mit Portfolio-Wert:
+
+```json
+{
+  "demo_trading": {
+    "max_single_trade_pct_of_portfolio": 0.15,
+    "max_single_trade_usd_floor": 50,
+    "max_single_trade_usd_hard_cap": null
+  },
+  "portfolio_sizing": {
+    "max_positions_by_capital": {
+      "3000":   6,
+      "10000": 10,
+      "30000": 15,
+      "999999": 20
+    }
+  },
+  "kelly_sizing": {
+    "max_fraction": 0.04
+  }
+}
+```
+
+**Auto-Skalierung Beispiele:**
+
+| Kapital | 15% Cap / Trade | Max Positionen | ⌀ Size |
+|---------|-----------------|-----------------|--------|
+| 2'000 | 300 | 6 | ~333 |
+| 7'400 | 1'110 | 10 | ~740 |
+| 12'800 | 1'920 | 15 | ~853 |
+| 23'600 | 3'540 | 15 | ~1'573 |
+
+→ **Config-Datei muss nie wieder angefasst werden** wenn Kapital waechst.
+
+### Cash-Deposit-DCA
+Wenn am 1. des Monats 1'800 CHF Cash reinkommt, wuerde der Bot beim naechsten
+Scanner-Tick alles auf einmal deployen → Market-Timing-Risiko (alles zum
+Monatshoch gekauft). Loesung:
+
+```json
+{
+  "deposit_handling": {
+    "dca_on_new_cash": true,
+    "dca_spread_cycles": 5,
+    "min_new_cash_trigger_usd": 500
+  }
+}
+```
+
+**Logik:** Neuer Cash > 500 USD detected (Delta zum letzten Scan) → Deploy
+ueber 5 Scanner-Zyklen staffeln. Bei 5-Min-Scheduler = 25 Min Staffel-Fenster.
+Optional: `dca_spread_cycles` spaeter auf Stunden/Tage ausdehnen wenn
+Hypothese bestaetigt.
+
+### Pre-Live-Checklist (27.04.-Target)
+
+**Muss-Features (15.-18.04.):**
+- [x] Audit-Fix Waves 1-3 (2026-04-15)
+- [ ] **Phase 2/5: Fruehwarnsignale** (`macro_signals.py`):
+  - Yield Curve Inversion (2Y/10Y via FRED API — kostenlos)
+  - Credit Spread (HYG vs IEF Ratio via yfinance)
+  - Marktbreite (% SP500-Aktien ueber SMA200 via yfinance)
+  - Integration ins Regime-System als weiterer Filter neben VIX/F&G
+- [ ] **Phase 1/1: Prozent-basierte Sizing + Cash-DCA** (risk_manager.py +
+  Config-Migration)
+- [ ] **Phase 1/2: Backtest-History** (analog `optimization_history.json`)
+- [ ] **Phase 1/4: Wartungs-Block Weekly Report** (Cron-Status, Backup-Alter,
+  ML-Modell-Alter)
+
+**Nicht-Blocker (spaeter):**
+- Monte-Carlo-Simulation (Phase 1/3) — braucht 60+ echte Trade-Daten
+- Bots Nr. 2-6, Multi-Strategy-Router (Phase 3) — erst wenn Bot 1 live
+  profitabel
+- IBKR-Broker-Wechsel (Phase 4) — erst bei 10k+ CHF
+
+**Go-Live-Prozedur (26.04. abends):**
+1. Finaler Backtest (Dashboard-Button, GH Action): alle 4 Hard-Gates
+   erfuellt? (Sharpe >1.0, MaxDD <8%, Winrate >50%, PF >1.3)
+2. Finaler Kelly-Sweep (Dashboard-Button, GH Action): bestaetigt
+   `max_fraction = 0.04`
+3. Kill-Switch-Drill: Trading via Dashboard pausieren + reaktivieren
+4. Telegram-Alert-Test: Manueller Trigger eines CLOSE_FAILED-Events
+5. eToro Env-Switch: `ETORO_ENVIRONMENT=real` in Render
+6. `trading_enabled.flag = true`
+7. Erste 48h: Dashboard alle 2h checken, Alerts monitoren
+
+**Abbruch-Kriterien (Live wird pausiert/deaktiviert):**
+- Drawdown > 5% in den ersten 2 Wochen (Hard-Stop)
+- 3+ Close-Failures in 24h
+- Scheduler-Crash / Health RED > 30 Min
+- Ungeplante Position-Groesse > 20% Portfolio (Sizing-Bug)
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`
