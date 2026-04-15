@@ -34,6 +34,7 @@ BACKUP_FILES = [
     "decision_log.json",
     "alert_state.json",
     "market_context.json",
+    "macro_signals.json",
     "discovery_result.json",
     "weekly_report.json",
     "backtest_results.json",

@@ -471,13 +471,28 @@ def update_full_context(config=None):
         ctx["btc_dominance_proxy"] = btc_dom
         ctx["avoid_altcoins"] = should_avoid_altcoins(btc_dom)
 
+    # v15: Makro-Fruehwarnsignale (Yield Curve, Credit Spread, Marktbreite)
+    # Pflicht-Blocker fuer Live-Gang 27.04.2026. Fehler non-fatal —
+    # Bot laeuft auch ohne Makro-Score weiter (Fallback: score=0).
+    try:
+        from app import macro_signals
+        macro = macro_signals.update_macro_signals(config=config)
+        ctx["macro_signals"] = {
+            "composite_score": (macro.get("scores") or {}).get("composite", 0),
+            "details": macro.get("details") or [],
+            "updated_at": macro.get("updated_at"),
+        }
+    except Exception as e:
+        log.warning(f"Macro-Signale Update fehlgeschlagen (non-fatal): {e}", exc_info=True)
+
     ctx["last_update"] = now.isoformat()
     ctx["position_size_multiplier"] = get_position_size_multiplier(events, vix)
 
     _save_context(ctx)
     log.info(f"  Marktkontext aktualisiert: VIX={ctx.get('vix_level')}, "
              f"F&G={ctx.get('fear_greed_index')}, "
-             f"Events={len(events)}, Multiplier={ctx.get('position_size_multiplier')}")
+             f"Events={len(events)}, Multiplier={ctx.get('position_size_multiplier')}, "
+             f"MacroScore={((ctx.get('macro_signals') or {}).get('composite_score'))}")
 
     return ctx
 
@@ -607,6 +622,32 @@ def check_regime_filter(config=None):
         log.info(f"  Regime-Filter: Brain-Regime = bear (-1)")
     else:
         log.info(f"  Regime-Filter: Brain-Regime = {brain_regime}")
+
+    # --- v15: Makro-Fruehwarnsignale (Yield Curve + Credit Spread + Marktbreite) ---
+    # Per-Default aktiviert, kann via config `macro_signals.enabled=false` deaktiviert werden.
+    ms_cfg = config.get("macro_signals", {}) or {}
+    if ms_cfg.get("enabled", True):
+        try:
+            from app import macro_signals
+            macro_score, macro_details = macro_signals.get_macro_score(config)
+            # Gewichtung: Makro kann max -5.5 beitragen (YC-2 + CS-2 + MB-1.5).
+            # Wir clampen den Beitrag auf [-3, 0] damit Makro allein nicht
+            # sofort blockt — aber kombiniert mit VIX/F&G/Brain die Schwelle
+            # ueberschreitet.
+            macro_weight = ms_cfg.get("score_weight", 1.0)
+            macro_contribution = max(-3.0, macro_score * macro_weight)
+            if macro_contribution != 0:
+                combined_score += macro_contribution
+                for d in macro_details:
+                    details.append(d)
+                log.info(
+                    f"  Regime-Filter: Makro-Score {macro_score:+g} -> Beitrag "
+                    f"{macro_contribution:+g}"
+                )
+                regime_data["macro_score"] = macro_score
+                regime_data["macro_details"] = macro_details
+        except Exception as e:
+            log.warning(f"Macro-Signale im Regime-Filter fehlgeschlagen: {e}", exc_info=True)
 
     # --- Ergebnis ---
     regime_data["combined_score"] = combined_score

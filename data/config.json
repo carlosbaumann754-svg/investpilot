@@ -74,9 +74,18 @@
     "trailing_sl_activation_pct": 0.8,
     "trailing_sl_pct": 1.8,
     "tp_tranches": [
-      {"pct_of_position": 30, "profit_target_pct": 4},
-      {"pct_of_position": 30, "profit_target_pct": 8},
-      {"pct_of_position": 40, "profit_target_pct": 15}
+      {
+        "pct_of_position": 30,
+        "profit_target_pct": 4
+      },
+      {
+        "pct_of_position": 30,
+        "profit_target_pct": 8
+      },
+      {
+        "pct_of_position": 40,
+        "profit_target_pct": 15
+      }
     ]
   },
   "backtest": {
@@ -232,12 +241,17 @@
     "panic_dip_override_enabled": true,
     "panic_dip_position_multiplier": 0.6,
     "spike_warning_ratio": 1.15,
-    "panic_dip_ratio": 1.20
+    "panic_dip_ratio": 1.2
   },
   "hedging": {
     "enabled": true,
     "bear_position_multiplier": 0.5,
-    "defensive_sectors": ["health", "consumer", "bonds", "commodities"]
+    "defensive_sectors": [
+      "health",
+      "consumer",
+      "bonds",
+      "commodities"
+    ]
   },
   "regime_strategies": {
     "enabled": true,
@@ -247,9 +261,45 @@
     "_comment": "Aktiviert nach Backtest-Validierung (2026-04-09): Sharpe +0.38, AnnRet +2.81%, MaxDD nur +0.08% vs OFF."
   },
   "disabled_symbols": [
-    "DIS", "ROKU", "VNQ", "UNH", "GOOGL", "MA", "ADBE", "SNAP", "PFE",
-    "PYPL", "SHOP", "MCD", "CRM", "PLTR", "NKE", "V", "DIA", "TLT",
-    "XLK", "PG", "QQQ"
+    "DIS",
+    "ROKU",
+    "VNQ",
+    "UNH",
+    "GOOGL",
+    "MA",
+    "ADBE",
+    "SNAP",
+    "PFE",
+    "PYPL",
+    "SHOP",
+    "MCD",
+    "CRM",
+    "PLTR",
+    "NKE",
+    "V",
+    "DIA",
+    "TLT",
+    "XLK",
+    "PG",
+    "QQQ"
   ],
-  "_disabled_symbols_comment": "Universe-Filter: Symbols mit Sharpe<0.5 ODER PF<1.2 im per-symbol v12 backtest (2022-2026). Reversierbar durch Leerung der Liste."
+  "_disabled_symbols_comment": "Universe-Filter: Symbols mit Sharpe<0.5 ODER PF<1.2 im per-symbol v12 backtest (2022-2026). Reversierbar durch Leerung der Liste.",
+  "macro_signals": {
+    "enabled": true,
+    "score_weight": 1.0,
+    "yield_curve": {
+      "flat_threshold_pct": 0.5,
+      "deep_inversion_threshold_pct": -0.5
+    },
+    "credit_spread": {
+      "mild_stress_zscore": -1.0,
+      "moderate_stress_zscore": -2.0,
+      "severe_stress_zscore": -3.0
+    },
+    "market_breadth": {
+      "narrow_divergence_pp": 2.0,
+      "fragile_divergence_pp": 4.0,
+      "severe_divergence_pp": 6.0
+    }
+  }
 }
