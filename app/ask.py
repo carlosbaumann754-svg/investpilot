@@ -150,5 +150,5 @@ def ask_question(question, context_data, config=None):
             "tokens_used": response.usage.input_tokens + response.usage.output_tokens,
         }
     except Exception as e:
-        log.error(f"Ask-Fehler: {e}")
+        log.error(f"Ask-Fehler: {e}", exc_info=True)
         return {"error": f"Claude API Fehler: {str(e)}"}

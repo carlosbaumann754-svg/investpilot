@@ -468,7 +468,7 @@ def send_weekly_report():
         pdf_path = generate_pdf(report)
         log.info(f"PDF Report erstellt: {pdf_path}")
     except Exception as e:
-        log.error(f"PDF-Erstellung fehlgeschlagen: {e}")
+        log.error(f"PDF-Erstellung fehlgeschlagen: {e}", exc_info=True)
 
     # Telegram-Zusammenfassung senden
     try:
@@ -506,7 +506,7 @@ def send_weekly_report():
         return report
 
     except Exception as e:
-        log.error(f"Weekly Report E-Mail fehlgeschlagen: {e}")
+        log.error(f"Weekly Report E-Mail fehlgeschlagen: {e}", exc_info=True)
         return report
 
 

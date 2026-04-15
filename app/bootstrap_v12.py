@@ -172,7 +172,7 @@ def run(check_only: bool = False) -> int:
     try:
         config = load_json("config.json") or {}
     except Exception as e:
-        log.error(f"Config laden fehlgeschlagen: {e}")
+        log.error(f"Config laden fehlgeschlagen: {e}", exc_info=True)
         return 1
 
     log.info(f"Bestehende config.json: {len(config)} Top-Level-Keys")
@@ -195,7 +195,7 @@ def run(check_only: bool = False) -> int:
         save_json("config.json", new_cfg)
         log.info("config.json aktualisiert (atomic write)")
     except Exception as e:
-        log.error(f"Config schreiben fehlgeschlagen: {e}")
+        log.error(f"Config schreiben fehlgeschlagen: {e}", exc_info=True)
         return 1
 
     log.info("Bootstrap abgeschlossen")

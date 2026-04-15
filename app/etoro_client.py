@@ -72,7 +72,7 @@ class EtoroClient:
             log.warning(f"  HTTP {resp.status_code}: {resp.text[:200]}")
             return None
         except Exception as e:
-            log.error(f"  Request Fehler: {e}")
+            log.error(f"  Request Fehler: {e}", exc_info=True)
             return None
 
     def _get(self, endpoint):

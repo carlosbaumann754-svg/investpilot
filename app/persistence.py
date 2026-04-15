@@ -1405,7 +1405,7 @@ def create_named_snapshot(name: str, note: str = "") -> dict:
             }
         return {"error": f"Gist PATCH fehlgeschlagen: HTTP {resp.status_code}"}
     except Exception as e:
-        log.error(f"create_named_snapshot Fehler: {e}")
+        log.error(f"create_named_snapshot Fehler: {e}", exc_info=True)
         return {"error": str(e)}
 
 
@@ -1494,5 +1494,5 @@ def restore_named_snapshot(filename: str) -> dict:
             "created_at": parsed.get("created_at"),
         }
     except Exception as e:
-        log.error(f"restore_named_snapshot Fehler: {e}")
+        log.error(f"restore_named_snapshot Fehler: {e}", exc_info=True)
         return {"error": str(e)}

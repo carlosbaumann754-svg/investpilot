@@ -55,7 +55,7 @@ def _shard_mode_config():
         shard_id = int(os.environ["INVESTPILOT_OPTIMIZER_SHARD"])
         num_shards = int(os.environ["INVESTPILOT_OPTIMIZER_NUM_SHARDS"])
     except (KeyError, ValueError) as e:
-        log.error(f"SHARD_MODE aktiv aber SHARD/NUM_SHARDS ungueltig: {e}")
+        log.error(f"SHARD_MODE aktiv aber SHARD/NUM_SHARDS ungueltig: {e}", exc_info=True)
         return None
     if shard_id < 0 or shard_id >= num_shards:
         log.error(f"SHARD-Index {shard_id} ausserhalb [0,{num_shards})")
