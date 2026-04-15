@@ -712,18 +712,43 @@ async function loadSettings() {
 
     // Allocation editor
     const editor = document.getElementById('allocation-editor');
+    const status = document.getElementById('allocation-status');
+    const clearBtn = document.getElementById('btn-clear-targets');
     const targets = cfg.portfolio_targets || {};
     editor.innerHTML = '';
-    Object.entries(targets).forEach(([sym, t]) => {
-        editor.innerHTML += `
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
-                <span style="width:60px; font-weight:600">${sym}</span>
-                <input type="number" id="alloc-${sym}" value="${t.allocation_pct}" step="1" min="0" max="100"
-                    style="flex:1; padding:10px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:16px">
-                <span style="color:var(--text-dim)">%</span>
-            </div>
-        `;
+    const count = Object.keys(targets).length;
+    if (count === 0) {
+        if (status) status.innerHTML = '<span style="color:var(--ok,#22c55e);font-weight:600;">v15-Modus aktiv</span> — Bot steuert autonom via Scanner, Kelly-Sizing und Momentum. Keine fixen Targets gesetzt.';
+        if (clearBtn) clearBtn.style.display = 'none';
+    } else {
+        if (status) status.innerHTML = `<span style="color:var(--warn,#f59e0b);font-weight:600;">Legacy-Targets aktiv</span> — ${count} feste Ziel-Gewichte. Der Bot versucht bei Kaltstart/Rebalance auf diese Gewichte zu steuern (nicht reiner v15-Modus).`;
+        if (clearBtn) clearBtn.style.display = 'inline-block';
+        Object.entries(targets).forEach(([sym, t]) => {
+            editor.innerHTML += `
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
+                    <span style="width:60px; font-weight:600">${sym}</span>
+                    <input type="number" id="alloc-${sym}" value="${t.allocation_pct}" step="1" min="0" max="100"
+                        style="flex:1; padding:10px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:16px" readonly>
+                    <span style="color:var(--text-dim)">%</span>
+                </div>
+            `;
+        });
+    }
+}
+
+async function clearPortfolioTargets() {
+    if (!confirm('Portfolio-Targets wirklich leeren?\n\nDer Bot steuert danach nur noch via Scanner/Kelly/Momentum (v15-Modus). Bestehende Positionen bleiben unangetastet, nur der Rebalance-/Kaltstart-Pfad wird deaktiviert.\n\nReversibel: Targets koennen jederzeit neu gesetzt werden.')) return;
+    const res = await apiFetch('/api/config/strategy', {
+        method: 'PUT',
+        body: JSON.stringify({ portfolio_targets: {} }),
     });
+    if (res && res.ok) {
+        showToast('Portfolio-Targets geleert — v15-Modus aktiv');
+        loadSettings();
+    } else {
+        const err = await res?.json();
+        showToast('Fehler: ' + (err?.detail || 'Unbekannt'));
+    }
 }
 
 async function saveSettings(e) {

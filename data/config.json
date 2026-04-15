@@ -30,50 +30,7 @@
       "forex",
       "indices"
     ],
-    "portfolio_targets": {
-      "TSLA": {
-        "name": "Tesla",
-        "instrument_id": 1397,
-        "allocation_pct": 25,
-        "leverage": 2
-      },
-      "NVDA": {
-        "name": "NVIDIA",
-        "instrument_id": 1518,
-        "allocation_pct": 25,
-        "leverage": 2
-      },
-      "AMZN": {
-        "name": "Amazon",
-        "instrument_id": 1026,
-        "allocation_pct": 15,
-        "leverage": 2
-      },
-      "GOOGL": {
-        "name": "Alphabet",
-        "instrument_id": 1002,
-        "allocation_pct": 10,
-        "leverage": 2
-      },
-      "AAPL": {
-        "name": "Apple",
-        "instrument_id": 6408,
-        "allocation_pct": 10,
-        "leverage": 2
-      },
-      "MSFT": {
-        "name": "Microsoft",
-        "instrument_id": 1139,
-        "allocation_pct": 10,
-        "leverage": 2
-      },
-      "QQQ": {
-        "name": "NASDAQ 100 ETF",
-        "instrument_id": 1321,
-        "allocation_pct": 5,
-        "leverage": 1
-      }
-    },
+    "portfolio_targets": {},
     "rebalance_threshold_pct": 2,
     "stop_loss_pct": -2.5,
     "take_profit_pct": 18,

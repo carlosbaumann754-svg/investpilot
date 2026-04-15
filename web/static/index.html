@@ -746,8 +746,10 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Portfolio-Allokation<span class="tip" data-tip="Hier legst du fest, welchen Anteil deines Geldes der Bot auf welche Asset-Klasse verteilen darf (z.B. 40% Aktien, 30% ETFs, 20% Krypto, 10% Cash).">?</span></div>
+            <div class="card-title">Portfolio-Allokation<span class="tip" data-tip="Feste Ziel-Gewichte pro Symbol fuer Kaltstart und Rebalancing. Im v15-Modus (empfohlen) ist dies leer — der Bot steuert dann autonom ueber Scanner/Kelly/Momentum. Fixe Targets greifen nur als Override fuer sehr spezifische Setups.">?</span></div>
+            <div id="allocation-status" class="card-sub" style="margin-bottom:10px;">--</div>
             <div id="allocation-editor"></div>
+            <button type="button" id="btn-clear-targets" class="btn-secondary" style="margin-top:12px;display:none;" onclick="clearPortfolioTargets()">Auf v15-Modus umstellen (Targets leeren)</button>
         </div>
 
         <!-- DISABLED SYMBOLS EDITOR -->

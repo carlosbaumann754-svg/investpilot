@@ -1043,11 +1043,17 @@ async def api_update_strategy(update: StrategyUpdate, user=Depends(require_auth)
                 changes.append(f"Max Trade %: {old} -> {pct}")
 
         if update.portfolio_targets is not None:
-            # Validiere: Summe muss 100% sein
-            total = sum(t.get("allocation_pct", 0) for t in update.portfolio_targets.values())
-            if abs(total - 100) > 1:
-                raise HTTPException(400, f"Allokation muss 100% ergeben (aktuell: {total}%)")
-            dt["portfolio_targets"] = update.portfolio_targets
+            if not update.portfolio_targets:
+                # Leeres Dict = v15-Modus: Bot steuert via Scanner/Kelly/Percent-Sizing
+                old_count = len(dt.get("portfolio_targets", {}) or {})
+                dt["portfolio_targets"] = {}
+                changes.append(f"Portfolio-Targets geleert (war {old_count} Symbole) -> v15-Modus")
+            else:
+                # Validiere: Summe muss 100% sein
+                total = sum(t.get("allocation_pct", 0) for t in update.portfolio_targets.values())
+                if abs(total - 100) > 1:
+                    raise HTTPException(400, f"Allokation muss 100% ergeben (aktuell: {total}%)")
+                dt["portfolio_targets"] = update.portfolio_targets
 
         save_config(config)
 
