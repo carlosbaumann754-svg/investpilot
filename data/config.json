@@ -8,6 +8,9 @@
     "enabled": true,
     "strategy": "aggressive_day_trade",
     "max_single_trade_usd": 3000,
+    "max_single_trade_pct_of_portfolio": 0.15,
+    "max_single_trade_usd_floor": 50,
+    "max_single_trade_usd_hard_cap": null,
     "default_leverage": 2,
     "max_positions": 20,
     "min_scanner_score": 40,
@@ -301,5 +304,20 @@
       "fragile_divergence_pp": 4.0,
       "severe_divergence_pp": 6.0
     }
+  },
+  "portfolio_sizing": {
+    "_comment": "v15: Tier-Map fuer max parallele Positionen, skaliert mit Portfolio-Wert (USD). Keys sind obere Schwellen; Bot waehlt ersten Key >= portfolio_value.",
+    "max_positions_by_capital": {
+      "3000": 6,
+      "10000": 10,
+      "30000": 15,
+      "999999": 20
+    }
+  },
+  "deposit_handling": {
+    "_comment": "v15: Staffel neue Einzahlungen (monatlich 1800 CHF DCA) ueber mehrere Scheduler-Zyklen, um Timing-Risiko zu reduzieren.",
+    "dca_on_new_cash": true,
+    "min_new_cash_trigger_usd": 500,
+    "dca_spread_cycles": 5
   }
 }

@@ -699,9 +699,8 @@ def execute_scanner_trades(client, config, scan_results):
     log.info("=" * 55)
 
     dt_config = config.get("demo_trading", {})
-    max_trade = dt_config.get("max_single_trade_usd", 3000)
-    max_positions = config.get("risk_management", {}).get("max_open_positions",
-                    dt_config.get("max_positions", 20))
+    # v15: max_trade wird pro Trade aus dem Portfolio-Wert resolved (siehe unten),
+    # max_positions skaliert mit Portfolio via Tier-Map.
     min_score = dt_config.get("min_scanner_score", 15)
     stop_loss_pct = dt_config.get("stop_loss_pct", -3)
 
@@ -724,6 +723,33 @@ def execute_scanner_trades(client, config, scan_results):
     positions = portfolio.get("positions", [])
     parsed_positions = [EtoroClient.parse_position(pos) for pos in positions]
     total_value = credit + sum(p["invested"] for p in parsed_positions)
+
+    # v15: Portfolio-Sizing skaliert mit Portfolio-Wert (Tier-Map + Prozent-basiert).
+    if rm:
+        max_positions = rm.resolve_max_positions(total_value, config)
+        max_trade = rm.resolve_max_single_trade_usd(total_value, config)
+    else:
+        max_positions = config.get("risk_management", {}).get(
+            "max_open_positions", dt_config.get("max_positions", 10))
+        max_trade = dt_config.get("max_single_trade_usd", 3000)
+
+    # v15: Cash-Deposit-DCA — staffel neue Einzahlungen ueber N Zyklen,
+    # damit Market-Timing-Risiko reduziert wird. `effective_cash` ist der
+    # fuer diesen Zyklus deploy-bare Betrag; `credit` bleibt unveraendert
+    # fuer Logging und echte Safety-Checks.
+    dca_info = None
+    effective_cash = credit
+    if rm:
+        try:
+            dca_info = rm.detect_cash_deposit(credit, config)
+            effective_cash = dca_info.get("remaining_budget_usd", credit)
+            if dca_info.get("dca_active"):
+                log.info(
+                    f"  Cash-DCA aktiv: ${effective_cash:,.2f}/{credit:,.2f} "
+                    f"verfuegbar ({dca_info.get('remaining_cycles')} Zyklen verbleibend)"
+                )
+        except Exception as e:
+            log.warning(f"Cash-DCA Detection fehlgeschlagen (non-fatal): {e}", exc_info=True)
 
     # Risk Manager: Drawdown-Check
     if rm:
@@ -789,7 +815,11 @@ def execute_scanner_trades(client, config, scan_results):
 
     existing_ids = {p["instrument_id"] for p in parsed_positions}
 
-    log.info(f"  Cash: ${credit:,.2f} | Positionen: {len(positions)}/{max_positions}")
+    log.info(
+        f"  Cash: ${credit:,.2f} (deploy-bar ${effective_cash:,.2f}) | "
+        f"Positionen: {len(positions)}/{max_positions} | "
+        f"max_trade=${max_trade:,.0f}"
+    )
 
     # --- VERKAUFEN: Positionen mit SELL-Signal ---
     sell_candidates = [r for r in scan_results
@@ -927,16 +957,17 @@ def execute_scanner_trades(client, config, scan_results):
 
     available_slots = max_positions - len(positions) + len(
         [t for t in trades_executed if t["action"] == "SCANNER_SELL"])
-    if available_slots <= 0 or credit < 100:
+    if available_slots <= 0 or effective_cash < 100:
         log.info(f"  Keine Slots oder Cash fuer neue Trades")
     else:
         top_buys = buy_candidates[:min(available_slots, 5)]
         if top_buys:
             total_score = sum(max(b["score"], 1) for b in top_buys)
-            budget = min(credit * 0.7, max_trade * len(top_buys))
+            # v15: Budget nutzt effective_cash (bei aktivem DCA gestaffelt).
+            budget = min(effective_cash * 0.7, max_trade * len(top_buys))
 
             for candidate in top_buys:
-                if credit < 100:
+                if effective_cash < 100:
                     break
 
                 symbol = candidate["symbol"]
@@ -991,7 +1022,8 @@ def execute_scanner_trades(client, config, scan_results):
 
                 # Betrag nach Score-Gewichtung
                 weight = max(candidate["score"], 1) / total_score
-                amount = round(min(budget * weight, max_trade, credit * 0.3), 2)
+                # v15: Cap pro Trade via effective_cash (DCA) und max_trade (Prozent-Sizing).
+                amount = round(min(budget * weight, max_trade, effective_cash * 0.3), 2)
 
                 # Market Context Multiplikator
                 amount = round(amount * ctx_multiplier, 2)
@@ -1177,6 +1209,7 @@ def execute_scanner_trades(client, config, scan_results):
                     save_trade(trade_entry)
                     trades_executed.append(trade_entry)
                     credit -= amount
+                    effective_cash -= amount
 
                     # v12: Meta-Labeler Shadow-Log (matched later via position_id)
                     if ml_decision is not None and ml_decision.get("p_win") is not None:
@@ -1200,6 +1233,19 @@ def execute_scanner_trades(client, config, scan_results):
 
                     if al:
                         al.alert_trade_executed(trade_entry)
+
+    # v15: DCA-Budget konsumieren — einmal pro Scheduler-Zyklus dekrementieren.
+    # Der Spent-Betrag summiert alle SCANNER_BUY dieses Zyklus (SELL-Trades
+    # geben Cash frei und zaehlen nicht gegen die Staffel).
+    if rm and dca_info and dca_info.get("dca_active"):
+        spent_this_cycle = sum(
+            t.get("amount_usd", 0) for t in trades_executed
+            if t.get("action") == "SCANNER_BUY"
+        )
+        try:
+            rm.consume_dca_budget(spent_this_cycle)
+        except Exception as e:
+            log.warning(f"DCA-Budget Update fehlgeschlagen: {e}", exc_info=True)
 
     log.info(f"\n  Scanner-Trades: {len(trades_executed)} ausgefuehrt")
     return trades_executed

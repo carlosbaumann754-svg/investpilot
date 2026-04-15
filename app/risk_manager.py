@@ -13,6 +13,172 @@ from app.config_manager import load_config, load_json, save_json
 log = logging.getLogger("RiskManager")
 
 RISK_STATE_FILE = "risk_state.json"
+CASH_DCA_STATE_FILE = "cash_dca_state.json"
+
+
+# ============================================================
+# v15: PORTFOLIO-PROZENT-BASIERTE CAPS (Live-Gang-Prep, Auto-Skalierung)
+# ============================================================
+# Ersatz fuer feste max_single_trade_usd=5000 (die bei 2000 CHF Startkapital
+# gar nicht greift). Siehe CLAUDE.md "Live-Gang Strategie".
+
+def resolve_max_single_trade_usd(portfolio_value, config):
+    """Berechnet effektives Single-Trade-USD-Cap.
+
+    Prioritaet:
+    1. Prozent-basiert (neu): `demo_trading.max_single_trade_pct_of_portfolio`
+       * portfolio_value, mit Floor und optionalem Hard-Cap.
+    2. Fix-USD (legacy): `demo_trading.max_single_trade_usd` — wird ignoriert
+       wenn prozent-basiert gesetzt ist.
+
+    Floor: `demo_trading.max_single_trade_usd_floor` (default 50)
+       -> Min-Order-Puffer fuer eToro.
+    Hard-Cap: `demo_trading.max_single_trade_usd_hard_cap` (default None)
+       -> absolute Obergrenze, None = kein Cap.
+    """
+    dt = (config or {}).get("demo_trading", {}) or {}
+    pct = dt.get("max_single_trade_pct_of_portfolio")
+    if pct is not None and portfolio_value > 0:
+        try:
+            floor = float(dt.get("max_single_trade_usd_floor", 50))
+            cap_raw = dt.get("max_single_trade_usd_hard_cap")
+            cap = float(cap_raw) if cap_raw is not None else None
+            value = max(float(pct) * float(portfolio_value), floor)
+            if cap is not None:
+                value = min(value, cap)
+            return round(value, 2)
+        except (TypeError, ValueError):
+            log.warning("resolve_max_single_trade_usd: pct-Config ungueltig, fallback auf fix")
+
+    # Legacy-Fallback
+    legacy = dt.get("max_single_trade_usd", 5000)
+    try:
+        return float(legacy)
+    except (TypeError, ValueError):
+        return 5000.0
+
+
+def resolve_max_positions(portfolio_value, config):
+    """Gibt die maximal erlaubte Anzahl paralleler Positionen zurueck,
+    basierend auf Portfolio-Wert (Tier-Map).
+
+    Config:
+      portfolio_sizing.max_positions_by_capital = {"3000":6, "10000":10, ...}
+      Die Keys sind AUFSTEIGEND sortierte Portfolio-Schwellen (USD).
+      Returnt den Value des ERSTEN Keys >= portfolio_value.
+
+    Fallback: `demo_trading.max_positions` (legacy) -> 10
+    """
+    ps = (config or {}).get("portfolio_sizing", {}) or {}
+    tiers = ps.get("max_positions_by_capital")
+    if tiers:
+        try:
+            # Sort keys numerisch
+            sorted_tiers = sorted(((float(k), int(v)) for k, v in tiers.items()),
+                                  key=lambda x: x[0])
+            for threshold, max_pos in sorted_tiers:
+                if portfolio_value <= threshold:
+                    return max_pos
+            # Ueber allen Schwellen -> letztes Limit
+            return sorted_tiers[-1][1]
+        except (TypeError, ValueError) as e:
+            log.warning(f"resolve_max_positions: Tier-Map ungueltig ({e}), fallback legacy")
+
+    # Legacy-Fallback
+    dt = (config or {}).get("demo_trading", {}) or {}
+    return int(dt.get("max_positions", 10))
+
+
+# ============================================================
+# v15: CASH-DEPOSIT-DCA (Staffel bei neuen Einzahlungen)
+# ============================================================
+
+def detect_cash_deposit(current_cash, config):
+    """Detect monatliche Einzahlung und initiiere DCA-Staffel.
+
+    Liest den letzten bekannten Cash-Stand aus cash_dca_state.json. Wenn
+    der neue Stand > (alter Stand + min_new_cash_trigger_usd), wird ein
+    DCA-Plan aktiviert: der neue Cash wird ueber N Scheduler-Zyklen
+    verteilt deployed.
+
+    Returns: dict mit
+      - `dca_active` (bool)
+      - `remaining_budget_usd` (float) — verfuegbar im aktuellen Zyklus
+      - `remaining_cycles` (int)
+      - `plan_created_at` (iso)
+    """
+    dh = (config or {}).get("deposit_handling", {}) or {}
+    if not dh.get("dca_on_new_cash", False):
+        return {"dca_active": False, "remaining_budget_usd": current_cash,
+                "remaining_cycles": 0}
+
+    min_trigger = float(dh.get("min_new_cash_trigger_usd", 500))
+    spread_cycles = int(dh.get("dca_spread_cycles", 5))
+
+    state = load_json(CASH_DCA_STATE_FILE) or {}
+    prev_cash = float(state.get("last_seen_cash_usd", current_cash))
+    active_plan = state.get("active_plan")
+
+    # Neuer Cash-Anstieg erkannt?
+    delta = current_cash - prev_cash
+    if delta >= min_trigger and (not active_plan or active_plan.get("consumed_usd", 0) >= active_plan.get("total_deposit_usd", 0)):
+        # Frischer DCA-Plan
+        active_plan = {
+            "total_deposit_usd": delta,
+            "consumed_usd": 0.0,
+            "remaining_cycles": spread_cycles,
+            "per_cycle_usd": delta / spread_cycles,
+            "created_at": datetime.now().isoformat(),
+        }
+        log.info(
+            f"  Cash-DCA: Einzahlung +${delta:,.2f} detected -> Staffel ueber "
+            f"{spread_cycles} Zyklen (${active_plan['per_cycle_usd']:,.2f}/Zyklus)"
+        )
+
+    state["last_seen_cash_usd"] = current_cash
+    state["active_plan"] = active_plan
+    try:
+        save_json(CASH_DCA_STATE_FILE, state)
+    except Exception as e:
+        log.warning(f"Cash-DCA state save fehlgeschlagen: {e}", exc_info=True)
+
+    if not active_plan or active_plan.get("remaining_cycles", 0) <= 0:
+        return {"dca_active": False, "remaining_budget_usd": current_cash,
+                "remaining_cycles": 0}
+
+    # Budget im aktuellen Zyklus: per_cycle_usd + bereits bestehender Cash-Pool
+    # minus bereits konsumierten Betrag. Konservativ: nur per_cycle_usd freigeben.
+    per_cycle = float(active_plan.get("per_cycle_usd", 0))
+    # Aber mindestens soviel wie "alter Cash-Stand vor Einzahlung" (der war
+    # schon vollstaendig deployable, den darf die DCA-Logik nicht blockieren).
+    pre_deposit_cash = current_cash - (active_plan["total_deposit_usd"] - active_plan.get("consumed_usd", 0))
+    pre_deposit_cash = max(pre_deposit_cash, 0)
+    available = pre_deposit_cash + per_cycle
+
+    return {
+        "dca_active": True,
+        "remaining_budget_usd": round(min(available, current_cash), 2),
+        "remaining_cycles": int(active_plan.get("remaining_cycles", 0)),
+        "plan_created_at": active_plan.get("created_at"),
+        "per_cycle_usd": round(per_cycle, 2),
+    }
+
+
+def consume_dca_budget(spent_usd):
+    """Nach einem Zyklus: Markiert den ausgegebenen Betrag als konsumiert
+    und dekrementiert remaining_cycles."""
+    state = load_json(CASH_DCA_STATE_FILE) or {}
+    plan = state.get("active_plan")
+    if not plan:
+        return
+    plan["consumed_usd"] = round(float(plan.get("consumed_usd", 0)) + float(spent_usd), 2)
+    plan["remaining_cycles"] = max(0, int(plan.get("remaining_cycles", 0)) - 1)
+    plan["last_consumed_at"] = datetime.now().isoformat()
+    state["active_plan"] = plan
+    try:
+        save_json(CASH_DCA_STATE_FILE, state)
+    except Exception as e:
+        log.warning(f"Cash-DCA consume save fehlgeschlagen: {e}", exc_info=True)
 
 
 def _load_risk_state():
@@ -149,7 +315,8 @@ def calculate_position_size(portfolio_value, stop_loss_pct, config=None):
     risk_cfg = config.get("risk_management", {})
 
     risk_per_trade_pct = risk_cfg.get("risk_per_trade_pct", 2.0)
-    max_single_trade = config.get("demo_trading", {}).get("max_single_trade_usd", 5000)
+    # v15: Prozent-basierter Cap statt fix-USD. Skaliert mit Portfolio-Wert.
+    max_single_trade = resolve_max_single_trade_usd(portfolio_value, config)
 
     if stop_loss_pct == 0:
         stop_loss_pct = -3  # Fallback
@@ -267,7 +434,8 @@ def calculate_kelly_position_size(portfolio_value, stop_loss_pct, signal_score,
         fraction *= score_scale
 
     position_size = portfolio_value * fraction
-    max_single = config.get("demo_trading", {}).get("max_single_trade_usd", 5000)
+    # v15: Prozent-basierter Cap (skaliert automatisch mit Portfolio-Wert)
+    max_single = resolve_max_single_trade_usd(portfolio_value, config)
     position_size = min(position_size, max_single)
 
     max_pos_pct = config.get("risk_management", {}).get("max_single_position_pct", 10)
