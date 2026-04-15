@@ -77,8 +77,8 @@
             <div class="card-sub" id="benchmark-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
-        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) -->
-        <div class="card">
+        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) — hidden on dashboard, kept in DOM so loader code & IDs stay valid; redundant with Gewinn/Verlust chart -->
+        <div class="card" style="display:none;">
             <div class="card-title">Equity-Verlauf (monatlich)<span class="tip" data-tip="Zeigt deine Portfolio-Performance Monat fuer Monat im direkten Vergleich zu SPY, QQQ und 60/40. Der Bot speichert taeglich nach Boersenschluss einen Schnappschuss vom Portfolio-Wert und allen Benchmark-Kursen, daraus wird die Tabelle gebaut. Sinnvoll wird das ab ~30 gesammelten Tagen (erste Monatszeile) und richtig aussagekraeftig ab 90 Tagen.">?</span></div>
             <div id="equity-history-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">Daten werden noch gesammelt...</div>
             <div id="equity-history-table-wrap" style="overflow-x:auto;">
@@ -169,10 +169,11 @@
             </div>
         </div>
 
-        <!-- v12 STATUS -->
+        <!-- v12 STATUS (collapsible — rarely needed at a glance post go-live) -->
         <div class="card" id="v12-card">
-            <div class="card-title">v12 Feature Status<span class="tip" data-tip="Uebersicht ueber die neuen Schutz- und Optimierungsmechanismen: Universum-Filter, Kelly-Positionsgroesse, Meta-Labeler, Time-Stop, VIX-Schutz, Hedging und Regime-Strategien. Gruen = aktiv, Grau = aus.">?</span></div>
-            <div id="v12-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">--</div>
+            <details>
+            <summary style="cursor:pointer;list-style:none;"><div class="card-title" style="display:inline-block;">v12 Feature Status<span class="tip" data-tip="Uebersicht ueber die neuen Schutz- und Optimierungsmechanismen: Universum-Filter, Kelly-Positionsgroesse, Meta-Labeler, Time-Stop, VIX-Schutz, Hedging und Regime-Strategien. Gruen = aktiv, Grau = aus.">?</span> <span style="font-size:11px;color:var(--muted);font-weight:400;">(klicken zum Ausklappen)</span></div></summary>
+            <div id="v12-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0;">--</div>
             <div class="grid-2" id="v12-details" style="gap:8px;">
                 <div class="regime-detail-item">
                     <span class="card-sub">Universum<span class="tip" data-tip="Wie viele Symbole der Bot aktuell ueberhaupt scannen darf. 'Aktiv / Gesamt': von allen bekannten Symbolen sind einige per Filter ausgeschlossen (z.B. weil sie im Backtest schlecht liefen).">?</span></span>
@@ -207,6 +208,7 @@
                     <span id="v12-tsl-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
             </div>
+            </details>
         </div>
 
         <!-- UNIVERSE HEALTH -->
