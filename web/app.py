@@ -1082,6 +1082,87 @@ async def api_update_kelly(update: KellyUpdate, user=Depends(require_auth)):
     return {"status": "ok", "old": old, "new": update.max_fraction}
 
 
+@app.post("/api/config/v15-sync")
+async def api_sync_v15_config(user=Depends(require_auth)):
+    """Synchronisiert die v15-Sizing/DCA/Tier-Keys aus der Git-Seed-Config
+    in die Live-Config auf /data/config.json.
+
+    Hintergrund (Render Persistent Disk Gotcha): Beim Deploy wird die
+    Git-Version von config.json nicht auf die persistente /data-Kopie
+    kopiert (idempotent). Neue Config-Keys aus dem Repo greifen daher erst
+    nach manuellem Sync. Dieser Endpoint patcht nur die v15-Keys und
+    persistiert via save_config().
+    """
+    try:
+        import json as _json
+        from pathlib import Path as _P
+
+        # Lade Git-Seed: Repo-Root/data/config.json (nicht /data/!)
+        # Render hat das Repo-File unter /app/data/config.json gemounted
+        seed_paths = [
+            _P("/app/data/config.json"),
+            _P(__file__).parent.parent / "data" / "config.json",
+        ]
+        seed = None
+        for p in seed_paths:
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    seed = _json.load(f)
+                break
+        if not seed:
+            raise HTTPException(status_code=500, detail="Seed-Config nicht gefunden")
+
+        async with _CONFIG_WRITE_LOCK:
+            live = load_config() or {}
+
+            applied = {}
+
+            # demo_trading: pct/floor/cap Keys
+            dt_seed = seed.get("demo_trading", {}) or {}
+            dt_live = live.setdefault("demo_trading", {})
+            for key in ("max_single_trade_pct_of_portfolio",
+                        "max_single_trade_usd_floor",
+                        "max_single_trade_usd_hard_cap"):
+                if key in dt_seed:
+                    old = dt_live.get(key, "MISSING")
+                    dt_live[key] = dt_seed[key]
+                    applied[f"demo_trading.{key}"] = {"old": old, "new": dt_seed[key]}
+
+            # portfolio_sizing: Tier-Map
+            ps_seed = seed.get("portfolio_sizing")
+            if ps_seed is not None:
+                old = live.get("portfolio_sizing", "MISSING")
+                live["portfolio_sizing"] = ps_seed
+                applied["portfolio_sizing"] = {"old": old, "new": ps_seed}
+
+            # deposit_handling: DCA-Konfig
+            dh_seed = seed.get("deposit_handling")
+            if dh_seed is not None:
+                old = live.get("deposit_handling", "MISSING")
+                live["deposit_handling"] = dh_seed
+                applied["deposit_handling"] = {"old": old, "new": dh_seed}
+
+            # _live_freeze: Audit-Block uebernehmen
+            if "_live_freeze" in seed:
+                live["_live_freeze"] = seed["_live_freeze"]
+                applied["_live_freeze"] = "synced"
+
+            save_config(live)
+
+        try:
+            from web.security import log_audit
+            await log_audit(user, "CONFIG_CHANGE",
+                            f"v15-sync: {len(applied)} Keys synchronisiert")
+        except Exception:
+            pass
+
+        return {"status": "ok", "applied": applied, "count": len(applied)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/trading/status")
 async def api_trading_status(user=Depends(require_auth)):
     """Trading-Status: laeuft es? Letzter Lauf?"""
