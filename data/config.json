@@ -1,4 +1,11 @@
 {
+  "_live_freeze": {
+    "frozen_at": "2026-04-15",
+    "target_go_live": "2026-04-27",
+    "version": "v15",
+    "note": "Config eingefroren nach Sensitivity-Tests (Baseline + A1 Score=35 + A2 Sizing=0.12). Alle Hard-Gates bestanden: Sharpe=3.65, MaxDD=2.67%, WinRate=55.1%, PF=2.42, Trades=1329. A1 bestaetigt Robustheit gegen Score-Variation (kein Overfitting). KEINE Parameter-Aenderungen bis Live-Gang ohne erneuten Backtest-Run.",
+    "validated_runs": ["24452478983", "24453011416", "24453213301"]
+  },
   "etoro": {
     "username": "carlosbaumann777",
     "base_url": "https://public-api.etoro.com/api/v1",
