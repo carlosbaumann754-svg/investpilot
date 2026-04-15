@@ -101,6 +101,28 @@
             <div class="card-sub" id="equity-history-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
+        <!-- Exit-Forecast: Abstand jeder offenen Position zum naechsten Exit-Trigger -->
+        <div class="card">
+            <div class="card-title">Exit-Forecast<span class="tip" data-tip="Fuer jede offene Position: Wie weit ist sie vom naechsten Exit entfernt? Der Bot hat 7 moegliche Ausstiegs-Typen (Stop-Loss, Trailing-SL, drei TP-Tranchen, Final-TP, Time-Stop). Diese Tabelle zeigt fuer jede Position den naechsten, nahesten Trigger und wie viele Prozent fehlen. Beantwortet die Frage: Warum schliesst der Bot gerade nichts?">?</span></div>
+            <div id="exit-forecast-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">--</div>
+            <div id="exit-forecast-table-wrap" style="overflow-x:auto;">
+                <table class="data-table" id="exit-forecast-table" style="display:none;">
+                    <thead>
+                        <tr>
+                            <th>Asset<span class="tip" data-tip="Instrument-ID bei eToro. Gleiche ID = gleiches Wertpapier (mehrere Positionen bei Nachkaeufen).">?</span></th>
+                            <th>Alter<span class="tip" data-tip="Tage seit Oeffnung der Position. Wichtig fuer den Time-Stop (ab 10 Tagen relevant).">?</span></th>
+                            <th>PnL %<span class="tip" data-tip="Aktuelle Rendite der Position in Prozent. Grundlage fuer fast alle Trigger-Berechnungen.">?</span></th>
+                            <th>Naechster Trigger<span class="tip" data-tip="Der Exit-Typ, dessen Ausloesung am naechsten ist. Pfeil zeigt die Richtung: Hoch = Kurs muss noch steigen (Take-Profit), Runter = Kurs muesste fallen (Stop-Loss oder Trailing).">?</span></th>
+                            <th>Abstand<span class="tip" data-tip="Wie viel Prozent fehlen bis der Trigger feuert. Je kleiner, desto waehrscheinlicher passiert bald was. '0.1%' heisst: ein winziger Move reicht.">?</span></th>
+                            <th>Alle Trigger<span class="tip" data-tip="Kompletter Exit-Plan fuer diese Position. Jeder Trigger mit Abstand in %. Grau = bereits durchlaufen (z.B. TP-1 bei einer Position mit +5% PnL).">?</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="exit-forecast-tbody"></tbody>
+                </table>
+            </div>
+            <div class="card-sub" id="exit-forecast-meta" style="margin-top:8px;font-size:11px;">--</div>
+        </div>
+
         <div class="grid-2">
             <div class="card">
                 <div class="card-title">Brain Status<span class="tip" data-tip="Was der Bot gerade ueber den Markt denkt: Bull (steigend), Bear (fallend) oder Sideways (seitwaerts). Daraus leitet er ab, ob er aggressiv kaufen oder vorsichtig sein soll.">?</span></div>

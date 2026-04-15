@@ -822,6 +822,42 @@ Dashboard-Open
 - Drawdown-Vergleich Bot vs Benchmarks
 - Sharpe/Vola-Vergleich pro Monat
 
+## v14 — Exit-Forecast Card (2026-04-15)
+
+**Hintergrund:** Nach der 0-Closed-Trades-Diagnose (5 offene Positionen, alle
+zwischen +2.3% und +3.9%) war klar: Keine Position hatte einen Trigger
+ausgeloest — aber vom Dashboard aus war nicht sichtbar, WIE nah/fern jeder
+Trigger war. Diese Card macht das transparent.
+
+### Backend (`web/app.py`)
+- `GET /api/exit-forecast` — pro offener Position alle 7 Trigger + naechster
+- Helper `_compute_exit_forecast(pos, config, trailing_state)` berechnet:
+  - **SL** (hard, -2.5% aus `stocks.stop_loss_pct`)
+  - **Trailing-SL** (aktiv ab +0.8%, -1.8% Trail vom Peak; Distanz aus
+    `trailing_sl_state.json` Pro-Position-SL-Level vs. current_price)
+  - **TP-1/2/3** (Tranchen aus `leverage.tp_tranches`: +4/+8/+15%,
+    `active=false` wenn PnL >= target = bereits durchgelaufen)
+  - **TP-final** (+18% aus `stocks.take_profit_pct`)
+  - **Time-Stop** (ab 10d + |PnL|<0.5% — zeitbasiert, nicht preis-basiert;
+    zeigt `days_until` + `eligible_now`)
+- `next_trigger` = kleinstes positives `distance_pct` aller aktiven Trigger
+- Response inkl. `config_summary` (aktuelle Parameter fuers Meta-Label)
+- Sortierung: naechster Trigger zuerst (Dringlichkeits-Ranking)
+
+### Frontend (`index.html` + `app.js`)
+- Neue Card unter "Equity-Verlauf" mit Tabelle:
+  Asset | Alter | PnL % | Naechster Trigger (Pfeil↑/↓/⏱ + Typ) | Abstand | Alle Trigger
+- **Tooltip auf jeder Header-Spalte** (User-Praeferenz)
+- "Alle Trigger"-Spalte zeigt kompakt alle 7 Ausstiege mit Distanz,
+  durchlaufene Tranchen durchgestrichen grau
+- Meta-Zeile: komplette Exit-Config auf einen Blick
+
+### Warum das nuetzlich ist
+Beantwortet in einem Blick: "Warum schliesst der Bot gerade nichts?" —
+sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
+noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
+senken?) sind datengetrieben statt aus dem Bauch.
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`

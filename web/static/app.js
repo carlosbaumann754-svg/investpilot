@@ -215,6 +215,95 @@ async function loadEquityHistory() {
     }
 }
 
+// === EXIT FORECAST (Abstand jeder offenen Position zum naechsten Exit) ===
+function renderExitForecast(data) {
+    const status = document.getElementById('exit-forecast-status');
+    const table = document.getElementById('exit-forecast-table');
+    const tbody = document.getElementById('exit-forecast-tbody');
+    const meta = document.getElementById('exit-forecast-meta');
+    if (!status || !tbody) return;
+
+    if (!data || data.error) {
+        status.textContent = 'Exit-Forecast nicht verfuegbar' + (data?.error ? `: ${data.error}` : '');
+        if (table) table.style.display = 'none';
+        if (meta) meta.textContent = '';
+        return;
+    }
+
+    const positions = Array.isArray(data.positions) ? data.positions : [];
+    if (positions.length === 0) {
+        status.textContent = 'Keine offenen Positionen.';
+        if (table) table.style.display = 'none';
+        if (meta) meta.textContent = '';
+        return;
+    }
+
+    status.innerHTML = `<strong>${positions.length}</strong> offene Position(en), sortiert nach Dringlichkeit (naechster Trigger zuerst).`;
+    if (table) table.style.display = '';
+
+    const arrow = (dir) => dir === 'up' ? '↑' : (dir === 'down' ? '↓' : '⏱');
+    const distFmt = (v) => v == null ? '--' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+
+    tbody.innerHTML = positions.map(p => {
+        const nt = p.next_trigger;
+        const ntLabel = nt ? `${arrow(nt.direction)} ${nt.type}` : '--';
+        const ntDist = nt ? distFmt(nt.distance_pct) : '--';
+        const pnlCls = (p.pnl_pct || 0) >= 0 ? 'positive' : 'negative';
+
+        // Alle Trigger als kompakte Liste
+        const allTriggers = (p.triggers || []).map(t => {
+            let txt;
+            if (t.type === 'Time-Stop') {
+                if (t.eligible_now) {
+                    txt = `${t.type}: <strong>JETZT</strong>`;
+                } else if (t.days_until != null) {
+                    txt = `${t.type}: ${t.days_until}d${t.in_pnl_band ? ' (im PnL-Band)' : ''}`;
+                } else {
+                    txt = `${t.type}: --`;
+                }
+            } else if (t.distance_pct == null) {
+                txt = `${t.type}: --`;
+            } else if (!t.active) {
+                txt = `<span style="opacity:0.4;text-decoration:line-through;">${t.type}</span>`;
+            } else {
+                const dCls = t.direction === 'up' ? 'positive' : (t.direction === 'down' ? 'negative' : '');
+                txt = `${t.type}: <span class="${dCls}">${distFmt(t.distance_pct)}</span>`;
+            }
+            return txt;
+        }).join(' · ');
+
+        const ageTxt = p.age_days != null ? `${p.age_days.toFixed(1)}d` : '--';
+
+        return `
+            <tr>
+                <td>${p.instrument_id || '?'}</td>
+                <td>${ageTxt}</td>
+                <td class="${pnlCls}">${distFmt(p.pnl_pct)}</td>
+                <td><strong>${ntLabel}</strong></td>
+                <td><strong>${ntDist}</strong></td>
+                <td style="font-size:11px;line-height:1.5;">${allTriggers}</td>
+            </tr>
+        `;
+    }).join('');
+
+    if (meta && data.config_summary) {
+        const c = data.config_summary;
+        const tranches = (c.tp_tranches || []).map(t => `+${t.profit_target_pct}%`).join(', ');
+        meta.textContent = `Config: SL ${c.sl_pct}% | TP-Final +${c.tp_pct}% | Trailing -${c.trail_pct}% ab +${c.trail_activation}% | Tranchen: ${tranches} | Time-Stop ${c.time_stop?.max_days_stale}d`;
+    }
+}
+
+async function loadExitForecast() {
+    try {
+        const res = await apiFetch('/api/exit-forecast');
+        if (!res) return;
+        const data = await res.json();
+        renderExitForecast(data);
+    } catch (e) {
+        console.error('exit-forecast load:', e);
+    }
+}
+
 // === P&L MULTI-PERIOD ===
 function renderPnlPeriods(data) {
     const grid = document.getElementById('pnl-periods-grid');
@@ -288,6 +377,10 @@ async function loadDashboard() {
         // Equity-History Monatstabelle (Bot vs. Benchmarks im Zeitverlauf)
         // Eigener Roundtrip — laeuft non-blocking, falls Endpoint langsam ist.
         loadEquityHistory();
+
+        // Exit-Forecast (Abstand jeder offenen Position zum naechsten Trigger)
+        // Eigener Roundtrip — hoelt Portfolio neu fuer Trailing-State-Berechnung.
+        loadExitForecast();
 
         if (portfolioRes) {
             const p = await portfolioRes.json();

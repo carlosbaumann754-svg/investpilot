@@ -326,6 +326,224 @@ async def api_portfolio(user=Depends(require_auth)):
 
 
 # ============================================================
+# EXIT-FORECAST — Wie nah ist jede offene Position an ihrem nächsten Trigger?
+# ============================================================
+# Zeigt für jede offene Position: Abstand (in %) zum nächstmöglichen Exit
+# (SL, Trailing-SL, nächste TP-Tranche, Final-TP, Time-Stop).
+#
+# Warum: Nach der 0-Closed-Trades-Analyse (2026-04-15) war unklar ob exits
+# "nah" oder "fern" sind. Dieser Endpoint macht das transparent.
+
+EXIT_TRIGGER_PRIORITY = ["SL", "Trailing-SL", "TP-1", "TP-2", "TP-3", "TP-final", "Time-Stop"]
+
+
+def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -> dict:
+    """Berechne für eine Position alle Trigger-Distanzen und den nächsten Exit.
+
+    Args:
+        position: Geparste Position (aus EtoroClient.parse_position)
+        config: Volles Config-Dict
+        trailing_state: trailing_sl_state.json Inhalt (persistierter SL-Level je pos_id)
+
+    Returns:
+        dict mit triggers-Liste + next_trigger
+    """
+    pnl_pct = position.get("pnl_pct") or 0
+    pid = str(position.get("position_id", ""))
+    current_price = position.get("current_price") or 0
+    entry_price = position.get("entry_price") or 0
+    open_time = position.get("open_time")
+
+    # Config-Parameter
+    stocks_cfg = config.get("stocks", {})
+    lev_cfg = config.get("leverage", {})
+    ts_cfg = config.get("time_stop", {})
+
+    sl_pct = stocks_cfg.get("stop_loss_pct", -2.5)
+    tp_final_pct = stocks_cfg.get("take_profit_pct", 18)
+    trail_enabled = lev_cfg.get("trailing_sl_enabled", True)
+    trail_activation = lev_cfg.get("trailing_sl_activation_pct", 0.8)
+    trail_pct = lev_cfg.get("trailing_sl_pct", 1.8)
+    tp_tranches = lev_cfg.get("tp_tranches", [])
+    ts_enabled = ts_cfg.get("enabled", True)
+    ts_max_days = ts_cfg.get("max_days_stale", 10)
+    ts_min_days = ts_cfg.get("min_days_open", 2)
+    ts_pnl_threshold = ts_cfg.get("stale_pnl_threshold_pct", 0.5)
+
+    # Age in days
+    age_days = None
+    if open_time:
+        try:
+            from datetime import datetime, timezone
+            # Normalize ISO format (eToro liefert manchmal mit Z, manchmal mit +00:00)
+            ts_clean = open_time.replace("Z", "+00:00") if isinstance(open_time, str) else None
+            if ts_clean:
+                dt = datetime.fromisoformat(ts_clean)
+                now = datetime.now(timezone.utc)
+                age_days = (now - dt).total_seconds() / 86400
+        except Exception:
+            age_days = None
+
+    triggers = []
+
+    # --- SL (hard, -2.5%) ---
+    triggers.append({
+        "type": "SL",
+        "label": f"Stop-Loss ({sl_pct:+.1f}%)",
+        "target_pct": sl_pct,
+        "distance_pct": round(pnl_pct - sl_pct, 2),  # wie viel darf noch fallen
+        "active": True,
+        "direction": "down",
+    })
+
+    # --- Trailing-SL ---
+    trail_active = trail_enabled and pnl_pct >= trail_activation
+    trail_distance = None
+    trail_sl_price = None
+    if trail_active and pid in trailing_state:
+        trail_sl_price = trailing_state[pid].get("sl_level")
+        if trail_sl_price and current_price:
+            # Distanz in % vom aktuellen Preis bis SL-Level
+            trail_distance = round((current_price - trail_sl_price) / current_price * 100, 2)
+    elif trail_active:
+        # Fallback: wenn kein State gespeichert, worst-case 1.8%
+        trail_distance = trail_pct
+    triggers.append({
+        "type": "Trailing-SL",
+        "label": f"Trailing-SL (-{trail_pct:.1f}% vom Peak)",
+        "target_pct": None,
+        "distance_pct": trail_distance,
+        "active": trail_active,
+        "direction": "down",
+        "sl_price": trail_sl_price,
+        "activation_pct": trail_activation,
+    })
+
+    # --- TP-Tranchen (fortlaufend bis +18%) ---
+    # Wir wissen nicht welche schon gefeuert haben — prüfen per PnL-Schwelle.
+    # Wenn pnl_pct >= tp_target, gilt Tranche als "durchgelaufen" (sie hat
+    # geschlossen oder wäre gerade am schliessen).
+    for i, tr in enumerate(tp_tranches, start=1):
+        target = tr.get("profit_target_pct", 0)
+        already_hit = pnl_pct >= target
+        triggers.append({
+            "type": f"TP-{i}",
+            "label": f"TP-{i} ({target:+.0f}%, {tr.get('pct_of_position', 0)}% schliessen)",
+            "target_pct": target,
+            "distance_pct": round(target - pnl_pct, 2) if not already_hit else 0,
+            "active": not already_hit,
+            "direction": "up",
+        })
+
+    # --- Final TP (+18%) ---
+    triggers.append({
+        "type": "TP-final",
+        "label": f"Take-Profit ({tp_final_pct:+.0f}%)",
+        "target_pct": tp_final_pct,
+        "distance_pct": round(tp_final_pct - pnl_pct, 2),
+        "active": pnl_pct < tp_final_pct,
+        "direction": "up",
+    })
+
+    # --- Time-Stop ---
+    ts_active = ts_enabled and age_days is not None and age_days >= ts_min_days
+    ts_eligible_now = (
+        ts_active
+        and age_days >= ts_max_days
+        and abs(pnl_pct) < ts_pnl_threshold
+    )
+    days_until_ts = None
+    if ts_enabled and age_days is not None:
+        days_until_ts = max(0, round(ts_max_days - age_days, 1))
+    triggers.append({
+        "type": "Time-Stop",
+        "label": f"Time-Stop ({ts_max_days}d + |PnL|<{ts_pnl_threshold}%)",
+        "target_pct": None,
+        "distance_pct": None,  # zeitbasiert, nicht preis-basiert
+        "active": ts_active,
+        "days_until": days_until_ts,
+        "eligible_now": ts_eligible_now,
+        "in_pnl_band": abs(pnl_pct) < ts_pnl_threshold,
+        "direction": "time",
+    })
+
+    # --- Nächsten Trigger bestimmen (kleinste positive distance_pct) ---
+    candidates = [
+        t for t in triggers
+        if t.get("active")
+        and t.get("distance_pct") is not None
+        and t["distance_pct"] >= 0
+    ]
+    next_trigger = None
+    if candidates:
+        next_trigger = min(candidates, key=lambda t: t["distance_pct"])
+        next_trigger = {
+            "type": next_trigger["type"],
+            "label": next_trigger["label"],
+            "distance_pct": next_trigger["distance_pct"],
+            "direction": next_trigger["direction"],
+        }
+
+    return {
+        "position_id": position.get("position_id"),
+        "instrument_id": position.get("instrument_id"),
+        "pnl_pct": pnl_pct,
+        "invested": position.get("invested"),
+        "age_days": round(age_days, 2) if age_days is not None else None,
+        "triggers": triggers,
+        "next_trigger": next_trigger,
+    }
+
+
+@app.get("/api/exit-forecast")
+async def api_exit_forecast(user=Depends(require_auth)):
+    """Für jede offene Position: Abstand zum nächsten Exit-Trigger."""
+    try:
+        config = load_config()
+        client = EtoroClient(config)
+        if not client.configured:
+            return {"error": "eToro nicht konfiguriert", "positions": []}
+
+        portfolio = client.get_portfolio()
+        if not portfolio:
+            return {"error": "Portfolio nicht verfuegbar", "positions": []}
+
+        parsed = [EtoroClient.parse_position(p) for p in portfolio.get("positions", [])]
+
+        # Trailing-SL-State einmalig laden
+        try:
+            from app.leverage_manager import _load_trailing_state
+            trailing_state = _load_trailing_state()
+        except Exception as e:
+            log.warning(f"Trailing-State laden fehlgeschlagen: {e}")
+            trailing_state = {}
+
+        forecasts = [_compute_exit_forecast(p, config, trailing_state) for p in parsed]
+
+        # Nach Dringlichkeit sortieren (kleinste distance_pct zuerst)
+        def _sort_key(f):
+            nt = f.get("next_trigger")
+            return nt["distance_pct"] if nt else 999
+        forecasts.sort(key=_sort_key)
+
+        return {
+            "count": len(forecasts),
+            "positions": forecasts,
+            "config_summary": {
+                "sl_pct": config.get("stocks", {}).get("stop_loss_pct"),
+                "tp_pct": config.get("stocks", {}).get("take_profit_pct"),
+                "trail_activation": config.get("leverage", {}).get("trailing_sl_activation_pct"),
+                "trail_pct": config.get("leverage", {}).get("trailing_sl_pct"),
+                "tp_tranches": config.get("leverage", {}).get("tp_tranches", []),
+                "time_stop": config.get("time_stop", {}),
+            },
+        }
+    except Exception as e:
+        log.error(f"Exit-Forecast API Error: {e}")
+        return {"error": str(e), "positions": []}
+
+
+# ============================================================
 # BENCHMARK (Multi: SPY, QQQ, AGG + 60/40-Mix) — In-Memory Cache 1h TTL
 # ============================================================
 # Pro Symbol ein eigener Cache-Slot, damit ein Fail (z.B. AGG) nicht den
