@@ -1810,9 +1810,59 @@ def run_full_backtest(config=None, symbols=None, years=5,
 
     # 6. Save
     save_json("backtest_results.json", results)
+
+    # v15: Append kompakten Run in backtest_history.json (Trend-Analyse,
+    # Regression-Detection vor Live-Gang). Nur Kernmetriken, keine Equity-
+    # Kurve/Trades (sonst wird die Datei riesig).
+    try:
+        _append_backtest_history(results, all_metrics, wf, config, years)
+    except Exception as e:
+        log.warning(f"Backtest-History Append fehlgeschlagen: {e}", exc_info=True)
+
     log.info(f"Backtest gespeichert: {all_metrics['total_trades']} Trades, "
              f"Return={all_metrics['total_return_pct']:+.2f}%, "
              f"Sharpe={all_metrics['sharpe_ratio']:.2f}, "
              f"MaxDD={all_metrics['max_drawdown_pct']:.1f}%")
 
     return results
+
+
+BACKTEST_HISTORY_FILE = "backtest_history.json"
+BACKTEST_HISTORY_MAX_ENTRIES = 200
+
+
+def _append_backtest_history(results, metrics, wf, config, years):
+    """Appende kompakte Run-Zusammenfassung an backtest_history.json.
+
+    Speichert nur Kernmetriken (keine Equity-Curve, Trades) damit die Datei
+    langfristig klein bleibt. Letzte 200 Runs reichen fuer Trend-Analyse.
+    Analog zu optimization_history.json.
+    """
+    entry = {
+        "timestamp": results.get("timestamp"),
+        "years": years,
+        "strategy": config.get("demo_trading", {}).get("strategy", "unknown"),
+        "total_trades": metrics.get("total_trades", 0),
+        "total_return_pct": metrics.get("total_return_pct", 0),
+        "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+        "max_drawdown_pct": metrics.get("max_drawdown_pct", 0),
+        "winrate_pct": metrics.get("winrate_pct") or metrics.get("win_rate_pct", 0),
+        "profit_factor": metrics.get("profit_factor", 0),
+        "config_snapshot": results.get("config_used", {}),
+        "walk_forward": {
+            "in_sample_sharpe": ((wf or {}).get("in_sample") or {}).get("metrics", {}).get("sharpe_ratio"),
+            "oos_sharpe": ((wf or {}).get("out_of_sample") or {}).get("metrics", {}).get("sharpe_ratio"),
+            "oos_return_pct": ((wf or {}).get("out_of_sample") or {}).get("metrics", {}).get("total_return_pct"),
+        },
+    }
+
+    history = load_json(BACKTEST_HISTORY_FILE) or {"runs": []}
+    runs = history.get("runs") or []
+    runs.append(entry)
+    # Trim: nur die letzten N behalten
+    if len(runs) > BACKTEST_HISTORY_MAX_ENTRIES:
+        runs = runs[-BACKTEST_HISTORY_MAX_ENTRIES:]
+    history["runs"] = runs
+    history["updated_at"] = datetime.now().isoformat()
+    save_json(BACKTEST_HISTORY_FILE, history)
+    log.info(f"Backtest-History: {len(runs)} Runs (letzter Sharpe={entry['sharpe_ratio']:.2f})")

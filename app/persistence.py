@@ -47,6 +47,7 @@ BACKUP_FILES = [
     "partial_close_state.json",
     "equity_history.json",
     "cash_dca_state.json",
+    "backtest_history.json",
 ]
 
 # Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.
@@ -81,6 +82,7 @@ BACKTEST_OUTPUT_FILES = [
     "backtest_results.json",
     "backtest_status.json",
     "universe_health.json",
+    "backtest_history.json",
 ]
 
 # Dateien die der ML-Training-Runner (GitHub Action) modifiziert. Werden

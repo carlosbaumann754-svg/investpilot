@@ -237,6 +237,127 @@ def _generate_improvement_suggestions(brain, trade_stats, tech_checks, tech_warn
     return suggestions
 
 
+def _maintenance_block():
+    """v15: Wartungs-Block — check Cron-Status, Backup-Freshness, ML-Model-Alter,
+    Macro-Signals-Freshness. Gibt Liste von (name, status, detail, severity)
+    zurueck, wobei severity in {"ok", "warn", "crit"}.
+
+    Pre-Live-wichtig: Vor dem 27.04 sehen wir damit auf einen Blick, ob
+    alle automatisierten Jobs laufen und ob es stale State gibt.
+    """
+    now = datetime.now()
+    items = []
+
+    def _age_hours(iso_ts):
+        try:
+            t = datetime.fromisoformat(iso_ts)
+            return (now - t).total_seconds() / 3600.0
+        except Exception:
+            return None
+
+    # 1) Optimizer-Status (GH Action)
+    opt = load_json("optimizer_status.json") or {}
+    opt_age = _age_hours(opt.get("updated_at") or opt.get("finished_at") or "")
+    if opt.get("state") == "running":
+        started = opt.get("started_at")
+        age = _age_hours(started) if started else None
+        if age is not None and age > 6:
+            items.append(("Optimizer", "STALE-LOCK",
+                          f"state=running seit {age:.1f}h ({started})", "crit"))
+        else:
+            items.append(("Optimizer", "laeuft", f"seit {age:.1f}h" if age else "", "ok"))
+    elif opt_age is not None and opt_age < 24 * 8:
+        items.append(("Optimizer", "OK",
+                      f"letzter Run vor {opt_age:.1f}h", "ok"))
+    else:
+        items.append(("Optimizer", "stale",
+                      f"letzter Run vor {opt_age:.1f}h" if opt_age else "nie",
+                      "warn"))
+
+    # 2) Backtest-History (GH Action Backtest)
+    bt_status = load_json("backtest_status.json") or {}
+    bt_age = _age_hours(bt_status.get("finished_at") or bt_status.get("updated_at") or "")
+    if bt_age is not None and bt_age < 24 * 10:
+        items.append(("Backtest", "OK",
+                      f"letzter Run vor {bt_age:.1f}h", "ok"))
+    else:
+        items.append(("Backtest", "stale",
+                      f"letzter Run vor {bt_age:.1f}h" if bt_age else "nie",
+                      "warn"))
+
+    # 3) ML-Model-Alter
+    ml = load_json("ml_model.json") or {}
+    ml_ts = ml.get("trained_at") or ml.get("timestamp")
+    ml_age_h = _age_hours(ml_ts) if ml_ts else None
+    if ml_age_h is None:
+        items.append(("ML-Model", "fehlt", "noch nicht trainiert", "warn"))
+    elif ml_age_h < 24 * 14:
+        items.append(("ML-Model", "OK",
+                      f"trained vor {ml_age_h/24:.1f}d", "ok"))
+    elif ml_age_h < 24 * 30:
+        items.append(("ML-Model", "altert",
+                      f"trained vor {ml_age_h/24:.1f}d", "warn"))
+    else:
+        items.append(("ML-Model", "veraltet",
+                      f"trained vor {ml_age_h/24:.1f}d — Retraining noetig", "crit"))
+
+    # 4) Macro-Signals Freshness
+    macro = load_json("macro_signals.json") or {}
+    m_age_min = None
+    m_ts = macro.get("updated_at")
+    if m_ts:
+        try:
+            m_age_min = (now - datetime.fromisoformat(m_ts)).total_seconds() / 60
+        except Exception:
+            pass
+    if m_age_min is None:
+        items.append(("Macro-Signals", "fehlt",
+                      "update_macro_signals noch nie gelaufen", "warn"))
+    elif m_age_min < 180:
+        items.append(("Macro-Signals", "OK",
+                      f"update vor {m_age_min:.0f}min", "ok"))
+    else:
+        items.append(("Macro-Signals", "stale",
+                      f"update vor {m_age_min/60:.1f}h", "warn"))
+
+    # 5) Cloud-Backup Freshness (via Gist-Update-Proxy: brain_state.json)
+    brain = load_json("brain_state.json") or {}
+    last_run = brain.get("last_update") or brain.get("timestamp")
+    b_age = _age_hours(last_run) if last_run else None
+    if b_age is None:
+        items.append(("Scheduler", "unklar", "brain_state ohne timestamp", "warn"))
+    elif b_age < 2:
+        items.append(("Scheduler", "OK",
+                      f"letzter Brain-Update vor {b_age*60:.0f}min", "ok"))
+    elif b_age < 12:
+        items.append(("Scheduler", "verzoegert",
+                      f"letzter Update vor {b_age:.1f}h", "warn"))
+    else:
+        items.append(("Scheduler", "AUSFALL",
+                      f"letzter Update vor {b_age:.1f}h — Render-Service down?",
+                      "crit"))
+
+    # 6) Risk-State (Pause aktiv?)
+    risk = load_json("risk_state.json") or {}
+    if risk.get("paused_until"):
+        items.append(("Risk-State", "PAUSE",
+                      f"{risk.get('pause_reason', '')} bis {risk['paused_until']}",
+                      "warn"))
+    else:
+        items.append(("Risk-State", "OK", "keine aktive Pause", "ok"))
+
+    # 7) Cash-DCA aktiv?
+    dca = (load_json("cash_dca_state.json") or {}).get("active_plan")
+    if dca and dca.get("remaining_cycles", 0) > 0:
+        items.append(("Cash-DCA",
+                      "aktiv",
+                      f"{dca['remaining_cycles']} Zyklen verbleibend "
+                      f"(${dca.get('consumed_usd', 0):,.0f}/{dca.get('total_deposit_usd', 0):,.0f} deployed)",
+                      "ok"))
+
+    return items
+
+
 def _get_backtest_summary():
     """Hole letzte Backtest-Ergebnisse fuer den Report."""
     bt = load_json("backtest_results.json")
@@ -278,6 +399,12 @@ def generate_weekly_report():
     tech_checks, tech_warnings = _tech_health_check()
     suggestions = _generate_improvement_suggestions(brain, trade_stats, tech_checks, tech_warnings)
     backtest = _get_backtest_summary()
+    maintenance = _maintenance_block()
+
+    # Kritische Wartungs-Items als zusaetzliche Warnings markieren
+    for name, status, detail, severity in maintenance:
+        if severity == "crit":
+            tech_warnings.append(f"[WARTUNG] {name}: {status} — {detail}")
 
     report = {
         "generated": datetime.now().isoformat(),
@@ -290,6 +417,10 @@ def generate_weekly_report():
         "tech_warnings": tech_warnings,
         "suggestions": suggestions,
         "backtest": backtest,
+        "maintenance": [
+            {"name": n, "status": s, "detail": d, "severity": sv}
+            for (n, s, d, sv) in maintenance
+        ],
     }
 
     log.info(f"Weekly Report generiert: {trade_stats['total_trades']} Trades, "
@@ -324,6 +455,19 @@ def _render_html_report(report):
     # Tech
     tech_ok_items = "".join(f"<li style='color:#10b981;margin:4px 0;'>{c}</li>" for c in report["tech_ok"])
     tech_warn_items = "".join(f"<li style='color:#ef4444;margin:4px 0;'>{w}</li>" for w in report["tech_warnings"])
+
+    # v15: Wartungs-Block
+    maintenance_rows = ""
+    sev_color = {"ok": "#10b981", "warn": "#f59e0b", "crit": "#ef4444"}
+    for item in report.get("maintenance", []):
+        c = sev_color.get(item["severity"], "#94a3b8")
+        maintenance_rows += (
+            f"<tr>"
+            f"<td style='padding:6px 12px;color:{c};font-weight:bold;'>{item['status']}</td>"
+            f"<td style='padding:6px 12px;color:#e2e8f0;'>{item['name']}</td>"
+            f"<td style='padding:6px 12px;color:#94a3b8;font-size:12px;'>{item['detail']}</td>"
+            f"</tr>"
+        )
 
     # Suggestions
     suggestion_rows = ""
@@ -427,6 +571,12 @@ def _render_html_report(report):
             <strong style="color:#ef4444;">Warnungen:</strong>
             <ul style="margin:4px 0;padding-left:20px;">{tech_warn_items or '<li style="color:#10b981;">Keine Warnungen</li>'}</ul>
           </div>
+        </div>
+
+        <!-- v15: Wartungs-Status (Cron-Jobs, Model-Alter, Backups) -->
+        <div style="background:#252839;border-radius:12px;padding:24px;margin:20px 0;border-left:4px solid #f59e0b;">
+          <h2 style="margin:0 0 16px;color:#f59e0b;font-size:18px;">Wartungs-Status</h2>
+          <table style="width:100%;border-collapse:collapse;">{maintenance_rows or '<tr><td style="color:#94a3b8;">Keine Wartungs-Daten</td></tr>'}</table>
         </div>
 
         <!-- Backtest & ML -->
