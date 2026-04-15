@@ -52,8 +52,8 @@ def _dispatch_discovery_workflow(triggered_by: str = "scheduler-cron") -> bool:
     }
     try:
         save_json("discovery_status.json", status)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Discovery-Status initial save fehlgeschlagen: {e}", exc_info=True)
 
     try:
         import requests
@@ -73,8 +73,8 @@ def _dispatch_discovery_workflow(triggered_by: str = "scheduler-cron") -> bool:
             status["updated_at"] = datetime.now().isoformat()
             try:
                 save_json("discovery_status.json", status)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Discovery-Status post-dispatch save fehlgeschlagen: {e}", exc_info=True)
             return True
         log.error(f"Discovery-Dispatch HTTP {resp.status_code}: {resp.text[:200]}")
         status["state"] = "error"
@@ -88,8 +88,8 @@ def _dispatch_discovery_workflow(triggered_by: str = "scheduler-cron") -> bool:
     status["updated_at"] = datetime.now().isoformat()
     try:
         save_json("discovery_status.json", status)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Discovery-Status error-save fehlgeschlagen: {e}", exc_info=True)
     return False
 
 
@@ -101,8 +101,13 @@ def is_trading_enabled():
     try:
         content = TRADING_FLAG.read_text().strip().lower()
         return content == "true" or content == "1"
-    except Exception:
-        return True
+    except Exception as e:
+        # Flag-Datei existiert aber ist nicht lesbar (Permission / korrupt).
+        # Konservativ: Trading aus lassen bis das behoben ist — sonst traden
+        # wir evtl. gegen den User-Willen wenn das Flag "false" gesetzt war.
+        log.error(f"Trading-Flag nicht lesbar ({e}) — safe default: Trading PAUSIERT "
+                  f"bis Flag-Datei repariert oder entfernt ist.", exc_info=True)
+        return False
 
 
 def is_market_hours():
@@ -212,15 +217,29 @@ def scheduler_loop():
                         f"[{datetime.now():%H:%M}] Freitag - Dispatche Asset Discovery "
                         f"an GitHub Actions..."
                     )
+                    # Flag SOFORT schreiben (vor Dispatch), damit der naechste
+                    # 5-Min-Tick nicht nochmal dispatcht falls der Dispatch-Call
+                    # selbst laenger dauert als 5 Minuten (Race-Condition).
+                    # Falls Dispatch schlaegt fehl -> wird Flag wieder geloescht.
+                    try:
+                        guard.write_text(today_key)
+                    except Exception as e:
+                        log.warning(f"Discovery-Guard-Flag pre-write fehlgeschlagen: {e}")
                     try:
                         ok = _dispatch_discovery_workflow(triggered_by="scheduler-friday-17")
-                        if ok:
+                        if not ok:
+                            # Dispatch hat fehlgeschlagen -> Flag zuruecksetzen,
+                            # damit naechster Slot (oder manueller Retry) noch geht.
                             try:
-                                guard.write_text(today_key)
+                                guard.unlink(missing_ok=True)
                             except Exception:
                                 pass
                     except Exception as e:
                         log.error(f"Asset Discovery Dispatch Fehler: {e}", exc_info=True)
+                        try:
+                            guard.unlink(missing_ok=True)
+                        except Exception:
+                            pass
 
             # --- Freitag 18:00: Weekly Report ---
             from app.weekly_report import is_friday_evening
@@ -259,28 +278,28 @@ def scheduler_loop():
                 from app.persistence import check_and_reload_optimizer_output
                 check_and_reload_optimizer_output()
             except Exception as e:
-                log.debug(f"Optimizer-Watchdog Fehler (non-fatal): {e}")
+                log.warning(f"Optimizer-Watchdog Fehler (non-fatal): {e}", exc_info=True)
 
             # --- Backtest-Watchdog (GH Action v12) ---
             try:
                 from app.persistence import check_and_reload_backtest_output
                 check_and_reload_backtest_output()
             except Exception as e:
-                log.debug(f"Backtest-Watchdog Fehler (non-fatal): {e}")
+                log.warning(f"Backtest-Watchdog Fehler (non-fatal): {e}", exc_info=True)
 
             # --- ML-Training-Watchdog (GH Action v12) ---
             try:
                 from app.persistence import check_and_reload_ml_training_output
                 check_and_reload_ml_training_output()
             except Exception as e:
-                log.debug(f"ML-Training-Watchdog Fehler (non-fatal): {e}")
+                log.warning(f"ML-Training-Watchdog Fehler (non-fatal): {e}", exc_info=True)
 
             # --- Discovery-Watchdog (GH Action v12) ---
             try:
                 from app.persistence import check_and_reload_discovery_output
                 check_and_reload_discovery_output()
             except Exception as e:
-                log.debug(f"Discovery-Watchdog Fehler (non-fatal): {e}")
+                log.warning(f"Discovery-Watchdog Fehler (non-fatal): {e}", exc_info=True)
 
             # --- Daily Equity Snapshot (>= 22:30 CET, einmal pro Werktag) ---
             # Schreibt portfolio_total_value + SPY/QQQ/AGG Close in

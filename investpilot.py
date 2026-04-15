@@ -417,9 +417,11 @@ def fetch_news(perf):
                 if pub:
                     try:
                         pub = datetime.fromisoformat(pub.replace("Z", "+00:00")).strftime("%d.%m.%Y")
-                    except: pass
+                    except Exception as e:
+                        log.warning(f"News pubDate parse failed fuer {sym}: {e}")
                 all_news.append({"title": title, "symbol": sym, "source": src, "date": pub})
-        except: pass
+        except Exception as e:
+            log.warning(f"News fetch fehlgeschlagen fuer {sym}: {e}", exc_info=True)
 
     log.info(f"  {len(all_news)} Artikel")
     return all_news[:10]

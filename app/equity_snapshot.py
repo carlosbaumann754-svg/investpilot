@@ -120,7 +120,12 @@ def _fetch_portfolio_total_value() -> float | None:
             try:
                 parsed = EtoroClient.parse_position(pos)
                 invested += float(parsed.get("invested", 0) or 0)
-            except Exception:
+            except Exception as e:
+                log.warning(
+                    f"Equity-Snapshot: Position parse failed "
+                    f"(pos_id={pos.get('PositionID') or pos.get('position_id')}): {e}",
+                    exc_info=True,
+                )
                 continue
         total = credit + invested + unrealized
         return float(total) if total > 0 else None
@@ -192,7 +197,10 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
         from app.persistence import backup_to_cloud
         backup_to_cloud()
     except Exception as e:
-        log.debug(f"Post-Snapshot Cloud-Backup nicht moeglich: {e}")
+        log.warning(
+            f"Post-Snapshot Cloud-Backup nicht moeglich: {e}",
+            exc_info=True,
+        )
 
     return snap
 
@@ -201,11 +209,13 @@ def maybe_take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | No
     """Scheduler-Entrypoint: prueft Guard + Zeitfenster, dann snapshot."""
     if not is_snapshot_time():
         return None
+    # today_iso einmal berechnen - fruehere Version hat es in take_snapshot()
+    # noch einmal berechnet (harmlos, aber um Mitternacht race-anfaellig).
     today_iso = datetime.now().strftime("%Y-%m-%d")
     try:
         guard = get_data_path(DAILY_GUARD)
         if guard.exists() and guard.read_text().strip() == today_iso:
             return None
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Equity-Snapshot Guard-Check fehlgeschlagen: {e}", exc_info=True)
     return take_snapshot(triggered_by=triggered_by)

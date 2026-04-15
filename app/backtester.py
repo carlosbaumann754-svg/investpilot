@@ -517,8 +517,8 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
         config = load_config()
 
     dt = config.get("demo_trading", {})
-    sl_pct = dt.get("stop_loss_pct", -3) / 100
-    tp_pct = dt.get("take_profit_pct", 5) / 100
+    sl_pct = dt.get("stop_loss_pct", -5) / 100
+    tp_pct = dt.get("take_profit_pct", 18) / 100
     min_score = dt.get("min_scanner_score", 15)
     max_positions = dt.get("max_positions", 20)
 
@@ -924,8 +924,8 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
         config = load_config()
 
     dt = config.get("demo_trading", {})
-    sl_pct = dt.get("stop_loss_pct", -3) / 100       # e.g., -0.03
-    tp_pct = dt.get("take_profit_pct", 5) / 100       # e.g., 0.05
+    sl_pct = dt.get("stop_loss_pct", -5) / 100       # default matches live config
+    tp_pct = dt.get("take_profit_pct", 18) / 100     # default matches live config
     min_score = dt.get("min_scanner_score", 15)
     max_positions = dt.get("max_positions", 20)
 
@@ -1778,8 +1778,8 @@ def run_full_backtest(config=None, symbols=None, years=5,
         "timestamp": datetime.now().isoformat(),
         "config_used": {
             "strategy": config.get("demo_trading", {}).get("strategy", "unknown"),
-            "stop_loss_pct": config.get("demo_trading", {}).get("stop_loss_pct", -3),
-            "take_profit_pct": config.get("demo_trading", {}).get("take_profit_pct", 5),
+            "stop_loss_pct": config.get("demo_trading", {}).get("stop_loss_pct", -5),
+            "take_profit_pct": config.get("demo_trading", {}).get("take_profit_pct", 18),
             "min_scanner_score": config.get("demo_trading", {}).get("min_scanner_score", 15),
             "max_positions": config.get("demo_trading", {}).get("max_positions", 20),
             "use_realistic_filters": use_realistic_filters,

@@ -278,7 +278,11 @@ def restore_from_cloud():
                 try:
                     gist_parsed = json.loads(content)
                 except Exception as e:
-                    log.warning(f"    Parse-Fehler bei Gist-{filename}: {e}")
+                    log.error(
+                        f"    Parse-Fehler bei Gist-{filename}: {e} "
+                        f"(Restore uebersprungen, lokal bleibt erhalten)",
+                        exc_info=True,
+                    )
                     continue
 
                 local_data = load_json(filename)
@@ -500,19 +504,30 @@ def check_and_reload_optimizer_output():
         local_cfg = load_json("config.json") or {}
         local_disabled = local_cfg.get("disabled_symbols")
 
-        files_reloaded = 0
+        # Atomic: sammle zuerst alle parsed Ergebnisse, schreibe erst wenn
+        # alle vorhandenen Dateien sauber geparst werden konnten. Fruehere
+        # Version hat state auch bei partiellem Erfolg gespeichert -> naechster
+        # Poll skipped dann die fehlgeschlagenen Dateien fuer immer.
+        to_write = {}
+        had_failure = False
         for filename in OPTIMIZER_OUTPUT_FILES:
             if filename not in gist_data.get("files", {}):
                 continue
             file_entry = gist_data["files"][filename]
             content = _fetch_gist_file_content(file_entry, token)
             if not content:
+                had_failure = True
+                log.warning(
+                    f"check_and_reload_optimizer_output: Inhalt fuer {filename} leer"
+                )
                 continue
             try:
                 parsed = json.loads(content)
             except Exception as e:
+                had_failure = True
                 log.warning(
-                    f"check_and_reload_optimizer_output: parse {filename}: {e}"
+                    f"check_and_reload_optimizer_output: parse {filename}: {e}",
+                    exc_info=True,
                 )
                 continue
 
@@ -522,15 +537,27 @@ def check_and_reload_optimizer_output():
                     and isinstance(parsed, dict)):
                 parsed["disabled_symbols"] = local_disabled
 
+            to_write[filename] = parsed
+
+        if had_failure and not to_write:
+            # Nichts uebernehmen, nichts als "applied" markieren -> retry beim naechsten Tick
+            log.warning("Optimizer-Watchdog: Alle Dateien fehlgeschlagen, State bleibt")
+            return False
+
+        files_reloaded = 0
+        for filename, parsed in to_write.items():
             save_json(filename, parsed)
             files_reloaded += 1
 
-        # Persist the applied timestamp so next poll is a no-op
-        save_json(_OPTIMIZER_RELOAD_STATE_FILE, {
-            "last_applied_push": remote_push,
-            "applied_at": datetime.now().isoformat(),
-            "files_reloaded": files_reloaded,
-        })
+        # State nur speichern wenn ALLE Dateien erfolgreich waren.
+        # Bei partiellem Erfolg: wir schreiben was wir haben, aber markieren
+        # NICHT als applied -> naechster Tick versucht die fehlenden nochmal.
+        if not had_failure:
+            save_json(_OPTIMIZER_RELOAD_STATE_FILE, {
+                "last_applied_push": remote_push,
+                "applied_at": datetime.now().isoformat(),
+                "files_reloaded": files_reloaded,
+            })
 
         log.info(
             f"Optimizer-Watchdog: {files_reloaded} Dateien aus Gist uebernommen"

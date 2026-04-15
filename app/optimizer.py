@@ -558,8 +558,8 @@ def run_weekly_optimization():
     # Aktuelle Parameter merken (fuer Rollback)
     current_params = {
         "min_scanner_score": dt.get("min_scanner_score", 15),
-        "stop_loss_pct": dt.get("stop_loss_pct", -3),
-        "take_profit_pct": dt.get("take_profit_pct", 5),
+        "stop_loss_pct": dt.get("stop_loss_pct", -5),
+        "take_profit_pct": dt.get("take_profit_pct", 18),
         "use_ml_scoring": dt.get("use_ml_scoring", False),
     }
 
@@ -830,8 +830,8 @@ def _load_optimization_data():
     dt = config.get("demo_trading", {})
     current_params = {
         "min_scanner_score": dt.get("min_scanner_score", 15),
-        "stop_loss_pct": dt.get("stop_loss_pct", -3),
-        "take_profit_pct": dt.get("take_profit_pct", 5),
+        "stop_loss_pct": dt.get("stop_loss_pct", -5),
+        "take_profit_pct": dt.get("take_profit_pct", 18),
         "use_ml_scoring": dt.get("use_ml_scoring", False),
     }
 

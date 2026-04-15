@@ -5,6 +5,7 @@ REST API + Mobile-First Frontend fuer Trading-Steuerung.
 
 import os
 import sys
+import asyncio
 import logging
 from pathlib import Path
 
@@ -32,6 +33,12 @@ from web.security import security_middleware, record_failed_login, log_audit as 
 from web import auth_2fa
 
 log = logging.getLogger("WebApp")
+
+# Async-Lock um Read-Modify-Write Races auf config.json zu verhindern.
+# save_config() schreibt zwar atomar, aber zwei concurrent Requests koennen
+# beide die alte Version laden, eigene Aenderung mergen und zurueckspeichern —
+# dabei geht eine der Aenderungen verloren.
+_CONFIG_WRITE_LOCK = asyncio.Lock()
 
 app = FastAPI(title="InvestPilot Dashboard", version="1.0.0")
 
@@ -989,48 +996,49 @@ async def api_config(user=Depends(require_auth)):
 @app.put("/api/config/strategy")
 async def api_update_strategy(update: StrategyUpdate, user=Depends(require_auth)):
     """Strategie-Parameter aendern."""
-    config = load_config()
-    dt = config.setdefault("demo_trading", {})
+    async with _CONFIG_WRITE_LOCK:
+        config = load_config()
+        dt = config.setdefault("demo_trading", {})
 
-    changes = []
-    if update.strategy is not None:
-        old = dt.get("strategy")
-        dt["strategy"] = update.strategy
-        if old != update.strategy:
-            changes.append(f"Strategie: {old} -> {update.strategy}")
+        changes = []
+        if update.strategy is not None:
+            old = dt.get("strategy")
+            dt["strategy"] = update.strategy
+            if old != update.strategy:
+                changes.append(f"Strategie: {old} -> {update.strategy}")
 
-    if update.stop_loss_pct is not None:
-        old = dt.get("stop_loss_pct")
-        dt["stop_loss_pct"] = update.stop_loss_pct
-        if old != update.stop_loss_pct:
-            changes.append(f"SL: {old} -> {update.stop_loss_pct}")
+        if update.stop_loss_pct is not None:
+            old = dt.get("stop_loss_pct")
+            dt["stop_loss_pct"] = update.stop_loss_pct
+            if old != update.stop_loss_pct:
+                changes.append(f"SL: {old} -> {update.stop_loss_pct}")
 
-    if update.take_profit_pct is not None:
-        old = dt.get("take_profit_pct")
-        dt["take_profit_pct"] = update.take_profit_pct
-        if old != update.take_profit_pct:
-            changes.append(f"TP: {old} -> {update.take_profit_pct}")
+        if update.take_profit_pct is not None:
+            old = dt.get("take_profit_pct")
+            dt["take_profit_pct"] = update.take_profit_pct
+            if old != update.take_profit_pct:
+                changes.append(f"TP: {old} -> {update.take_profit_pct}")
 
-    if update.rebalance_threshold_pct is not None:
-        dt["rebalance_threshold_pct"] = update.rebalance_threshold_pct
+        if update.rebalance_threshold_pct is not None:
+            dt["rebalance_threshold_pct"] = update.rebalance_threshold_pct
 
-    if update.default_leverage is not None:
-        dt["default_leverage"] = update.default_leverage
+        if update.default_leverage is not None:
+            dt["default_leverage"] = update.default_leverage
 
-    if update.max_single_trade_usd is not None:
-        old = dt.get("max_single_trade_usd")
-        dt["max_single_trade_usd"] = update.max_single_trade_usd
-        if old != update.max_single_trade_usd:
-            changes.append(f"Max Trade: {old} -> {update.max_single_trade_usd}")
+        if update.max_single_trade_usd is not None:
+            old = dt.get("max_single_trade_usd")
+            dt["max_single_trade_usd"] = update.max_single_trade_usd
+            if old != update.max_single_trade_usd:
+                changes.append(f"Max Trade: {old} -> {update.max_single_trade_usd}")
 
-    if update.portfolio_targets is not None:
-        # Validiere: Summe muss 100% sein
-        total = sum(t.get("allocation_pct", 0) for t in update.portfolio_targets.values())
-        if abs(total - 100) > 1:
-            raise HTTPException(400, f"Allokation muss 100% ergeben (aktuell: {total}%)")
-        dt["portfolio_targets"] = update.portfolio_targets
+        if update.portfolio_targets is not None:
+            # Validiere: Summe muss 100% sein
+            total = sum(t.get("allocation_pct", 0) for t in update.portfolio_targets.values())
+            if abs(total - 100) > 1:
+                raise HTTPException(400, f"Allokation muss 100% ergeben (aktuell: {total}%)")
+            dt["portfolio_targets"] = update.portfolio_targets
 
-    save_config(config)
+        save_config(config)
 
     # Audit log
     try:
@@ -1057,11 +1065,12 @@ class KellyUpdate(BaseModel):
 @app.put("/api/config/kelly")
 async def api_update_kelly(update: KellyUpdate, user=Depends(require_auth)):
     """Kelly-Sizing max_fraction live aendern (persistiert in data/config.json)."""
-    config = load_config()
-    ks = config.setdefault("kelly_sizing", {})
-    old = ks.get("max_fraction")
-    ks["max_fraction"] = update.max_fraction
-    save_config(config)
+    async with _CONFIG_WRITE_LOCK:
+        config = load_config()
+        ks = config.setdefault("kelly_sizing", {})
+        old = ks.get("max_fraction")
+        ks["max_fraction"] = update.max_fraction
+        save_config(config)
 
     try:
         from web.security import log_audit
@@ -3097,11 +3106,12 @@ async def api_update_disabled_symbols(
 ):
     """Universe-Filter pflegen. Ueberschreibt die komplette Liste."""
     try:
-        config = load_config()
-        new_list = sorted({s.strip().upper() for s in update.disabled_symbols if s and s.strip()})
-        old_list = sorted(config.get("disabled_symbols") or [])
-        config["disabled_symbols"] = new_list
-        save_config(config)
+        async with _CONFIG_WRITE_LOCK:
+            config = load_config()
+            new_list = sorted({s.strip().upper() for s in update.disabled_symbols if s and s.strip()})
+            old_list = sorted(config.get("disabled_symbols") or [])
+            config["disabled_symbols"] = new_list
+            save_config(config)
 
         # Audit log
         try:

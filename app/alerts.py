@@ -81,7 +81,7 @@ def send_telegram(message, config=None):
         }, timeout=10)
         return resp.status_code == 200
     except Exception as e:
-        log.warning(f"Telegram Fehler: {e}")
+        log.warning(f"Telegram Fehler: {e}", exc_info=True)
         return False
 
 

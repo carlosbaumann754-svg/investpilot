@@ -14,6 +14,36 @@ from pathlib import Path
 
 log = logging.getLogger("ConfigManager")
 
+
+# Single-Source-of-Truth fuer Trading-Defaults. Wird von trader.py, optimizer.py,
+# backtester.py verwendet, wenn config.json einen Schluessel nicht enthaelt.
+# Werte MUESSEN zur Live-Config-Spec passen, sonst liest der Live-Bot etwas
+# anderes als der Optimizer/Backtester und Divergenzen entstehen silent.
+# Siehe CLAUDE.md "Config-Sektion-Map" fuer die Sektions-Zuordnung.
+TRADING_DEFAULTS = {
+    "demo_trading": {
+        "stop_loss_pct": -5,           # Match live-optimizer range
+        "take_profit_pct": 18,          # Match live TP-final
+        "min_scanner_score": 15,
+        "max_single_trade_usd": 5000,
+        "default_leverage": 1,
+        "rebalance_threshold_pct": 10,
+    },
+    "leverage": {
+        "trailing_sl_activation_pct": 0.5,
+        "trailing_sl_trail_pct": -2.5,
+        "tp_tranches": [0.04, 0.08, 0.15],
+    },
+    "time_stop": {
+        "enabled": True,
+        "max_days_stale": 10,
+        "max_abs_pnl_pct": 0.5,
+    },
+    "kelly": {
+        "max_fraction": 0.05,
+    },
+}
+
 # Data-Verzeichnis Resolution (Priority):
 #   1) INVESTPILOT_DATA_DIR env var (explicit override)
 #   2) /data (Render Persistent Disk mount — auto-detect if present)

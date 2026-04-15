@@ -22,6 +22,55 @@ def save_trade(trade_entry):
     save_json("trade_history.json", history)
 
 
+def _log_close_failure(action_name: str, p: dict, alerts_mod=None, extra: dict | None = None):
+    """Protokolliere + persistiere eine fehlgeschlagene close_position()-Antwort.
+
+    Zuvor gab es 4 Stellen in der SL/TP-Logik wo `client.close_position()` einen
+    falsy-Wert zurueckgeben konnte und wir nur in den Sonnenschein-Fall (`if result:`)
+    eingetreten sind. Folge: Position blieb am eToro offen, aber lokal dachten wir
+    'geschlossen' (oder noch schlimmer: kein Log). Das kostet echtes Geld
+    (Overnight-Fees, verpasster Exit). Dieser Helper wird jetzt im else-Fall
+    aufgerufen und:
+      1) loggt als ERROR (sichtbar im Render-Log)
+      2) persistiert einen `<action>_FAILED`-Eintrag in trade_history.json
+         (damit das Dashboard den Fehlversuch sehen kann)
+      3) schickt Telegram-Alert falls das alerts-Modul verfuegbar ist
+    """
+    pnl_pct = p.get("pnl_pct", 0)
+    pos_id = p.get("position_id")
+    instr_id = p.get("instrument_id")
+    log.error(
+        f"  CLOSE FAILED: {action_name} fuer Position {pos_id} (Instrument {instr_id}) — "
+        f"eToro hat keinen Erfolg gemeldet. PnL war {pnl_pct:+.2f}%. "
+        f"Position bleibt OFFEN — naechster Zyklus wird erneut versuchen."
+    )
+    try:
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "action": f"{action_name}_FAILED",
+            "instrument_id": instr_id,
+            "position_id": pos_id,
+            "pnl_pct": pnl_pct,
+            "status": "close_failed",
+        }
+        if extra:
+            entry.update(extra)
+        save_trade(entry)
+    except Exception as e:
+        log.warning(f"  Konnte {action_name}_FAILED nicht in trade_history persistieren: {e}")
+    if alerts_mod:
+        try:
+            alerts_mod.alert_trade_executed({
+                "action": f"{action_name}_FAILED",
+                "position_id": pos_id,
+                "instrument_id": instr_id,
+                "pnl_pct": pnl_pct,
+                "status": "close_failed",
+            })
+        except Exception as e:
+            log.debug(f"Alert-Dispatch fehlgeschlagen: {e}")
+
+
 def _find_position_open_time(position_id, api_open_time=None):
     """Ermittle wie lange eine Position offen ist (in Tagen).
 
@@ -31,16 +80,28 @@ def _find_position_open_time(position_id, api_open_time=None):
 
     Returns (open_datetime, age_days) oder (None, None) wenn unbekannt.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     def _parse(ts):
+        """Parse ISO-Timestamp -> timezone-aware UTC datetime.
+
+        Wichtig: eToro liefert 'Z'-Suffix (UTC), trade_history.json schreibt
+        lokale naive Timestamps (datetime.now().isoformat()). Fruehere Version
+        hat tzinfo einfach gestripped und mit datetime.now() verglichen -
+        das gab bei UTC-Inputs +1/+2h falsche Alter. Jetzt: alles nach UTC
+        normalisieren, naive Inputs als lokale Zeit interpretieren.
+        """
         if not ts:
             return None
         try:
             s = str(ts).replace("Z", "+00:00")
             dt = datetime.fromisoformat(s)
-            if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
+            if dt.tzinfo is None:
+                # Naive = lokale Zeit (wie trade_history.json via datetime.now())
+                # -> Python 3.6+ astimezone() interpretiert naive als local
+                dt = dt.astimezone(timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
             return dt
         except Exception:
             return None
@@ -61,7 +122,7 @@ def _find_position_open_time(position_id, api_open_time=None):
     if dt is None:
         return None, None
 
-    age = (datetime.now() - dt).total_seconds() / 86400.0
+    age = (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
     return dt, age
 
 
@@ -381,6 +442,9 @@ def check_stop_loss_take_profit(client, config):
                     actions.append("TRAILING_SL_CLOSE")
                     if al:
                         al.alert_trade_executed(trade_entry)
+                else:
+                    _log_close_failure("TRAILING_SL_CLOSE", p, al,
+                                       extra={"trailing_sl_level": triggered[0]["sl_level"]})
                 continue  # Trailing SL hat Prioritaet, Skip fixed SL/TP
 
         # --- v12: Time-Stop / Staleness Exit ---
@@ -412,6 +476,11 @@ def check_stop_loss_take_profit(client, config):
                     if al:
                         al.alert_trade_executed(trade_entry)
                     continue  # Position ist zu, Rest skippen
+                else:
+                    _log_close_failure("TIME_STOP_CLOSE", p, al,
+                                       extra={"age_days": round(age_days, 2)})
+                    # WICHTIG: KEIN continue — naechster Zyklus versucht erneut,
+                    # aber innerhalb dieses Zyklus nicht noch SL/TP drueberlegen.
 
         # --- Profit-Locking: Partial Close (TP-Tranchen) ---
         lev_cfg = config.get("leverage", {})
@@ -510,6 +579,8 @@ def check_stop_loss_take_profit(client, config):
                 actions.append("STOP_LOSS_CLOSE")
                 if al:
                     al.alert_trade_executed(trade_entry)
+            else:
+                _log_close_failure("STOP_LOSS_CLOSE", p, al)
 
         # Take-Profit Check (nur fuer verbleibende Position nach Partial Closes)
         elif p["pnl_pct"] >= tp_pct:
@@ -535,6 +606,8 @@ def check_stop_loss_take_profit(client, config):
                 actions.append("TAKE_PROFIT_CLOSE")
                 if al:
                     al.alert_trade_executed(trade_entry)
+            else:
+                _log_close_failure("TAKE_PROFIT_CLOSE", p, al)
 
     # Partial-Close State bereinigen fuer geschlossene Positionen
     _cleanup_partial_close_state(portfolio)
@@ -757,6 +830,12 @@ def execute_scanner_trades(client, config, scan_results):
                     trades_executed.append(trade_entry)
                     if al:
                         al.alert_trade_executed(trade_entry)
+                else:
+                    _log_close_failure("SCANNER_SELL", p, al, extra={
+                        "symbol": candidate["symbol"],
+                        "scanner_score": candidate["score"],
+                        "signal": candidate["signal"],
+                    })
 
     # --- KAUFEN: Top Opportunities mit vollen Safety-Checks ---
     if regime_halt:
@@ -1195,6 +1274,10 @@ def check_overnight_positions(client, config):
             save_trade(trade_entry)
             closed.append(trade_entry)
             log.info(f"  Overnight Close: #{pos['instrument_id']} ({pos.get('reason', '')})")
+        else:
+            _log_close_failure("OVERNIGHT_CLOSE", pos, None, extra={
+                "reason": pos.get("reason", "Overnight-Risiko"),
+            })
 
     return closed
 
