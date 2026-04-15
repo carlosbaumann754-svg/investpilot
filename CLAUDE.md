@@ -17,6 +17,66 @@ Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub
 **Render URL:** https://investpilot-2dp2.onrender.com
 **Deploy Hook:** `curl -s "https://api.render.com/deploy/srv-d76i772dbo4c73bkmfc0?key=PiRVjLwLjNc"`
 
+## Code-Audit-Regime (ab 2026-04-15)
+
+Dreistufiges System um Bugs wie den Exit-Forecast-Config-Mismatch (v14) zu
+verhindern. Ersetzt die Idee eines woechentlichen Kalender-Audits, weil der
+zu Ignoranz fuehrt.
+
+### Stufe 1 — Continuous (automatisch pro Feature)
+**Bei JEDEM Feature/Endpoint/groesseren Commit abarbeiten, ohne dass der
+User nachfragen muss:**
+
+1. **Config-Read-Check:** Liest der neue Code aus der Config? Wenn ja —
+   benutzt er dieselbe Sektion wie der Live-Bot? (Referenz: siehe
+   Config-Sektion-Map unten.) Keine Defaults wie `-2.5` raten — aus dem
+   Bot-Code (trader.py, optimizer.py) ableiten.
+2. **Exception-Visibility-Check:** Neue `try/except` — loggt sie als
+   `log.error()` (nicht `log.info`) UND ist der Fehler irgendwo sichtbar
+   (Dashboard, Telegram, Alert)? Silent-Fail = ablehnen.
+3. **File-Write-Check:** Neue Writes auf `/data/*.json`? Race-safe
+   (atomic via `save_json()`)? Auch in `BACKUP_FILES` (persistence.py)?
+4. **Timezone-Check:** Neue `datetime.now()` — UTC-aware? Scheduler
+   nutzt `datetime.now(timezone.utc)`, nie naive datetimes mischen.
+
+Diese Checks laufen implizit bei der Code-Generierung.
+
+### Stufe 2 — Trigger-basiert (bei Ereignissen)
+**Vollen Audit (Phase 1-3, siehe unten) ausloesen wenn:**
+- Optimizer hat Parameter live gesetzt (z.B. SL, TP, Kelly)
+- ≥3 Feature-Commits in einer Woche passiert
+- Unerwartetes Bot-Verhalten (z.B. 0 Closed Trades ueber 7 Tage, PnL-Spikes)
+- Render-Deploy failed, Service crashed, Health-Check RED
+- eToro/yfinance API-Response-Format veraendert (Parse-Errors im Log)
+
+### Stufe 3 — Kalender (monatlich, NICHT woechentlich)
+**Alle ~4 Wochen:** Phase 1 + 2 des vollen Audits + Dependency-Check
+(Python-Lib-Versionen, yfinance Breaking-Changes, eToro API-Doku diff).
+Phase 3 nur bei Bedarf.
+
+### Phasen des vollen Audits
+- **Phase 1 — Config-Konsistenz:** Alle Stellen die `stop_loss_pct`,
+  `take_profit_pct`, `kelly_*`, `min_scanner_score` etc. lesen — gleiche
+  Sektion wie der Live-Bot?
+- **Phase 2 — Silent-Fails:** `try/except` ohne Log, ohne Dashboard-Sichtbarkeit
+- **Phase 3 — Race-Conditions:** Scheduler + API + GitHub-Action gleichzeitige
+  File-Writes, Timezones, Stale-Locks
+
+### Config-Sektion-Map (Single-Source-of-Truth)
+| Parameter | Sektion in config.json | Wer liest |
+|---|---|---|
+| `stop_loss_pct`, `take_profit_pct` | `demo_trading` | trader.py, optimizer.py |
+| `min_scanner_score`, `use_ml_scoring` | `demo_trading` | trader.py, brain.py |
+| `portfolio_targets` | `demo_trading` | trader.py |
+| `trailing_sl_pct`, `trailing_sl_activation_pct`, `tp_tranches` | `leverage` | trader.py, leverage_manager.py |
+| `max_days_stale`, `stale_pnl_threshold_pct` | `time_stop` (top-level) | trader.py |
+| `max_fraction` (Kelly) | `kelly` (top-level) | risk_manager.py |
+| `enabled`, `schedule`, `max_changes_per_week` | `optimizer` | optimizer.py |
+| `default_years` | `backtest` | backtester.py |
+
+**Wichtig:** `stocks` ist KEINE Live-Sektion — Fehlerquelle fuer Exit-Forecast v14.
+Wenn du etwas nicht findest: `grep "key_name" app/*.py` bevor du raetst.
+
 ## Architektur
 
 ```
