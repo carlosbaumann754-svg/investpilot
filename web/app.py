@@ -1180,6 +1180,119 @@ async def api_sync_v15_config(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/config/strategy-audit")
+async def api_config_strategy_audit(user=Depends(require_auth)):
+    """Vergleicht die Strategy-kritischen Keys zwischen Git-Seed und Live-Config.
+
+    Zweck: Aufdecken der Config-Drift auf der Render Persistent Disk. Der
+    v15-sync-Endpoint synchronisiert nur v15-Keys; andere Strategie-Parameter
+    (Kelly, min_scanner_score, SL/TP, use_ml_scoring) koennen zwischen
+    Git-Seed und /data/config.json divergieren.
+
+    Read-only: aendert nichts, gibt nur einen Diff zurueck.
+    """
+    try:
+        import json as _json
+        from pathlib import Path as _P
+
+        # Seed laden (gleiche Logik wie v15-sync)
+        seed_paths = [
+            _P("/app/data/config.json"),
+            _P(__file__).parent.parent / "data" / "config.json",
+        ]
+        seed = None
+        seed_source = None
+        for p in seed_paths:
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    seed = _json.load(f)
+                seed_source = str(p)
+                break
+        if not seed:
+            raise HTTPException(status_code=500, detail="Seed-Config nicht gefunden")
+
+        live = load_config() or {}
+
+        # Kritische Strategy-Keys definieren: (path_list, label)
+        checks = [
+            (["demo_trading", "strategy"], "Strategie"),
+            (["demo_trading", "min_scanner_score"], "Min Scanner Score"),
+            (["demo_trading", "stop_loss_pct"], "Stop-Loss %"),
+            (["demo_trading", "take_profit_pct"], "Take-Profit %"),
+            (["demo_trading", "default_leverage"], "Default Leverage"),
+            (["demo_trading", "max_positions"], "Max Positionen (legacy)"),
+            (["demo_trading", "max_single_trade_usd"], "Max Trade USD (legacy)"),
+            (["demo_trading", "max_single_trade_pct_of_portfolio"], "Max Trade % (v15)"),
+            (["demo_trading", "use_ml_scoring"], "ML-Scoring aktiv"),
+            (["demo_trading", "rebalance_threshold_pct"], "Rebalance-Threshold"),
+            (["kelly_sizing", "enabled"], "Kelly aktiv"),
+            (["kelly_sizing", "max_fraction"], "Kelly max_fraction (k)"),
+            (["kelly_sizing", "half_kelly"], "Half-Kelly"),
+            (["kelly_sizing", "min_trades"], "Kelly min_trades"),
+            (["regime_filter", "enabled"], "Regime-Filter aktiv"),
+            (["multi_timeframe", "enabled"], "Multi-Timeframe aktiv"),
+            (["multi_timeframe", "min_confluence_score"], "MTF min_confluence_score"),
+            (["vix_term_structure", "enabled"], "VIX Term Structure"),
+        ]
+
+        def walk(d, path):
+            cur = d
+            for k in path:
+                if not isinstance(cur, dict) or k not in cur:
+                    return "__MISSING__"
+                cur = cur[k]
+            return cur
+
+        MISSING = "__MISSING__"
+        report = []
+        drift_count = 0
+        for path, label in checks:
+            seed_val = walk(seed, path)
+            live_val = walk(live, path)
+            match = (seed_val == live_val)
+            if not match:
+                drift_count += 1
+            report.append({
+                "key": ".".join(path),
+                "label": label,
+                "seed": None if seed_val == MISSING else seed_val,
+                "live": None if live_val == MISSING else live_val,
+                "seed_missing": seed_val == MISSING,
+                "live_missing": live_val == MISSING,
+                "match": match,
+            })
+
+        # Letzter Backtest — mit welcher Config lief er?
+        try:
+            bt_history = read_json_safe("backtest_results.json") or {}
+            bt_config = bt_history.get("config_used") or {}
+            bt_timestamp = bt_history.get("timestamp")
+        except Exception:
+            bt_config = {}
+            bt_timestamp = None
+
+        # Live-Freeze Info
+        freeze = live.get("_live_freeze") or seed.get("_live_freeze") or {}
+
+        return {
+            "status": "drift_detected" if drift_count > 0 else "in_sync",
+            "drift_count": drift_count,
+            "total_checks": len(checks),
+            "seed_source": seed_source,
+            "seed_live_freeze": freeze,
+            "last_backtest": {
+                "timestamp": bt_timestamp,
+                "config_used": bt_config,
+            },
+            "diff": report,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Strategy-Audit Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/trading/status")
 async def api_trading_status(user=Depends(require_auth)):
     """Trading-Status: laeuft es? Letzter Lauf?"""
