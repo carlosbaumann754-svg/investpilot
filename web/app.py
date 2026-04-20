@@ -1354,6 +1354,47 @@ async def api_send_weekly_report(user=Depends(require_auth)):
         return {"error": str(e)}
 
 
+@app.get("/api/email-config-check")
+async def api_email_config_check(user=Depends(require_auth)):
+    """Prueft ob SMTP-Konfiguration fuer Weekly-Report-Email vorhanden ist.
+    Gibt nur Boolsche Werte + maskierte Hinweise zurueck — KEINE Passwoerter.
+    """
+    import os as _os
+    smtp_server = _os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = _os.environ.get("SMTP_PORT", "587")
+    smtp_email = _os.environ.get("SMTP_EMAIL", "")
+    smtp_password = _os.environ.get("SMTP_PASSWORD", "")
+    recipient = _os.environ.get("ALERT_RECIPIENT", "")
+
+    def _mask_email(e):
+        if not e or "@" not in e:
+            return None
+        local, domain = e.split("@", 1)
+        if len(local) <= 2:
+            return f"{local[:1]}*@{domain}"
+        return f"{local[:2]}{'*' * (len(local)-2)}@{domain}"
+
+    ready = bool(smtp_email and smtp_password and recipient)
+    return {
+        "ready": ready,
+        "smtp_server": smtp_server,
+        "smtp_port": smtp_port,
+        "smtp_email_set": bool(smtp_email),
+        "smtp_email_masked": _mask_email(smtp_email),
+        "smtp_password_set": bool(smtp_password),
+        "smtp_password_length": len(smtp_password) if smtp_password else 0,
+        "recipient_set": bool(recipient),
+        "recipient_masked": _mask_email(recipient),
+        "missing": [
+            key for key, val in [
+                ("SMTP_EMAIL", smtp_email),
+                ("SMTP_PASSWORD", smtp_password),
+                ("ALERT_RECIPIENT", recipient),
+            ] if not val
+        ],
+    }
+
+
 @app.get("/api/weekly-report/maintenance-preview")
 async def api_weekly_maintenance_preview(user=Depends(require_auth)):
     """Preview-Endpoint: Ruft nur den Wartungs-Block live auf (ohne Cache).
