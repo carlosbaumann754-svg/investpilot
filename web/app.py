@@ -1363,10 +1363,11 @@ async def api_weekly_maintenance_preview(user=Depends(require_auth)):
     auszuloesen.
     """
     try:
+        from datetime import datetime as _dt
         from app.weekly_report import _maintenance_block
         items = _maintenance_block()
         return {
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": _dt.now().isoformat(),
             "count": len(items),
             "items": [
                 {"name": n, "status": s, "detail": d, "severity": sev}
