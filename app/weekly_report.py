@@ -355,6 +355,80 @@ def _maintenance_block():
                       f"(${dca.get('consumed_usd', 0):,.0f}/{dca.get('total_deposit_usd', 0):,.0f} deployed)",
                       "ok"))
 
+    # 8) Config-Drift (Seed vs Live) — wichtig fuer Nachvollziehbarkeit bei
+    # Optimizer-Runs die in Live-Disk schreiben aber nicht in Git-Seed.
+    try:
+        import json as _json
+        from pathlib import Path as _P
+
+        seed_paths = [
+            _P("/app/data/config.json"),
+            _P(__file__).parent.parent / "data" / "config.json",
+        ]
+        seed = None
+        for p in seed_paths:
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    seed = _json.load(f)
+                break
+
+        if seed:
+            live = load_config() or {}
+            # Gleiche Key-Liste wie /api/config/strategy-audit
+            checks = [
+                (["demo_trading", "strategy"], "strategy"),
+                (["demo_trading", "min_scanner_score"], "min_scanner_score"),
+                (["demo_trading", "stop_loss_pct"], "stop_loss_pct"),
+                (["demo_trading", "take_profit_pct"], "take_profit_pct"),
+                (["demo_trading", "default_leverage"], "default_leverage"),
+                (["demo_trading", "max_positions"], "max_positions"),
+                (["demo_trading", "max_single_trade_usd"], "max_single_trade_usd"),
+                (["demo_trading", "max_single_trade_pct_of_portfolio"], "max_trade_pct"),
+                (["demo_trading", "use_ml_scoring"], "use_ml_scoring"),
+                (["demo_trading", "rebalance_threshold_pct"], "rebalance_threshold"),
+                (["kelly_sizing", "enabled"], "kelly_enabled"),
+                (["kelly_sizing", "max_fraction"], "kelly_max_fraction"),
+                (["kelly_sizing", "half_kelly"], "half_kelly"),
+                (["kelly_sizing", "min_trades"], "kelly_min_trades"),
+                (["regime_filter", "enabled"], "regime_filter"),
+                (["multi_timeframe", "enabled"], "multi_timeframe"),
+                (["multi_timeframe", "min_confluence_score"], "mtf_min_score"),
+                (["vix_term_structure", "enabled"], "vix_term_structure"),
+            ]
+
+            def _walk(d, path):
+                cur = d
+                for k in path:
+                    if not isinstance(cur, dict) or k not in cur:
+                        return "__MISSING__"
+                    cur = cur[k]
+                return cur
+
+            drifted = []
+            for path, label in checks:
+                s = _walk(seed, path)
+                l = _walk(live, path)
+                if s != l:
+                    drifted.append(f"{label}: seed={s} vs live={l}")
+
+            if not drifted:
+                items.append(("Config-Drift", "OK", "Seed und Live synchron (0/18 Keys)", "ok"))
+            elif len(drifted) <= 2:
+                # 1-2 Drifts = typisch nach Optimizer-Run, Review empfohlen
+                items.append(("Config-Drift", "review",
+                              f"{len(drifted)} Key(s) driften: " + "; ".join(drifted),
+                              "warn"))
+            else:
+                # >2 Drifts = verdaechtig (mehrere Optimizer-Runs oder grosser Config-Change)
+                items.append(("Config-Drift", "DRIFT",
+                              f"{len(drifted)} Keys driften: " + "; ".join(drifted[:3]) +
+                              (f" (+{len(drifted)-3} weitere)" if len(drifted) > 3 else ""),
+                              "crit"))
+        else:
+            items.append(("Config-Drift", "fehlt", "Seed-Config nicht gefunden", "warn"))
+    except Exception as e:
+        items.append(("Config-Drift", "error", f"Check fehlgeschlagen: {e}", "warn"))
+
     return items
 
 
