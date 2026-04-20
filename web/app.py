@@ -1354,6 +1354,30 @@ async def api_send_weekly_report(user=Depends(require_auth)):
         return {"error": str(e)}
 
 
+@app.get("/api/weekly-report/maintenance-preview")
+async def api_weekly_maintenance_preview(user=Depends(require_auth)):
+    """Preview-Endpoint: Ruft nur den Wartungs-Block live auf (ohne Cache).
+
+    Zweck: Entwicklungs-/Debug-Endpoint um neue Maintenance-Checks zu
+    verifizieren ohne auf den Freitag-Cron zu warten oder eine Email
+    auszuloesen.
+    """
+    try:
+        from app.weekly_report import _maintenance_block
+        items = _maintenance_block()
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "count": len(items),
+            "items": [
+                {"name": n, "status": s, "detail": d, "severity": sev}
+                for (n, s, d, sev) in items
+            ],
+        }
+    except Exception as e:
+        log.error(f"Maintenance-Preview Error: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
 @app.get("/api/discovery")
 async def api_discovery(user=Depends(require_auth)):
     """Letzte Asset Discovery Ergebnisse."""
