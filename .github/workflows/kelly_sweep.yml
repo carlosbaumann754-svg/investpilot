@@ -12,6 +12,12 @@ on:
         description: "Trigger-Quelle (dashboard / manual / debug)"
         required: false
         default: "manual"
+  schedule:
+    # Jeden 1. Sonntag im Monat, 07:00 UTC = 09:00 CEST.
+    # Laeuft NACH dem Sonntag-Backtest (06:00 UTC) und hat damit
+    # die aktuellsten Trade-Daten zur Verfuegung.
+    # Cron-Trick: "* * 1-7 * 0" = Sonntag und Tag 1-7 = erster Sonntag.
+    - cron: '0 7 1-7 * 0'
 
 concurrency:
   group: investpilot-kelly-sweep

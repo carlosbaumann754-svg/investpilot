@@ -15,6 +15,8 @@ import smtplib
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 from app.config_manager import load_json, load_config
 from app.brain import load_brain, generate_performance_report
@@ -720,6 +722,27 @@ def send_weekly_report():
             f"KW {datetime.now().isocalendar()[1]}"
         )
         msg.attach(MIMEText(html, "html"))
+
+        # PDF-Anhang (wenn erfolgreich erstellt) — damit Carlos den Report
+        # offline in seinem lokalen Bericht-Ordner ablegen kann ohne sich
+        # extra einloggen zu muessen.
+        if pdf_path:
+            try:
+                from pathlib import Path as _P
+                pdf_file = _P(pdf_path)
+                if pdf_file.exists():
+                    with open(pdf_file, "rb") as f:
+                        part = MIMEBase("application", "pdf")
+                        part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        "Content-Disposition",
+                        f'attachment; filename="{pdf_file.name}"',
+                    )
+                    msg.attach(part)
+                    log.info(f"PDF angehaengt: {pdf_file.name}")
+            except Exception as e:
+                log.warning(f"PDF-Anhang fehlgeschlagen (non-fatal): {e}")
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
