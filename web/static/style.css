@@ -544,6 +544,32 @@ tr:hover {
     .tip::before { left: 14px; }
 }
 
+/* In Tabellen-Headern: Tooltip nach UNTEN oeffnen, damit er nicht im
+   vorherigen Card-Header oder engen Oben-Rand verschwindet. */
+.data-table thead .tip::after {
+    bottom: auto;
+    top: calc(100% + 8px);
+}
+.data-table thead .tip::before {
+    bottom: auto;
+    top: calc(100% + 2px);
+    border-top-color: transparent;
+    border-bottom-color: var(--border);
+}
+
+/* Letzte 2-3 Spalten: Tooltip rechtsbuendig statt mittig, damit er nicht
+   rechts aus der Karte rausragt. */
+.data-table thead th:nth-last-child(-n+3) .tip::after {
+    left: auto;
+    right: 0;
+    transform: none;
+}
+.data-table thead th:nth-last-child(-n+3) .tip::before {
+    left: auto;
+    right: 14px;
+    transform: none;
+}
+
 /* === P&L PERIODS GRID === */
 .pnl-periods-grid {
     display: grid;
