@@ -3293,12 +3293,21 @@ async def api_v12_status(user=Depends(require_auth)):
         active_universe = (total_universe - len(disabled)) if total_universe else None
 
         # --- Universe Health (letzter yfinance Download-Report) ---
+        # Die Datei wird vom Backtester (app/backtester.py) geschrieben:
+        # Keys: generated_at, total_requested, ok_count, error_count, report
+        # (report ist dict {symbol: {status: "ok" | "insufficient_data" | ...}})
         uh = read_json_safe("universe_health.json") or {}
-        uh_summary = uh.get("summary") or {}
+        uh_report = uh.get("report") or uh.get("symbols") or {}  # fallback auf alten Key
         uh_bad = [
-            s for s, d in (uh.get("symbols") or {}).items()
-            if d.get("status") not in (None, "ok")
+            s for s, d in uh_report.items()
+            if isinstance(d, dict) and d.get("status") not in (None, "ok")
         ]
+        uh_summary = {
+            "timestamp": uh.get("generated_at") or uh.get("timestamp"),
+            "ok": uh.get("ok_count"),
+            "total": uh.get("total_requested"),
+            "errors": uh.get("error_count"),
+        }
 
         # --- Kelly Sizing ---
         kelly_cfg = config.get("kelly_sizing", {}) or {}
@@ -3350,7 +3359,7 @@ async def api_v12_status(user=Depends(require_auth)):
                 "active": active_universe,
                 "disabled_count": len(disabled),
                 "disabled_symbols": disabled,
-                "health_last_update": uh.get("timestamp"),
+                "health_last_update": uh_summary.get("timestamp"),
                 "health_ok": uh_summary.get("ok"),
                 "health_bad": uh_bad,
             },
