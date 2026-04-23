@@ -297,6 +297,70 @@ async def login_page():
 
 
 # ============================================================
+# ASSET META ENRICHMENT — Helper
+# ============================================================
+# Wird aus dem Scanner/Trader nur die instrument_id geloggt; das Frontend
+# und der Ask-Tab brauchen aber symbol + name + class + sector. Statt
+# an ~6 Schreib-Stellen die Daten zu ergaenzen, mappen wir sie zentral
+# beim Lesen aus dem ASSET_UNIVERSE.
+
+_ASSET_META_CACHE = {"dict": None}
+
+def _asset_meta_dict():
+    """Lazy-init reverse-lookup dict: instrument_id -> meta."""
+    if _ASSET_META_CACHE["dict"] is None:
+        try:
+            from app.market_scanner import ASSET_UNIVERSE
+            _ASSET_META_CACHE["dict"] = {
+                info.get("etoro_id"): {
+                    "symbol": sym,
+                    "name": info.get("name", sym),
+                    "asset_class": info.get("class"),
+                    "sector": info.get("sector"),
+                }
+                for sym, info in ASSET_UNIVERSE.items()
+                if info.get("etoro_id")
+            }
+        except Exception as e:
+            log.warning(f"ASSET_META init failed: {e}")
+            _ASSET_META_CACHE["dict"] = {}
+    return _ASSET_META_CACHE["dict"]
+
+
+def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
+    """Reichert eine Liste von Dicts um symbol/name/asset_class/sector an.
+
+    Args:
+        items: Liste von Dicts mit instrument_id (oder id_key)
+        id_key: Name des ID-Felds (default: instrument_id)
+        only_missing: True = nur anreichern wenn symbol fehlt/? ist. False = immer ueberschreiben.
+
+    Returns:
+        Die gleiche Liste (modifiziert in-place).
+    """
+    mapping = _asset_meta_dict()
+    if not mapping:
+        return items
+    for t in items or []:
+        if not isinstance(t, dict):
+            continue
+        if only_missing:
+            cur = t.get("symbol")
+            if cur and cur not in ("?", "unknown", ""):
+                continue
+        iid = t.get(id_key) or t.get("etoro_id")
+        if iid is None:
+            continue
+        meta = mapping.get(iid)
+        if meta:
+            t.setdefault("symbol", meta["symbol"])
+            t.setdefault("name", meta["name"])
+            t.setdefault("asset_class", meta["asset_class"])
+            t.setdefault("sector", meta["sector"])
+    return items
+
+
+# ============================================================
 # API ENDPOINTS
 # ============================================================
 
@@ -319,6 +383,9 @@ async def api_portfolio(user=Depends(require_auth)):
 
         parsed = [EtoroClient.parse_position(pos) for pos in positions]
         total_invested = sum(p["invested"] for p in parsed)
+
+        # Symbol/Name aus ASSET_UNIVERSE anreichern (Dashboard-freundlich)
+        enrich_with_asset_meta(parsed)
 
         return {
             "credit": round(credit, 2),
@@ -528,6 +595,9 @@ async def api_exit_forecast(user=Depends(require_auth)):
             trailing_state = {}
 
         forecasts = [_compute_exit_forecast(p, config, trailing_state) for p in parsed]
+
+        # Symbol/Name anreichern fuer Dashboard-Anzeige
+        enrich_with_asset_meta(forecasts)
 
         # Nach Dringlichkeit sortieren (kleinste distance_pct zuerst)
         def _sort_key(f):
@@ -949,52 +1019,10 @@ async def api_pnl_periods(user=Depends(require_auth)):
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, offset: int = 0, user=Depends(require_auth)):
-    """Trade-Historie (paginiert).
-
-    Reichert Trades die nur `instrument_id` haben um `symbol`, `name` und
-    `asset_class` an. Der Scanner/Trader loggt aktuell nur die interne
-    eToro-Instrument-ID — das Dashboard und der Ask-Tab brauchen aber
-    menschenlesbare Symbole. Wir mappen aus dem ASSET_UNIVERSE.
-    """
+    """Trade-Historie (paginiert). Angereichert mit Symbol-Namen."""
     history = read_json_safe("trade_history.json") or []
-    # Neueste zuerst
-    history.reverse()
-
-    # Reverse-Lookup-Dict: instrument_id -> {symbol, name, class}
-    try:
-        from app.market_scanner import ASSET_UNIVERSE
-        id_to_meta = {
-            info.get("etoro_id"): {
-                "symbol": sym,
-                "name": info.get("name", sym),
-                "asset_class": info.get("class"),
-                "sector": info.get("sector"),
-            }
-            for sym, info in ASSET_UNIVERSE.items()
-            if info.get("etoro_id")
-        }
-    except Exception as e:
-        log.warning(f"ASSET_UNIVERSE-Lookup failed (non-fatal): {e}")
-        id_to_meta = {}
-
-    # Anreichern
-    for t in history:
-        if not isinstance(t, dict):
-            continue
-        # Nur anreichern wenn symbol fehlt oder "?"/"unknown" ist
-        cur_symbol = t.get("symbol")
-        if cur_symbol and cur_symbol not in ("?", "unknown", ""):
-            continue
-        iid = t.get("instrument_id") or t.get("etoro_id")
-        if iid is None:
-            continue
-        meta = id_to_meta.get(iid)
-        if meta:
-            t.setdefault("symbol", meta["symbol"])
-            t.setdefault("name", meta["name"])
-            t.setdefault("asset_class", meta["asset_class"])
-            t.setdefault("sector", meta["sector"])
-
+    history.reverse()  # Neueste zuerst
+    enrich_with_asset_meta(history)
     total = len(history)
     page = history[offset:offset + limit]
     return {"total": total, "offset": offset, "limit": limit, "trades": page}
@@ -3596,33 +3624,10 @@ async def api_ask(req: AskRequest, user=Depends(require_auth)):
 
         config = load_config()
 
-        # Trade-History anreichern: instrument_id -> symbol (sonst sieht
+        # Trade-History anreichern: instrument_id -> symbol/name (sonst sieht
         # Claude nur anonyme IDs und kann die Frage nicht beantworten)
         raw_history = read_json_safe("trade_history.json") or []
-        try:
-            from app.market_scanner import ASSET_UNIVERSE
-            id_to_meta = {
-                info.get("etoro_id"): {
-                    "symbol": sym,
-                    "name": info.get("name", sym),
-                    "asset_class": info.get("class"),
-                }
-                for sym, info in ASSET_UNIVERSE.items()
-                if info.get("etoro_id")
-            }
-            for t in raw_history:
-                if not isinstance(t, dict):
-                    continue
-                if t.get("symbol") and t["symbol"] not in ("?", "unknown", ""):
-                    continue
-                iid = t.get("instrument_id") or t.get("etoro_id")
-                meta = id_to_meta.get(iid) if iid is not None else None
-                if meta:
-                    t.setdefault("symbol", meta["symbol"])
-                    t.setdefault("name", meta["name"])
-                    t.setdefault("asset_class", meta["asset_class"])
-        except Exception as _e:
-            log.debug(f"Ask: symbol enrichment skipped: {_e}")
+        enrich_with_asset_meta(raw_history)
 
         # Daten sammeln
         context_data = {

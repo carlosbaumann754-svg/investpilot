@@ -274,9 +274,13 @@ function renderExitForecast(data) {
 
         const ageTxt = p.age_days != null ? `${p.age_days.toFixed(1)}d` : '--';
 
+        // Asset-Kennung: Ticker mit Hover-Tooltip (voller Name)
+        const ticker = p.symbol || ('#' + (p.instrument_id || '?'));
+        const title = p.name ? `title="${p.name}"` : '';
+        const assetCell = `<span ${title} style="${p.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>`;
         return `
             <tr>
-                <td>${p.instrument_id || '?'}</td>
+                <td>${assetCell}</td>
                 <td>${ageTxt}</td>
                 <td class="${pnlCls}">${distFmt(p.pnl_pct)}</td>
                 <td><strong>${ntLabel}</strong></td>
@@ -414,9 +418,13 @@ async function loadDashboard() {
                     const trailTd = trail
                         ? `<td class="badge-green" style="font-size:11px;">${fmtUsd(trail.sl_level)}</td>`
                         : '<td style="color:#666;">--</td>';
+                    // Ticker als Asset-Kennung; Hover-Tooltip mit vollem Namen
+                    const ticker = pos.symbol || ('#' + pos.instrument_id);
+                    const title = pos.name ? `title="${pos.name}"` : '';
+                    const assetCell = `<span ${title} style="${pos.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>`;
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
-                        <td>#${pos.instrument_id}</td>
+                        <td>${assetCell}</td>
                         <td>${fmtUsd(pos.invested)}</td>
                         <td class="${pnlClass(pos.pnl)}">${fmtUsd(pos.pnl)}</td>
                         <td class="${pnlClass(pos.pnl_pct)}">${fmtPct(pos.pnl_pct)}</td>
@@ -574,10 +582,17 @@ async function loadTrades(reset = false) {
         const actionClass = t.action === 'BUY' ? 'badge-green' :
                             t.action.includes('STOP_LOSS') ? 'badge-red' :
                             t.action.includes('TAKE_PROFIT') ? 'badge-purple' : 'badge-blue';
+        // Zweizeilige Asset-Anzeige: Ticker fett, Name klein darunter
+        const ticker = t.symbol || ('#' + (t.instrument_id || '?'));
+        const fullName = t.name && t.name !== t.symbol ? t.name : '';
+        const assetCell = fullName
+            ? `<div style="font-weight:600;">${ticker}</div>
+               <div style="font-size:11px;color:var(--text-dim);">${fullName}</div>`
+            : `<div style="font-weight:600;">${ticker}</div>`;
         tr.innerHTML = `
             <td>${fmtTime(t.timestamp)}</td>
             <td><span class="badge ${actionClass}">${t.action}</span></td>
-            <td>${t.symbol || '#' + (t.instrument_id || '?')}</td>
+            <td>${assetCell}</td>
             <td>${t.amount_usd ? fmtUsd(t.amount_usd) : (t.pnl_usd ? fmtUsd(t.pnl_usd) : '--')}</td>
             <td>${t.leverage || 1}x</td>
         `;
