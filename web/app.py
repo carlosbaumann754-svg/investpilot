@@ -949,10 +949,52 @@ async def api_pnl_periods(user=Depends(require_auth)):
 
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, offset: int = 0, user=Depends(require_auth)):
-    """Trade-Historie (paginiert)."""
+    """Trade-Historie (paginiert).
+
+    Reichert Trades die nur `instrument_id` haben um `symbol`, `name` und
+    `asset_class` an. Der Scanner/Trader loggt aktuell nur die interne
+    eToro-Instrument-ID — das Dashboard und der Ask-Tab brauchen aber
+    menschenlesbare Symbole. Wir mappen aus dem ASSET_UNIVERSE.
+    """
     history = read_json_safe("trade_history.json") or []
     # Neueste zuerst
     history.reverse()
+
+    # Reverse-Lookup-Dict: instrument_id -> {symbol, name, class}
+    try:
+        from app.market_scanner import ASSET_UNIVERSE
+        id_to_meta = {
+            info.get("etoro_id"): {
+                "symbol": sym,
+                "name": info.get("name", sym),
+                "asset_class": info.get("class"),
+                "sector": info.get("sector"),
+            }
+            for sym, info in ASSET_UNIVERSE.items()
+            if info.get("etoro_id")
+        }
+    except Exception as e:
+        log.warning(f"ASSET_UNIVERSE-Lookup failed (non-fatal): {e}")
+        id_to_meta = {}
+
+    # Anreichern
+    for t in history:
+        if not isinstance(t, dict):
+            continue
+        # Nur anreichern wenn symbol fehlt oder "?"/"unknown" ist
+        cur_symbol = t.get("symbol")
+        if cur_symbol and cur_symbol not in ("?", "unknown", ""):
+            continue
+        iid = t.get("instrument_id") or t.get("etoro_id")
+        if iid is None:
+            continue
+        meta = id_to_meta.get(iid)
+        if meta:
+            t.setdefault("symbol", meta["symbol"])
+            t.setdefault("name", meta["name"])
+            t.setdefault("asset_class", meta["asset_class"])
+            t.setdefault("sector", meta["sector"])
+
     total = len(history)
     page = history[offset:offset + limit]
     return {"total": total, "offset": offset, "limit": limit, "trades": page}
@@ -3554,9 +3596,37 @@ async def api_ask(req: AskRequest, user=Depends(require_auth)):
 
         config = load_config()
 
+        # Trade-History anreichern: instrument_id -> symbol (sonst sieht
+        # Claude nur anonyme IDs und kann die Frage nicht beantworten)
+        raw_history = read_json_safe("trade_history.json") or []
+        try:
+            from app.market_scanner import ASSET_UNIVERSE
+            id_to_meta = {
+                info.get("etoro_id"): {
+                    "symbol": sym,
+                    "name": info.get("name", sym),
+                    "asset_class": info.get("class"),
+                }
+                for sym, info in ASSET_UNIVERSE.items()
+                if info.get("etoro_id")
+            }
+            for t in raw_history:
+                if not isinstance(t, dict):
+                    continue
+                if t.get("symbol") and t["symbol"] not in ("?", "unknown", ""):
+                    continue
+                iid = t.get("instrument_id") or t.get("etoro_id")
+                meta = id_to_meta.get(iid) if iid is not None else None
+                if meta:
+                    t.setdefault("symbol", meta["symbol"])
+                    t.setdefault("name", meta["name"])
+                    t.setdefault("asset_class", meta["asset_class"])
+        except Exception as _e:
+            log.debug(f"Ask: symbol enrichment skipped: {_e}")
+
         # Daten sammeln
         context_data = {
-            "trade_history": read_json_safe("trade_history.json") or [],
+            "trade_history": raw_history,
             "decision_log": read_json_safe("decision_log.json") or [],
             "brain_state": read_json_safe("brain_state.json") or {},
             "risk_state": read_json_safe("risk_state.json") or {},
