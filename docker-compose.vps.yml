@@ -1,0 +1,41 @@
+services:
+  investpilot:
+    build: .
+    container_name: investpilot
+    restart: unless-stopped
+    expose:
+      - '8000'
+    volumes:
+      - /opt/investpilot/data:/app/data
+      - /opt/investpilot/Bericht:/app/Bericht
+    env_file:
+      - /opt/investpilot/.env
+    environment:
+      - TZ=Europe/Zurich
+      - PYTHONPATH=/app
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - /opt/investpilot/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - /opt/investpilot/logs/caddy:/var/log/caddy
+    environment:
+      - TZ=Europe/Zurich
+    depends_on:
+      - investpilot
+
+volumes:
+  caddy_data:
+  caddy_config:
