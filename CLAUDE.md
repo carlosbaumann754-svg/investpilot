@@ -12,10 +12,17 @@ Inkl. v8 Profit-Locking & Analytics: TP-Tranchen (Partial Close), Konzentrations
 Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub-Action Optimizer (Lern-Loop laeuft vollstaendig autonom in 7-GB CI-Runner statt 512-MB Render).
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
-**eToro User:** carlosbaumann777
-**Deployment:** Render (Paid $7/mo) + Synology NAS
-**Render URL:** https://investpilot-2dp2.onrender.com
-**Deploy Hook:** `curl -s "https://api.render.com/deploy/srv-d76i772dbo4c73bkmfc0?key=PiRVjLwLjNc"`
+**eToro User:** carlosbaumann777 (wird Ende Mai 2026 durch IBKR ersetzt)
+**IBKR Paper-Account:** DUP108015 (aktiviert 2026-04-24, fuer Migration)
+
+**Deployment:** Hetzner VPS CPX22 (~€10.91/mo) — migriert von Render am 2026-04-23
+**VPS IP:** 178.104.236.157
+**VPS URL (geplant):** https://bot.cbaumann.ch — Cloudflare DNS (NS: christina+jerry.ns.cloudflare.com), Caddy Reverse Proxy mit Lets-Encrypt
+**SSH:** `ssh -i ~/.ssh/hetzner_investpilot root@178.104.236.157`
+**Compose:** `/opt/investpilot/docker-compose.vps.yml` (investpilot + caddy)
+**IB Gateway:** `/opt/ib-gateway/docker-compose.yml` (gnzsnz/ib-gateway:stable, Port 4002 paper)
+
+**Alter Render-Deploy (abgeschaltet):** ~~https://investpilot-2dp2.onrender.com~~
 
 ## Code-Audit-Regime (ab 2026-04-15)
 
