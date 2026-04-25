@@ -167,19 +167,31 @@ class IbkrBroker(BrokerBase):
     # --- Connection-Lifecycle ---
 
     def _ensure_event_loop(self):
-        """ib_insync braucht ein asyncio event-loop im aktuellen Thread.
+        """Loop-Setup fuer ib_insync je nach Calling-Context:
 
-        Threads die via asyncio.to_thread() oder threading.Thread() erstellt
-        wurden haben standardmaessig KEIN event loop. ib_insync's IB.connect()
-        crasht dann mit 'There is no current event loop in thread'.
+        - Aus FastAPI async-Handler (running loop): nest_asyncio.apply() patcht
+          den Loop sodass ib_insync's eigene asyncio.run() Calls darin laufen
+          koennen — ohne Loop-Conflict.
+        - Aus asyncio.to_thread / threading.Thread (kein Loop): neuen erstellen
+          und setzen.
+        - Aus normalem sync-Code (Bot-Trader): bestehender Loop wird genutzt.
 
-        Workaround: einen neuen event loop im aktuellen Thread setzen wenn
-        keiner da ist. Per-Thread isoliert -> kein Conflict mit FastAPI's
-        Haupt-Loop oder anderen Threads.
+        Damit funktionieren ALLE Aufruf-Wege ohne 'no current event loop'-Fehler
+        oder 'attached to a different loop'-Crash.
         """
         import asyncio
         try:
-            asyncio.get_event_loop()
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Loop laeuft bereits (FastAPI) -> nest_asyncio patchen
+                try:
+                    import nest_asyncio
+                    nest_asyncio.apply(loop)
+                except ImportError:
+                    log.warning(
+                        "nest_asyncio fehlt — Calls aus running event loop "
+                        "(z.B. FastAPI) koennten haengen. pip install nest_asyncio."
+                    )
         except RuntimeError:
             # Kein loop im aktuellen Thread -> neuen erstellen
             asyncio.set_event_loop(asyncio.new_event_loop())
