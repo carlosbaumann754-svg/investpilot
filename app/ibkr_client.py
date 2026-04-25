@@ -223,13 +223,26 @@ class IbkrBroker(BrokerBase):
 
             equity = self._get_account_value("NetLiquidation") or 0.0
             cash = self._get_account_value("AvailableFunds") or 0.0
+            unrealized = self._get_account_value("UnrealizedPnL") or 0.0
+            realized = self._get_account_value("RealizedPnL") or 0.0
+            gross_pos_value = self._get_account_value("GrossPositionValue") or 0.0
 
+            # eToro-kompatible Top-Level-Keys (Bot-Konsumenten lesen diese!):
+            #   credit         = Cash-Balance (eToro Standard)
+            #   unrealizedPnL  = offene P/L
+            #   positions      = Liste offener Positionen
+            # Plus IBKR-spezifische Erweiterungen mit '_'-Prefix
             return {
-                "positions": mapped_positions,
-                "aggregatedPositions": [],
-                "creditByRealizedEquity": equity,
-                "availableCash": cash,
+                "credit": cash,                   # ETORO STANDARD — kritisch fuer trader.py!
+                "unrealizedPnL": unrealized,      # ETORO STANDARD
+                "positions": mapped_positions,    # ETORO STANDARD
+                "aggregatedPositions": [],        # eToro-Kompatibilitaet
+                "creditByRealizedEquity": equity, # Legacy-Alias
+                "availableCash": cash,            # Legacy-Alias
                 "_broker": "ibkr",
+                "_equity": equity,
+                "_realized_pnl": realized,
+                "_gross_position_value": gross_pos_value,
             }
         except Exception as e:
             log.error("get_portfolio failed: %s", e)
