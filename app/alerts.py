@@ -528,9 +528,12 @@ def check_broker_health(client, config=None, max_attempts=2, retry_wait_s=5.0):
         if attempt < max_attempts:
             log.warning("Broker-Healthcheck attempt %d/%d failed (%s) — retry in %.1fs",
                         attempt, max_attempts, attempt_errors[-1], retry_wait_s)
-            # Force-Disconnect bevor Retry: gibt IBG-Pool Zeit aufzuraeumen
+            # Force-Disconnect bevor Retry: bei Singleton-Pool muss
+            # force_disconnect() gerufen werden (disconnect ist no-op fuer reuse).
             try:
-                if hasattr(client, "disconnect"):
+                if hasattr(client, "force_disconnect"):
+                    client.force_disconnect()
+                elif hasattr(client, "disconnect"):
                     client.disconnect()
             except Exception:
                 pass

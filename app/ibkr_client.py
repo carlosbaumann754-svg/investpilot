@@ -107,10 +107,52 @@ def healthcheck() -> dict:
 
 
 ## --------------------------------------------------------------------
-## IbkrBroker — BrokerBase-Implementierung
+## IbkrBroker — BrokerBase-Implementierung mit Singleton-Connection-Pool
 ## --------------------------------------------------------------------
 
+import threading
 from app.broker_base import BrokerBase
+
+# Module-level Singleton-Pool: cached IB-Instanzen pro (host, port, client_id).
+# Loest mehrere chronische Bugs:
+#   1. ClientID-Geist: kein wiederholter connect/disconnect derselben ID
+#   2. Loop-Conflict: jeder IB-Singleton bleibt in seinem eigenen Loop, nicht
+#      zwischen FastAPI/Bot/Reconciliation hin und her geschoben
+#   3. IBG-Pool-Exhaustion: bestehende IB-Instanz wird wiederverwendet bis sie
+#      explizit invalidiert wird (z.B. Connection-Loss-Detection)
+#
+# Threadsafe via _IB_LOCK fuer get/set/invalidate.
+_IB_INSTANCES: dict[tuple, "object"] = {}  # key=(host,port,client_id) -> IB
+_IB_LOCK = threading.RLock()
+
+
+def _pool_get(key: tuple):
+    with _IB_LOCK:
+        return _IB_INSTANCES.get(key)
+
+
+def _pool_set(key: tuple, ib_instance) -> None:
+    with _IB_LOCK:
+        _IB_INSTANCES[key] = ib_instance
+
+
+def _pool_invalidate(key: tuple) -> None:
+    """Entfernt instance aus Pool. Naechster get_ib() macht frischen Connect."""
+    with _IB_LOCK:
+        old = _IB_INSTANCES.pop(key, None)
+        if old is not None:
+            try:
+                if hasattr(old, "isConnected") and old.isConnected():
+                    old.disconnect()
+            except Exception:
+                pass
+
+
+def _pool_invalidate_all() -> None:
+    """Pool komplett leeren — z.B. fuer Test-Isolation oder Container-Reset."""
+    with _IB_LOCK:
+        for k in list(_IB_INSTANCES.keys()):
+            _pool_invalidate(k)
 
 
 class IbkrBroker(BrokerBase):
@@ -207,61 +249,104 @@ class IbkrBroker(BrokerBase):
             # Kein loop im aktuellen Thread -> neuen erstellen
             asyncio.set_event_loop(asyncio.new_event_loop())
 
+    @property
+    def _pool_key(self) -> tuple:
+        """Eindeutiger Key fuer den Connection-Pool — pro (host, port, client_id)."""
+        return (self.host, self.port, self.client_id)
+
     def _get_ib(self):
-        """Lazy-init der IB-Instanz mit Auto-Retry bei 'client id already in use'.
+        """Liefert IB-Instanz aus Singleton-Pool — wird ueber Cycles hinweg
+        wiederverwendet. Verhindert clientId-Conflicts und Loop-Issues.
 
-        IBG haelt nach disconnect oft 5-30s eine 'Geist-Session' im Pool. Wenn
-        der naechste Bot-Cycle zu schnell mit derselben clientId reconnected,
-        sieht IBG die alte Session noch -> Error 326 -> get_equity returnt None.
-
-        Workaround: bei Conflict-Error automatisch random clientId(100,999) probieren.
-        Damit haengt der Bot nicht an einer 'kontaminierten' ID fest.
+        Workflow:
+        0. Test-Hook: wenn self._ib direkt gesetzt (mock-injection), nutze das
+        1. Pool-Lookup via (host, port, client_id) Key
+        2. Wenn Instance da UND noch connected -> wiederverwenden
+        3. Wenn Instance da aber tot -> invalidate + neu erstellen
+        4. Wenn keine Instance -> erstellen mit Auto-Retry-Logic
         """
-        if self._ib is None or not self._ib.isConnected():
-            self._ensure_event_loop()
+        # 0. Direkt-Injection (Tests, oder vorheriger Set)
+        if self._ib is not None:
             try:
-                self._ib = connect(
+                if self._ib.isConnected():
+                    return self._ib
+            except Exception:
+                pass
+
+        key = self._pool_key
+
+        # 1. Pool-Hit
+        cached = _pool_get(key)
+        if cached is not None:
+            try:
+                if cached.isConnected():
+                    self._ib = cached  # backwards-compat
+                    return cached
+            except Exception:
+                pass
+            # Tote Instance -> invalidieren
+            _pool_invalidate(key)
+
+        # 2. Frische Connection mit Auto-Retry
+        self._ensure_event_loop()
+        try:
+            ib = connect(
+                host=self.host,
+                port=self.port,
+                client_id=self.client_id,
+                timeout=self.timeout,
+                readonly=self.readonly,
+            )
+        except Exception as primary_err:
+            err_msg = str(primary_err).lower()
+            # Error 326 / Timeout / Peer-closed / loop-issue -> Retry mit fresh clientId
+            if any(k in err_msg for k in (
+                "already in use", "timeout", "peer closed", "326",
+                "different loop", "different event loop"
+            )):
+                import random
+                fresh_id = random.randint(100, 999)
+                log.warning(
+                    "IBG-Connect mit clientId=%d failed (%s) — Retry mit fresh clientId=%d",
+                    self.client_id, type(primary_err).__name__, fresh_id,
+                )
+                # Auch alten Pool-Eintrag invalidieren falls da
+                _pool_invalidate(key)
+                ib = connect(
                     host=self.host,
                     port=self.port,
-                    client_id=self.client_id,
+                    client_id=fresh_id,
                     timeout=self.timeout,
                     readonly=self.readonly,
                 )
-            except Exception as primary_err:
-                err_msg = str(primary_err).lower()
-                # Error 326 / TimeoutError / Peer closed -> retry mit fresh clientId
-                if any(k in err_msg for k in ("already in use", "timeout", "peer closed", "326")):
-                    import random
-                    fresh_id = random.randint(100, 999)
-                    log.warning(
-                        "IBG-Connect mit clientId=%d failed (%s) — Retry mit fresh clientId=%d",
-                        self.client_id, type(primary_err).__name__, fresh_id,
-                    )
-                    self._ib = connect(
-                        host=self.host,
-                        port=self.port,
-                        client_id=fresh_id,
-                        timeout=self.timeout,
-                        readonly=self.readonly,
-                    )
-                    # Nicht permanent overriden — naechster Cycle versucht wieder die config-ID
-                else:
-                    raise
-        return self._ib
+                # Effective clientId fuer diese Instanz updaten -> neuer Pool-Key
+                self.client_id = fresh_id
+                key = self._pool_key
+            else:
+                raise
+
+        _pool_set(key, ib)
+        self._ib = ib  # backwards-compat fuer test-mocks die ._ib direkt setzen
+        return ib
 
     def disconnect(self) -> None:
-        """Verbindung schliessen mit kurzem Wait — gibt IBG Zeit fuer Pool-Cleanup.
+        """Im Singleton-Pattern KEIN echter disconnect.
 
-        Ohne Wait haelt IBG die clientId-Session manchmal 5-30s als 'Geist' im
-        Pool. Naechster Connect mit derselben ID landet dort -> Error 326.
-        Mit 2s Wait ist der Cleanup meist durch.
+        Connection bleibt im Pool aktiv fuer naechsten Caller (Bot oder
+        Dashboard). Echter disconnect nur via _pool_invalidate(key) oder
+        _pool_invalidate_all() fuer expliziten Reset.
+
+        Das verhindert das clientId-Geist-Problem komplett: ohne disconnect
+        hat IBG keinen Grund eine Session zu 'rotten lassen' — sie bleibt
+        einfach aktiv und idle.
         """
-        if self._ib is not None and self._ib.isConnected():
-            self._ib.disconnect()
-            try:
-                self._ib.sleep(2.0)  # IBG Cleanup-Window
-            except Exception:
-                pass
+        # Bewusst NO-OP: Connection bleibt im Pool fuer Reuse.
+        # Wenn jemand wirklich disconnecten will: _pool_invalidate(self._pool_key)
+        return
+
+    def force_disconnect(self) -> None:
+        """Echter disconnect + Pool-Invalidierung. Fuer Tests / Reset-Szenarien."""
+        _pool_invalidate(self._pool_key)
         self._ib = None
 
     # --- Read-Operations (LIVE) ---

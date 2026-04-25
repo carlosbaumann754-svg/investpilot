@@ -1984,14 +1984,21 @@ async def api_risk(user=Depends(require_auth)):
         summary = get_risk_summary()
 
         config = load_config()
+        broker_name = (config.get("broker") or "etoro").lower()
         client = get_broker(config, readonly=True)
         if client.configured:
-            portfolio = client.get_portfolio()
+            # IBKR: aus brain-cache lesen (vermeidet asyncio loop conflict)
+            # eToro: live REST-API (loop-safe)
+            if broker_name == "ibkr":
+                portfolio = _portfolio_from_brain_cache()
+            else:
+                portfolio = client.get_portfolio()
             if portfolio:
                 from app.etoro_client import EtoroClient as EC
                 positions = [EC.parse_position(p) for p in portfolio.get("positions", [])]
                 credit = portfolio.get("credit", 0)
-                total = credit + sum(p["invested"] for p in positions)
+                # IBKR brain-cache hat _total_value direkt, sonst aus credit + invested
+                total = portfolio.get("_total_value") or (credit + sum(p["invested"] for p in positions))
 
                 exposure = calculate_exposure(positions)
                 margin_ok, margin_reason, exposure_detail = check_margin_safety(total, positions, config)
