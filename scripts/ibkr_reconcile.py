@@ -51,9 +51,14 @@ def load_bot_state() -> tuple[list[dict], float]:
 
 
 def get_ibkr_state(timeout: int = 15) -> dict:
-    """Live-IBKR-Snapshot: positions + cash + recent executions."""
+    """Live-IBKR-Snapshot: positions + cash + recent executions.
+
+    Nutzt clientId=99 (separat vom Bot's clientId=1) — sonst kollidiert
+    der Connect mit der laufenden Bot-Session.
+    """
     from app.ibkr_client import IbkrBroker
-    broker = IbkrBroker({})
+    # Eigene clientId fuer Reconciliation, vermeidet Conflict mit Bot
+    broker = IbkrBroker({"ibkr": {"client_id": 99, "readonly": True}})
     try:
         ib = broker._get_ib()
         positions = ib.positions()
