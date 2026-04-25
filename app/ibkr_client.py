@@ -166,9 +166,28 @@ class IbkrBroker(BrokerBase):
 
     # --- Connection-Lifecycle ---
 
+    def _ensure_event_loop(self):
+        """ib_insync braucht ein asyncio event-loop im aktuellen Thread.
+
+        Threads die via asyncio.to_thread() oder threading.Thread() erstellt
+        wurden haben standardmaessig KEIN event loop. ib_insync's IB.connect()
+        crasht dann mit 'There is no current event loop in thread'.
+
+        Workaround: einen neuen event loop im aktuellen Thread setzen wenn
+        keiner da ist. Per-Thread isoliert -> kein Conflict mit FastAPI's
+        Haupt-Loop oder anderen Threads.
+        """
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            # Kein loop im aktuellen Thread -> neuen erstellen
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
     def _get_ib(self):
         """Lazy-init der IB-Instanz."""
         if self._ib is None or not self._ib.isConnected():
+            self._ensure_event_loop()
             self._ib = connect(
                 host=self.host,
                 port=self.port,
