@@ -452,55 +452,65 @@ async def api_universe_reset(user=Depends(require_auth)):
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
 
+def _broker_status_sync():
+    """Sync-Logic fuer api_broker_status — laeuft in eigenem Thread.
+
+    ib_insync nutzt einen eigenen asyncio-Loop intern. Direkt aus einem
+    FastAPI-async-Handler aufrufen kollidiert mit dem laufenden Loop ->
+    Connect haengt / returnt None. Daher via asyncio.to_thread isolieren.
+    """
+    config = load_config()
+    broker_name = (config.get("broker") or "etoro").lower()
+    client = get_broker(config, readonly=True)
+    connected = False
+    account = None
+    equity = None
+    error = None
+    if client.configured:
+        try:
+            eq = client.get_equity()
+            if eq is not None:
+                connected = True
+                equity = float(eq)
+                if broker_name == "ibkr":
+                    try:
+                        ib = client._get_ib()
+                        accs = ib.managedAccounts()
+                        account = accs[0] if accs else None
+                    except Exception:
+                        pass
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        finally:
+            try:
+                if hasattr(client, "disconnect"):
+                    client.disconnect()
+            except Exception:
+                pass
+    mode = "paper"
+    if broker_name == "etoro":
+        env = (config.get("etoro", {}) or {}).get("environment", "demo")
+        mode = "real" if env == "real" else "demo"
+    elif broker_name == "ibkr":
+        if account:
+            mode = "real" if not account.startswith(("DU", "DUP")) else "paper"
+    return {
+        "broker": broker_name,
+        "configured": bool(client.configured),
+        "connected": connected,
+        "account": account,
+        "equity": equity,
+        "mode": mode,
+        "error": error,
+    }
+
+
 @app.get("/api/broker-status")
 async def api_broker_status():
-    """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth.
-
-    Nutzbar fuer Dashboard-Badge + externes Monitoring. Macht einen schnellen
-    Health-Check via get_equity() (1 Network-Roundtrip ~1s).
-    """
+    """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth."""
+    import asyncio
     try:
-        config = load_config()
-        broker_name = (config.get("broker") or "etoro").lower()
-        client = get_broker(config, readonly=True)
-        connected = False
-        account = None
-        equity = None
-        error = None
-        if client.configured:
-            try:
-                eq = client.get_equity()
-                if eq is not None:
-                    connected = True
-                    equity = float(eq)
-                    # IBKR: extra accounts pull
-                    if broker_name == "ibkr":
-                        try:
-                            ib = client._get_ib()
-                            accs = ib.managedAccounts()
-                            account = accs[0] if accs else None
-                        except Exception:
-                            pass
-            except Exception as e:
-                error = f"{type(e).__name__}: {e}"
-        # Live mode flag (paper vs real)
-        mode = "paper"
-        if broker_name == "etoro":
-            mode = (config.get("etoro", {}) or {}).get("environment", "demo")
-            mode = "real" if mode == "real" else "demo"
-        elif broker_name == "ibkr":
-            # DUP/DU-Account-Praefix = Paper, U... = Real
-            if account:
-                mode = "real" if not account.startswith(("DU", "DUP")) else "paper"
-        return {
-            "broker": broker_name,
-            "configured": bool(client.configured),
-            "connected": connected,
-            "account": account,
-            "equity": equity,
-            "mode": mode,  # "paper" | "demo" | "real"
-            "error": error,
-        }
+        return await asyncio.to_thread(_broker_status_sync)
     except Exception as e:
         return {"broker": "?", "configured": False, "connected": False,
                 "error": f"{type(e).__name__}: {e}"}
