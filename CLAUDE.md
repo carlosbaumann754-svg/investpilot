@@ -925,6 +925,75 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v25 — Singleton-Connection-Pool + Cache-Reads (2026-04-25)
+
+**Hintergrund:** Nach v24 (Recovery via clientId-Wechsel) trat dasselbe
+Pattern weiter auf — clientId=5 wurde nach jedem Bot-Cycle "kontaminiert",
+gleiche Sequenz aller 5 Min: Healthcheck-Fail → Cycle-Skip. Plus neuer
+Bug aufgetaucht: `attached to a different loop` zwischen Bot/Reconciliation.
+
+### Root Cause Analyse
+
+3 ineinander verschraenkte Probleme:
+1. **clientId-Geist**: IBG haelt nach disconnect 5-30s eine "Geist-Session"
+   im Pool. Naechster Connect mit derselben ID landet dort.
+2. **asyncio Loop-Conflict**: ib_insync hat internen state mit Loop-Refs;
+   wenn die IB-Instanz zwischen Threads/Loops wandert -> Crash.
+3. **`/api/risk` Live-Call-Bug**: gleicher Asyncio-Issue wie /api/portfolio
+   vorher, deshalb v15_sizing Card immer leer.
+
+### Singleton-Connection-Pool (eigentliche Loesung)
+
+`app/ibkr_client.py` hat jetzt module-level Pool:
+```python
+_IB_INSTANCES: dict[(host, port, client_id) -> IB]
+_IB_LOCK = threading.RLock()
+```
+
+`_get_ib()` Workflow:
+1. Direkt-Injection check (Tests via `self._ib = mock`)
+2. Pool-Lookup via Key
+3. Cached + connected -> reuse
+4. Cached + dead -> invalidate + reconnect
+5. Kein Cache -> connect mit Auto-Retry-Logic
+
+`disconnect()` ist jetzt **NO-OP** — Connection bleibt im Pool fuer
+naechsten Caller. Echter disconnect via `force_disconnect()` (Tests/Reset).
+
+Damit verschwinden alle 3 Bug-Klassen:
+- ClientID-Geist: kein wiederholter connect/disconnect derselben ID
+- Loop-Conflict: jede IB-Instanz bleibt in ihrem urspruenglichen Loop
+- IBG-Pool-Exhaustion: Connection wird wiederverwendet bis explizit invalidiert
+
+### Cache-Read fuer /api/risk
+
+Liest IBKR-Werte aus `brain_state.performance_snapshots` (vom Bot-Cycle
+geschrieben) statt live `client.get_portfolio()`. Gleiches Pattern wie
+v22 fuer `/api/portfolio`. Damit bekommt das **Position Sizing (v15)
+Card endlich Werte** (war vorher dauerhaft "--").
+
+`_total_value` aus brain-cache wird bevorzugt, sonst credit + invested.
+
+### Meta-Labeler Status
+
+Konfiguriert aber kein trainiertes Modell (`meta_model.joblib` fehlt) weil
+trade_history nur 59 Eintraege hat, davon 0 qualifizierte Scanner-BUYs
+(alte eToro-Trades zaehlen nicht). `train_meta_labeler()` braucht min 30.
+
+**Kein Bug, by-design**: Bot sammelt waehrend Paper-Phase (4 Wochen) genug
+Trades, dann auto-aktiviert. Frontend "--" ist korrekt fuer "noch keine
+Vorhersagen". Erste echte Aktivitaet erwartet ab ~05.05.
+
+### `check_broker_health` Anpassung
+
+Nutzt `force_disconnect()` zwischen Retry-Attempts statt `disconnect()`
+(letzteres ist im Singleton-Pattern no-op). Damit funktioniert die
+Retry-Logic weiterhin korrekt.
+
+### Tests
+55/55 gruen. Direkt-Injection-Test-Hook (`self._ib = mock`) bleibt fuer
+backwards-compat in `_get_ib()` als Schritt 0.
+
 ## v24 — Operational Hotfix: clientId-Geist (2026-04-25)
 
 **Symptom**: Bot tradet seit ~14:28 nicht mehr stabil. Mehrere Cycles in
