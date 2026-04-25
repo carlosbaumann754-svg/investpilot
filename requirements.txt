@@ -21,4 +21,6 @@ psutil>=5.9.0
 # IBKR-Integration (W2/W3) — siehe app/ibkr_client.py + app/ibkr_contract_resolver.py
 ib_insync>=0.9.86
 nest_asyncio>=1.6.0
+# Pairs Trading (Bot Nr. 5) — Engle-Granger Cointegration + ADF
+statsmodels>=0.14.0
 

@@ -138,11 +138,22 @@ class IbkrBroker(BrokerBase):
                     readonly=True (random clientId 100-999 stattdessen).
             readonly: Override fuer ibkr.readonly. Bei True wird zwingend
                      eine eigene clientId genutzt (vermeidet Conflict mit Bot).
+
+        Order-relevante Config-Keys (alle optional, mit Defaults):
+            ibkr.fill_timeout_s           # Default 30s, wie lange auf Fill warten
+            ibkr.cancel_on_timeout        # Default True, Auto-Cancel bei timeout
+            ibkr.limit_slippage_pct       # Default 0.5%, Buffer fuer LimitOrder-Preis
+            ibkr.default_order_type       # Default 'LIMIT' ('LIMIT' oder 'MARKET')
         """
         ibkr_cfg = (config or {}).get("ibkr", {}) if config else {}
         self.host = ibkr_cfg.get("host") or IBG_HOST
         self.port = int(ibkr_cfg.get("port") or IBG_PORT)
         self.readonly = readonly if readonly is not None else bool(ibkr_cfg.get("readonly", False))
+        # Order-Verhalten konfigurierbar (Class-Defaults als Fallback)
+        self.fill_timeout_s = float(ibkr_cfg.get("fill_timeout_s", 30.0))
+        self.cancel_on_timeout = bool(ibkr_cfg.get("cancel_on_timeout", True))
+        self.limit_slippage_pct = float(ibkr_cfg.get("limit_slippage_pct", 0.5))
+        self.default_order_type = str(ibkr_cfg.get("default_order_type", "LIMIT")).upper()
         # ClientID-Strategie:
         #   - readonly=True ODER kein explicit id: random clientId (100-999)
         #     -> Dashboard-Endpoints, Reconciliation-Cron, Ad-hoc-Calls
@@ -328,9 +339,10 @@ class IbkrBroker(BrokerBase):
         action: str,  # "BUY" oder "SELL"
         stop_loss_pct: float = 0,
         take_profit_pct: float = 0,
-        fill_timeout: float = 30.0,
-        order_type: str = "LIMIT",  # "LIMIT" (default, sicherer) oder "MARKET"
-        cancel_on_timeout: Optional[bool] = None,  # None -> CANCEL_ON_TIMEOUT default
+        fill_timeout: Optional[float] = None,  # None -> self.fill_timeout_s
+        order_type: Optional[str] = None,      # None -> self.default_order_type
+        cancel_on_timeout: Optional[bool] = None,  # None -> self.cancel_on_timeout
+        limit_slippage_pct: Optional[float] = None,  # None -> self.limit_slippage_pct
     ) -> Optional[dict]:
         """
         Gemeinsame Order-Submission. Returns eToro-kompatibles Response-Dict.
@@ -355,6 +367,11 @@ class IbkrBroker(BrokerBase):
         from app.ibkr_contract_resolver import resolve_contract, get_quote, amount_to_quantity
         from ib_insync import MarketOrder, StopOrder, LimitOrder
 
+        # Resolve effective config (per-call override > instance config > class default)
+        eff_timeout = fill_timeout if fill_timeout is not None else self.fill_timeout_s
+        eff_order_type = (order_type if order_type is not None else self.default_order_type).upper()
+        eff_slippage = limit_slippage_pct if limit_slippage_pct is not None else self.limit_slippage_pct
+
         try:
             ib = self._get_ib()
             contract = resolve_contract(ib, instrument_id)
@@ -371,14 +388,14 @@ class IbkrBroker(BrokerBase):
                 return None
 
             # 1. Main-Order: LIMIT mit Slippage-Buffer (default) oder MARKET
-            if order_type.upper() == "MARKET":
+            if eff_order_type == "MARKET":
                 order = MarketOrder(action, qty)
                 limit_price_log = "MKT"
             else:
                 slippage_sign = 1 if action == "BUY" else -1
-                limit_price = round(price * (1 + slippage_sign * self.LIMIT_SLIPPAGE_PCT / 100.0), 2)
+                limit_price = round(price * (1 + slippage_sign * eff_slippage / 100.0), 2)
                 order = LimitOrder(action, qty, limit_price)
-                limit_price_log = f"limit ${limit_price:.2f}"
+                limit_price_log = f"limit ${limit_price:.2f} (slip {eff_slippage}%)"
 
             log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f)",
                      action, qty, contract.symbol, limit_price_log, amount_usd, price)
@@ -408,7 +425,7 @@ class IbkrBroker(BrokerBase):
                     child_trades.append(ib.placeOrder(contract, tp_order))
 
             # 3. Auf Fill warten
-            deadline = time.time() + fill_timeout
+            deadline = time.time() + eff_timeout
             while time.time() < deadline:
                 ib.sleep(0.2)
                 if trade.isDone():
@@ -420,10 +437,10 @@ class IbkrBroker(BrokerBase):
 
             # 3b. Auto-Cancel wenn nach Timeout noch nicht filled (sicherer Default)
             #     Verhindert haengende Limit-Orders die ueberraschend Tage spaeter fuellen
-            should_cancel = self.CANCEL_ON_TIMEOUT if cancel_on_timeout is None else cancel_on_timeout
+            should_cancel = self.cancel_on_timeout if cancel_on_timeout is None else cancel_on_timeout
             if not trade.isDone() and should_cancel and status not in ("Filled", "Cancelled"):
                 log.warning("Order %s nach %.0fs noch %s — Auto-Cancel (cancel_on_timeout=True)",
-                            trade.order.orderId, fill_timeout, status)
+                            trade.order.orderId, eff_timeout, status)
                 try:
                     ib.cancelOrder(trade.order)
                     # Bis zu 5s warten dass Cancel durchkommt
@@ -539,7 +556,7 @@ class IbkrBroker(BrokerBase):
                 log.error("Kein Quote fuer Close von %s — Order abgebrochen", pos.contract.symbol)
                 return None
             slippage_sign = 1 if action == "BUY" else -1
-            limit_price = round(quote * (1 + slippage_sign * self.LIMIT_SLIPPAGE_PCT / 100.0), 2)
+            limit_price = round(quote * (1 + slippage_sign * self.limit_slippage_pct / 100.0), 2)
 
             log.info("CLOSE Position %s qty=%d %s @ limit $%.2f (quote $%.2f)",
                      pos.contract.symbol, qty, action, limit_price, quote)

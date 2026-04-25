@@ -925,6 +925,53 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v23 — Paper-Phase Polish-Pack (Items 4-7, 2026-04-25)
+
+Vier Roadmap-Items vor der 4-Wochen-Paper-Phase fertig:
+
+### #5 — IBKR Order-Tracking konfigurierbar
+4 neue Instance-Properties auf `IbkrBroker`:
+- `fill_timeout_s` (default 30s)
+- `cancel_on_timeout` (default True)
+- `limit_slippage_pct` (default 0.5%)
+- `default_order_type` ('LIMIT' default)
+
+Alle via `config.json` `ibkr.{key}` ueberschreibbar. Per-Trade-Override
+weiterhin moeglich via `_place_market_order(fill_timeout=..., order_type=...)`.
+
+### #4 — Backtester v15-Sizing-aware (POST_LIVE_TECH erledigt)
+`_build_position_sizing_from_config()` returnt jetzt `effective_fraction =
+min(kelly_fraction, max_single_trade_pct_of_portfolio)`. Vorher nur Kelly
+genutzt -> Backtest war systematisch zu OPTIMISTISCH wenn Kelly > 15%.
+Wichtig fuer Kelly-Sweep ab ~05.05. damit Re-Validation realistisch wird.
+
+### #7 — Universe-Health-Watcher (POST_LIVE_TECH B+C)
+Neues Modul `app/universe_health_watcher.py`:
+- `update_counters()` — pro Symbol Counter fuer consecutive ok/not-ok
+- 3 Checks not-ok in Folge -> Disable-Vorschlag
+- 3 Checks ok in Folge bei disabled Symbol -> Re-Enable-Vorschlag
+- NIE Auto-Commit, immer User-Bestaetigung via Dashboard
+- 4 REST-Endpoints: suggestions, refresh-suggestions, disable/{symbol}, enable/{symbol}
+- State in `data/universe_health_counters.json` + `_suggestions.json`
+- 7 Tests gruen
+
+### #6 — Pairs Trading W2 LIVE: PairScreener
+`PairsBot.discover_pairs()` echt implementiert:
+- Bulk-Download via yfinance (`years=2` default)
+- Engle-Granger 2-Step Test (`statsmodels.tsa.stattools.coint`)
+- p < 0.05 Filter
+- Beta via OLS-Regression
+- Half-Life via OU-Prozess (lambda = -OLS-Slope, half-life = ln(2)/lambda)
+- Filter half-life zwischen 3-30 Tagen (config)
+- Sortiert nach kuerzer Half-Life = besser tradebar
+- Module-Helpers `calculate_half_life()` + `is_cointegrated()` auch live
+
+`statsmodels>=0.14` in `requirements.txt`. Bot 5 ist jetzt Discovery-bereit;
+`calculate_signals()` + `execute_signal()` bleiben TODO W3-W4.
+
+### Tests
+55/55 gruen (war 47): +1 Order-Config-Test + 7 Universe-Watcher-Tests.
+
 ## v22 — Paper-Phase-Paket + Async-Saga + Hotfixes (2026-04-25)
 
 **Hintergrund:** Nach W5-Cutover am 25.04. ein vollstaendiger Sweep durch

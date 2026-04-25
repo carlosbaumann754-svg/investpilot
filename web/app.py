@@ -412,6 +412,55 @@ async def api_withdrawal_cancel(user=Depends(require_auth)):
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
 
+@app.get("/api/universe/suggestions")
+async def api_universe_suggestions(user=Depends(require_auth)):
+    """Auto-Disable / Re-Enable Vorschlaege vom Universe-Health-Watcher."""
+    try:
+        from app.universe_health_watcher import get_suggestions
+        return get_suggestions()
+    except Exception as e:
+        log.error(f"Universe-Suggestions: {e}", exc_info=True)
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/universe/refresh-suggestions")
+async def api_universe_refresh_suggestions(user=Depends(require_auth)):
+    """Triggert Universe-Watcher manuell — counter-update + Vorschlaege.
+
+    Wird normalerweise vom Trader/Scheduler nach jedem Universe-Health-Run
+    automatisch aufgerufen. Manueller Trigger fuer Ad-hoc-Re-Evaluation.
+    """
+    try:
+        from app.universe_health_watcher import update_counters
+        result = update_counters()
+        return {"status": "ok", "suggestions": result["suggestions"]}
+    except Exception as e:
+        log.error(f"Universe-Refresh: {e}", exc_info=True)
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/universe/disable/{symbol}")
+async def api_universe_disable(symbol: str, user=Depends(require_auth)):
+    """User bestaetigt einen Auto-Disable-Vorschlag fuer das Symbol."""
+    try:
+        from app.universe_health_watcher import confirm_disable
+        return confirm_disable(symbol.upper())
+    except Exception as e:
+        log.error(f"Universe-Disable {symbol}: {e}", exc_info=True)
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/universe/enable/{symbol}")
+async def api_universe_enable(symbol: str, user=Depends(require_auth)):
+    """User bestaetigt einen Re-Enable-Vorschlag fuer das Symbol."""
+    try:
+        from app.universe_health_watcher import confirm_enable
+        return confirm_enable(symbol.upper())
+    except Exception as e:
+        log.error(f"Universe-Enable {symbol}: {e}", exc_info=True)
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+
 @app.post("/api/universe/reset")
 async def api_universe_reset(user=Depends(require_auth)):
     """Universe-Reset: leert disabled_symbols-Liste, damit beim naechsten

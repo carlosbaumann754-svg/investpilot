@@ -151,22 +151,143 @@ class PairsBot:
             )
 
     # ------------------------------------------------------------------
-    # Pair-Discovery (TODO W2)
+    # Pair-Discovery (W2 LIVE)
     # ------------------------------------------------------------------
 
-    def discover_pairs(self, candidates: Optional[list[str]] = None) -> list[Pair]:
+    def discover_pairs(
+        self,
+        candidates: Optional[list[str]] = None,
+        years: int = 2,
+        max_pairs: int = 20,
+        p_threshold: float = 0.05,
+    ) -> list[Pair]:
         """
         Findet kointegrierte Paare via Engle-Granger 2-Step Test.
 
-        TODO W2:
-            - yfinance: 2y Daily-Closes fuer alle candidates
-            - statsmodels.tsa.stattools.coint() fuer alle Paar-Kombinationen
-            - Filter: p-value < 0.05 (95% Konfidenz)
-            - Filter: half-life zwischen min/max aus config
-            - Sortiere nach Sharpe des Spreads
-            - Top N (default 20) zurueckgeben
+        Workflow:
+        1. yfinance: Daily-Closes fuer alle candidates ueber `years` Jahre
+        2. Fuer jede Kombination (a,b): statsmodels coint() -> p-value
+        3. Filter: p-value < p_threshold AND half-life in [min,max]
+        4. Berechne beta (OLS), mean/std vom Spread
+        5. Sortiere nach |z-Spread-Sharpe| descending
+        6. Top max_pairs zurueckgeben
+
+        Args:
+            candidates: Symbole zum Pair-Test (None = ASSET_UNIVERSE-Stocks)
+            years: yfinance-Lookback (default 2y)
+            max_pairs: max # Paare zurueckgeben
+            p_threshold: Engle-Granger p-Wert-Schwelle (95% = 0.05)
+
+        Returns:
+            Liste sortierter Pair-Objekte (best first).
         """
-        raise NotImplementedError("discover_pairs ist W2-TODO")
+        import itertools
+        import yfinance as yf
+        import numpy as np
+        from datetime import datetime as _dt
+
+        try:
+            from statsmodels.tsa.stattools import coint
+            from statsmodels.regression.linear_model import OLS
+            from statsmodels.tools import add_constant
+        except ImportError as e:
+            raise ImportError(
+                "statsmodels fehlt — pip install statsmodels>=0.14"
+            ) from e
+
+        # Default candidates: alle Stocks aus ASSET_UNIVERSE
+        if candidates is None:
+            try:
+                from app.market_scanner import ASSET_UNIVERSE
+                candidates = [
+                    sym for sym, meta in ASSET_UNIVERSE.items()
+                    if (meta.get("class") or "").lower() in ("stocks", "stock", "etf")
+                ]
+            except Exception:
+                candidates = ["AAPL", "MSFT", "GOOGL", "META", "AMZN"]
+
+        log.info("PairScreener: Lade %d Symbole, %dy History...", len(candidates), years)
+
+        # 1. Bulk-Download via yfinance
+        try:
+            df = yf.download(candidates, period=f"{years}y", progress=False, auto_adjust=True)["Close"]
+            df = df.dropna(axis=1, how="all")  # leere Symbole raus
+            df = df.dropna()                    # Tage mit gaps raus
+        except Exception as e:
+            log.error("yfinance bulk-download failed: %s", e)
+            return []
+
+        if df.shape[1] < 2 or df.shape[0] < 60:
+            log.warning("Zu wenig Daten (cols=%d, rows=%d) — discover abgebrochen",
+                        df.shape[1], df.shape[0])
+            return []
+
+        usable_symbols = list(df.columns)
+        log.info("PairScreener: %d nutzbare Symbole (Shape %s)", len(usable_symbols), df.shape)
+
+        # 2. Coint-Test pro Paar
+        candidates_pairs: list[tuple[str, str, float]] = []
+        for sym_a, sym_b in itertools.combinations(usable_symbols, 2):
+            series_a = df[sym_a].values
+            series_b = df[sym_b].values
+            try:
+                _t_stat, p_value, _crit = coint(series_a, series_b)
+            except Exception:
+                continue
+            if p_value < p_threshold:
+                candidates_pairs.append((sym_a, sym_b, float(p_value)))
+
+        log.info("PairScreener: %d kointegrierte Paare (p < %.3f)",
+                 len(candidates_pairs), p_threshold)
+
+        # 3. Pro Paar: beta + spread-stats berechnen
+        pairs: list[Pair] = []
+        for sym_a, sym_b, p_value in candidates_pairs:
+            series_a = df[sym_a].values
+            series_b = df[sym_b].values
+            try:
+                # Beta via OLS: a ~ alpha + beta*b
+                X = add_constant(series_b)
+                model = OLS(series_a, X).fit()
+                beta = float(model.params[1])
+                spread = series_a - beta * series_b
+                mean_spread = float(np.mean(spread))
+                std_spread = float(np.std(spread))
+                if std_spread <= 0:
+                    continue
+                # Half-Life via OU: dlnX = lambda*(mu - X)*dt -> OLS auf dX vs X_lag
+                spread_lag = spread[:-1]
+                d_spread = np.diff(spread)
+                X_hl = add_constant(spread_lag)
+                hl_model = OLS(d_spread, X_hl).fit()
+                lam = -float(hl_model.params[1])
+                if lam <= 0:
+                    continue  # nicht mean-reverting
+                half_life = float(np.log(2) / lam)
+                # Filter half-life zwischen 3 und 30 Tagen (config)
+                if not (self.config["min_half_life_days"] <= half_life
+                        <= self.config["max_half_life_days"]):
+                    continue
+                pairs.append(Pair(
+                    symbol_a=sym_a,
+                    symbol_b=sym_b,
+                    beta=beta,
+                    half_life_days=half_life,
+                    mean_spread=mean_spread,
+                    std_spread=std_spread,
+                    last_updated=_dt.now().isoformat(timespec="seconds"),
+                ))
+            except Exception as e:
+                log.debug("Pair %s/%s skip: %s", sym_a, sym_b, e)
+                continue
+
+        # 4. Sortieren nach inverse half-life (kuerzer = besser tradebar)
+        pairs.sort(key=lambda p: p.half_life_days)
+        log.info("PairScreener: %d valid Paare nach Filter (half-life %d-%d Tage)",
+                 len(pairs), self.config["min_half_life_days"],
+                 self.config["max_half_life_days"])
+
+        return pairs[:max_pairs]
 
     # ------------------------------------------------------------------
     # Signal-Generation (TODO W3)
@@ -226,23 +347,50 @@ class PairsBot:
 # Module-Level Helper (TODO W3)
 # ----------------------------------------------------------------------
 
-def calculate_half_life(spread_series) -> float:
-    """
-    Mean-Reversion Half-Life via OU-Prozess Fit.
+def calculate_half_life(spread_series) -> Optional[float]:
+    """Mean-Reversion Half-Life via OU-Prozess (Ornstein-Uhlenbeck) Fit.
 
-    TODO W3: dlnX_t = lambda * (mu - X_t) * dt + sigma * dW
-             -> half-life = ln(2) / lambda
-             -> Schaetzung via OLS: dX = a + b*X_lag + e
-             -> lambda = -log(1 + b)
+    Modell: dX_t = lambda * (mu - X_t) * dt + sigma * dW
+        -> half-life = ln(2) / lambda
+    Schaetzung via OLS: dX = a + b*X_lag + e -> lambda = -b
+
+    Returns:
+        Half-Life in der Einheit der Zeitschritte (Tage bei Daily-Data),
+        oder None wenn nicht mean-reverting (lambda <= 0).
     """
-    raise NotImplementedError
+    import numpy as np
+    try:
+        from statsmodels.regression.linear_model import OLS
+        from statsmodels.tools import add_constant
+    except ImportError:
+        return None
+    arr = np.asarray(spread_series, dtype=float)
+    if len(arr) < 30:
+        return None
+    spread_lag = arr[:-1]
+    d_spread = np.diff(arr)
+    X = add_constant(spread_lag)
+    try:
+        model = OLS(d_spread, X).fit()
+        lam = -float(model.params[1])
+        if lam <= 0:
+            return None
+        return float(np.log(2) / lam)
+    except Exception:
+        return None
 
 
 def is_cointegrated(series_a, series_b, p_threshold: float = 0.05) -> bool:
-    """
-    Engle-Granger 2-Step Test.
+    """Engle-Granger 2-Step Test fuer Kointegration.
 
-    TODO W2: statsmodels.tsa.stattools.coint(series_a, series_b)
-             -> return p_value < p_threshold
+    Returns True wenn p-Wert < p_threshold (95% Konfidenz default = 0.05).
     """
-    raise NotImplementedError
+    try:
+        from statsmodels.tsa.stattools import coint
+    except ImportError:
+        return False
+    try:
+        _t, p_value, _crit = coint(series_a, series_b)
+        return float(p_value) < p_threshold
+    except Exception:
+        return False

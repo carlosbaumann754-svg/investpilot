@@ -98,30 +98,46 @@ def test_w4_bug3_safe_num_handles_method_callable():
 # ----------------------------------------------------------------------
 
 def test_w4_bug4_default_order_type_is_limit():
-    """_place_market_order() MUSS LimitOrder als Default nutzen, nicht MarketOrder.
+    """IbkrBroker.default_order_type MUSS 'LIMIT' sein (instance-property).
 
     Live-Symptom: 'No market data on major exchange for market order' →
     Order Cancelled. Paper-Accounts ohne MD-Abo lehnen MarketOrders ab.
-    """
-    import inspect
-    from app.ibkr_client import IbkrBroker
 
-    sig = inspect.signature(IbkrBroker._place_market_order)
-    order_type_default = sig.parameters["order_type"].default
-    assert order_type_default == "LIMIT", (
-        f"_place_market_order order_type default ist '{order_type_default}', "
-        f"sollte 'LIMIT' sein! Siehe CLAUDE.md v19 Bug 4 — MarketOrder default "
-        f"wird vom IBKR Paper-Account abgelehnt."
+    Konfigurierbar via config.json ibkr.default_order_type, aber Default
+    muss 'LIMIT' sein um den Live-Bug zu verhindern.
+    """
+    from app.ibkr_client import IbkrBroker
+    broker = IbkrBroker({})  # Empty config -> Default LIMIT
+    assert broker.default_order_type == "LIMIT", (
+        f"IbkrBroker default_order_type ist '{broker.default_order_type}', "
+        f"sollte 'LIMIT' sein! Siehe CLAUDE.md v19 Bug 4."
     )
 
 
-def test_w4_bug4_limit_slippage_constant_exists():
-    """LIMIT_SLIPPAGE_PCT MUSS als Class-Konstante definiert sein."""
+def test_w4_bug4_limit_slippage_default_value():
+    """limit_slippage_pct MUSS als instance-attribute mit sicherem Default."""
     from app.ibkr_client import IbkrBroker
-    assert hasattr(IbkrBroker, "LIMIT_SLIPPAGE_PCT")
-    val = IbkrBroker.LIMIT_SLIPPAGE_PCT
+    broker = IbkrBroker({})  # Empty config
+    val = broker.limit_slippage_pct
     # Sanity: zwischen 0.1% und 2% (sonst entweder zu eng oder zu loose)
-    assert 0.1 <= val <= 2.0, f"LIMIT_SLIPPAGE_PCT={val} ausserhalb Sanity-Bereich"
+    assert 0.1 <= val <= 2.0, f"limit_slippage_pct={val} ausserhalb Sanity-Bereich"
+
+
+def test_v22_order_config_overridable_via_config_dict():
+    """ibkr.fill_timeout_s, cancel_on_timeout, limit_slippage_pct, default_order_type
+    muessen via config.json overridebar sein (nicht hardcoded)."""
+    from app.ibkr_client import IbkrBroker
+    cfg = {"ibkr": {
+        "fill_timeout_s": 60,
+        "cancel_on_timeout": False,
+        "limit_slippage_pct": 1.0,
+        "default_order_type": "MARKET",
+    }}
+    broker = IbkrBroker(cfg)
+    assert broker.fill_timeout_s == 60
+    assert broker.cancel_on_timeout is False
+    assert broker.limit_slippage_pct == 1.0
+    assert broker.default_order_type == "MARKET"
 
 
 # ----------------------------------------------------------------------

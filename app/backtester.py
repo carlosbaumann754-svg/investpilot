@@ -1323,24 +1323,48 @@ def _calc_costs(entry_price, days_held):
 # ============================================================
 
 def _build_position_sizing_from_config(config):
-    """v12.1: Reale Sizing-Annahmen aus der Live-Config rekonstruieren,
+    """v12.1 + v22: Reale Sizing-Annahmen aus der Live-Config rekonstruieren,
     damit Backtest-Metriken zur tatsaechlichen Bot-Realitaet passen.
 
-    Live-Bot deployt max ~kelly_sizing.max_fraction (default 0.01 = 1%) pro
-    Trade. Ohne diese Skalierung kompoundiert calculate_metrics() jeden
-    Trade mit 100% Equity → Trillionen-Prozent Returns bei vielen Trades.
+    Live-Bot deployt:
+    - max ~kelly_sizing.max_fraction (default 0.01 = 1%) pro Trade VIA Kelly
+    - PLUS v15-Cap: max_single_trade_pct_of_portfolio (default 0.15 = 15%)
+      ueberschreibt jeden Kelly-Vorschlag der drueber liegen wuerde.
+
+    Effektives Sizing = min(kelly_fraction, max_single_trade_pct).
+
+    Ohne diese Skalierung kompoundiert calculate_metrics() jeden Trade mit
+    100% Equity → Trillionen-Prozent Returns bei vielen Trades.
+
+    v22 Fix (POST_LIVE_TECH Item): Vorher wurde max_single_trade_pct
+    nicht beruecksichtigt -> Backtest war systematisch zu OPTIMISTISCH wenn
+    Kelly > 15% vorschlug (das tatsaechliche Live-Verhalten ist auf 15%
+    gecapped). Wichtig fuer Kelly-Sweep auf IBKR-Daten ab ~05.05. damit
+    re-Validation nicht falsche max_fraction empfiehlt.
     """
     if not config:
-        return {"kelly_fraction": 0.01, "max_concurrent": 20}
+        return {
+            "kelly_fraction": 0.01,
+            "max_concurrent": 20,
+            "max_single_trade_pct": 0.15,
+            "effective_fraction": 0.01,
+        }
     k_cfg = (config.get("kelly_sizing") or {})
-    risk_cfg = (config.get("risk_management") or {})
-    # max_fraction ist der harte Cap; das ist die ehrlichste Annahme fuer
+    demo_cfg = (config.get("demo_trading") or {})
+    # max_fraction ist Kelly's Cap; das ist die ehrlichste Annahme fuer
     # die durchschnittlich eingesetzte Position-Groesse.
-    kelly_frac = k_cfg.get("max_fraction") or 0.01
-    max_concurrent = (config.get("demo_trading") or {}).get("max_positions", 20)
+    kelly_frac = float(k_cfg.get("max_fraction") or 0.01)
+    # v15-Cap aus demo_trading.max_single_trade_pct_of_portfolio
+    # Standard 0.15 = 15% pro Position max
+    max_single_pct = float(demo_cfg.get("max_single_trade_pct_of_portfolio") or 0.15)
+    # Effektives Sizing: das Minimum der beiden (Bot nimmt immer den engeren)
+    effective_frac = min(kelly_frac, max_single_pct)
+    max_concurrent = int(demo_cfg.get("max_positions", 20))
     return {
-        "kelly_fraction": float(kelly_frac),
-        "max_concurrent": int(max_concurrent),
+        "kelly_fraction": kelly_frac,             # raw Kelly-Wert (fuer Doku)
+        "max_single_trade_pct": max_single_pct,   # raw Cap (fuer Doku)
+        "effective_fraction": effective_frac,     # was tatsaechlich genutzt wird
+        "max_concurrent": max_concurrent,
     }
 
 
@@ -1364,7 +1388,11 @@ def calculate_metrics(trades, position_sizing=None):
     # auf Equity-Anteil. Beispiel: Trade gewinnt 10%, Position war 1%
     # der Equity → realer Equity-Return = 0.1%.
     if position_sizing:
-        kelly_frac = position_sizing.get("kelly_fraction", 0.01)
+        # v22: nutze effective_fraction (= min(kelly, max_single_trade_pct))
+        # statt nur kelly_fraction. Backwards-compat: fallback auf kelly_fraction
+        # wenn alte Sizing-Dicts ohne effective_fraction kommen.
+        kelly_frac = position_sizing.get("effective_fraction") \
+                     or position_sizing.get("kelly_fraction", 0.01)
         # Trades nach exit_date sortieren fuer sequentielle Equity-Update
         try:
             sorted_trades = sorted(trades, key=lambda t: t.get("exit_date", ""))
@@ -1472,7 +1500,9 @@ def calculate_metrics(trades, position_sizing=None):
     # sich 1326 Trades × ~0.4% zu absurden 530%+ auf, obwohl in Wirklichkeit
     # nur ~5% des Portfolios fuer Kosten draufgingen.
     if position_sizing:
-        kelly_frac_costs = position_sizing.get("kelly_fraction", 0.01)
+        # v22: gleiche Logik wie oben — effective_fraction beruecksichtigt v15-Cap
+        kelly_frac_costs = position_sizing.get("effective_fraction") \
+                           or position_sizing.get("kelly_fraction", 0.01)
         total_costs = sum(t.get("cost_pct", 0) for t in trades) * kelly_frac_costs
     else:
         total_costs = sum(t.get("cost_pct", 0) for t in trades)
