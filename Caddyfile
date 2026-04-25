@@ -1,0 +1,23 @@
+# Caddy Config fuer InvestPilot Bot
+# Holt automatisch Lets-Encrypt Zertifikat fuer bot.cbaumann.ch
+# Deine Mail fuer Lets-Encrypt Notifications
+
+{
+    email carlosbaumann754@gmail.com
+}
+
+bot.cbaumann.ch {
+    encode gzip
+    reverse_proxy investpilot:8000 {
+        # Wichtig: Bot-IP statt Cloudflare IP weiterleiten (wir sind DNS-only)
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    log {
+        output file /var/log/caddy/bot.cbaumann.ch.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}

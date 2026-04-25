@@ -12,10 +12,17 @@ Inkl. v8 Profit-Locking & Analytics: TP-Tranchen (Partial Close), Konzentrations
 Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub-Action Optimizer (Lern-Loop laeuft vollstaendig autonom in 7-GB CI-Runner statt 512-MB Render).
 
 **Projekt-Pfad:** `C:\Users\CarlosBaumann\OneDrive - Mattka GmbH\Desktop\Claude\investpilot`
-**eToro User:** carlosbaumann777
-**Deployment:** Render (Paid $7/mo) + Synology NAS
-**Render URL:** https://investpilot-2dp2.onrender.com
-**Deploy Hook:** `curl -s "https://api.render.com/deploy/srv-d76i772dbo4c73bkmfc0?key=PiRVjLwLjNc"`
+**eToro User:** carlosbaumann777 (wird Ende Mai 2026 durch IBKR ersetzt)
+**IBKR Paper-Account:** DUP108015 (aktiviert 2026-04-24, fuer Migration)
+
+**Deployment:** Hetzner VPS CPX22 (~€10.91/mo) — migriert von Render am 2026-04-23
+**VPS IP:** 178.104.236.157
+**VPS URL (geplant):** https://bot.cbaumann.ch — Cloudflare DNS (NS: christina+jerry.ns.cloudflare.com), Caddy Reverse Proxy mit Lets-Encrypt
+**SSH:** `ssh -i ~/.ssh/hetzner_investpilot root@178.104.236.157`
+**Compose:** `/opt/investpilot/docker-compose.vps.yml` (investpilot + caddy)
+**IB Gateway:** `/opt/ib-gateway/docker-compose.yml` (gnzsnz/ib-gateway:stable, Port 4002 paper)
+
+**Alter Render-Deploy (abgeschaltet):** ~~https://investpilot-2dp2.onrender.com~~
 
 ## Code-Audit-Regime (ab 2026-04-15)
 
@@ -917,6 +924,82 @@ Beantwortet in einem Blick: "Warum schliesst der Bot gerade nichts?" —
 sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
+
+## v15 — Tooling: Image-Size Guards fuer Claude Code (2026-04-25)
+
+**Hintergrund:** Claude Code Sessions im InvestPilot-Projekt scheiterten
+wiederholt mit `400 invalid_request_error: "Could not process image"` wenn
+groessere Screenshots an die Anthropic-API gesendet wurden. Zwei Quellen:
+(1) Live-Browser-Screenshots in 4K-Aufloesung via Chrome-MCP, (2) TWS
+Desktop-Screenshots (`scr8.png`, `scrA.png` etc.), die ueber `Read` /
+`Desktop_Commander__read_file` geladen wurden. API-Limit fuer Bilder ist
+faktisch ~5 MB / Bild — 4K-PNGs sprengen das regelmaessig.
+
+Reine Memory-/Prompt-Anweisung ("nutze keine Screenshots") griff nicht
+zuverlaessig — das Modell hielt sich nicht durchgaengig daran.
+
+### Architektur: Source-Control statt Post-Processing
+Anthropic-API-Bilder lassen sich aus einem PostToolUse-Hook nicht
+zuverlaessig modifizieren (Bytes laufen am Hook-stdout-Channel vorbei).
+Statt nachtraeglicher Kompression: Quelle limitieren, BEVOR der Tool-Call
+das Bild produziert.
+
+### Phase 1: Browser-Viewport-Guard (`hooks/viewport_guard.py`)
+- PreToolUse-Hook auf `mcp__Claude_in_Chrome__.*` und
+  `mcp__plugin_chrome-devtools-mcp_chrome-devtools__.*`
+- Bei Screenshot-Tools: prueft `hooks/.viewport_state.json` —
+  wurde der Browser in den letzten 300s auf <= 1280x960 resized?
+  - Ja → silent allow
+  - Nein → block mit Instruktion an Claude: `resize_window(1280, 960)`
+    zuerst, danach Screenshot retry
+- Bei Resize-Tools: parst `width`/`height` aus tool_input. Wenn beides
+  <= 1280/960 → State-Timestamp setzen.
+- Fail-open: Hook-Crash → exit 0 → Tool laeuft normal
+- TTL = 5 Min: lang genug fuer mehrere Screenshot-Sequenzen, kurz genug
+  damit zwischenzeitliches Maximize nicht stundenlang nachwirkt
+
+### Phase 2: Image-Resize-Guard (`hooks/image_resize_guard.py`)
+- PreToolUse-Hook auf `Read` und `mcp__Desktop_Commander__read_file`
+- Prueft `tool_input.file_path`: ist es ein Bild
+  (`.png/.jpg/.jpeg/.webp/.bmp/.gif`) UND > 1 MB ODER > 1280x960?
+- Wenn ja: **resized die Datei in-place** via Pillow vor dem Read:
+  1. Backup einmalig nach `<name>.<ext>.orig` (falls noch nicht vorhanden)
+  2. Thumbnail auf max 1280x960 (LANCZOS, Aspect-preserved)
+  3. Erst PNG (lossless) probieren. Wenn immer noch > 1 MB → JPEG q=85
+- Tool liest danach die bereits kleine Datei → API-Limit wird nie
+  ueberschritten
+- Fail-open bei jedem Exception → Original geht durch
+- Test bestaetigt: 2560x1440 PNG (483 KB) → 1280x720 (134 KB)
+
+### Settings-Eintrag (`.claude/settings.json`)
+```json
+"hooks": {
+  "PreToolUse": [
+    { "matcher": "mcp__Claude_in_Chrome__.*|mcp__plugin_chrome-devtools-mcp_chrome-devtools__.*",
+      "hooks": [{ "type": "command", "command": "python .../hooks/viewport_guard.py" }] },
+    { "matcher": "Read|mcp__Desktop_Commander__read_file",
+      "hooks": [{ "type": "command", "command": "python .../hooks/image_resize_guard.py" }] }
+  ]
+}
+```
+
+### Neue Dateien
+- `hooks/viewport_guard.py` (~120 LOC)
+- `hooks/image_resize_guard.py` (~140 LOC)
+- `hooks/.viewport_state.json` (Auto-generiert)
+- `hooks/viewport_guard.log`, `hooks/image_resize_guard.log` (Audit-Logs)
+- `*.orig` Backup-Dateien neben jedem resized Image (einmalig pro Datei)
+
+### Bekannte Grenzen
+- `Desktop_Commander__write_file` mit Bild-Bytes ist nicht abgedeckt
+  (selten relevant)
+- Andere MCP-Server, die direkt Bild-Content im Response liefern (ohne
+  Datei-Umweg), umgehen den Hook — kein bekannter Fall im InvestPilot-Setup
+- Hook greift erst nach Session-Restart (Claude Code laedt
+  `settings.json` nur beim Start)
+
+### Voraussetzungen
+- Python 3.x mit Pillow auf dem Host (verifiziert: 3.14.3 + Pillow 12.1.1)
 
 ## Live-Gang Strategie (Target: 2026-04-27)
 
