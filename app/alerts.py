@@ -487,30 +487,57 @@ def check_telegram_commands(config=None):
 # BROKER CONNECTION HEALTH (W6+ — IBKR Paper-Phase)
 # ============================================================
 
-def check_broker_health(client, config=None):
+def check_broker_health(client, config=None, max_attempts=2, retry_wait_s=5.0):
     """Schneller Health-Check des aktiven Brokers + Telegram-Alert bei Drop.
 
     Wird von run_trading_cycle() VOR dem ersten get_portfolio() aufgerufen.
     Dedupliziert Alerts via alert_state['broker_last_health'] — sendet nur
     bei State-Wechsel (ok->fail, fail->ok), nicht bei jedem Cycle.
 
+    Args:
+        client: BrokerBase-Instanz (EtoroClient oder IbkrBroker)
+        config: optional config dict fuer alerts
+        max_attempts: Wie oft wir es probieren bevor wir 'fail' melden.
+                      Default 2 schuetzt vor Race-Conditions mit z.B. dem
+                      Reconciliation-Cron (gleichzeitiger IBKR-Connect).
+        retry_wait_s: Pause zwischen den Attempts (default 5s — gibt IBG
+                      Zeit Connection-Pool zu reset'en).
+
     Returns:
-        True wenn Broker erreichbar, False sonst.
+        True wenn Broker erreichbar (in mind. einem der Versuche), False sonst.
     """
+    import time as _time
+    # Lazy disconnect zwischen Attempts (gibt Connection-Pool sauberen Reset)
     state = _load_alert_state()
     last = state.get("broker_last_health", "unknown")  # "ok" | "fail" | "unknown"
     broker_name = getattr(client, "broker_name", "?")
 
     healthy = False
     error_detail = None
-    try:
-        eq = client.get_equity()
-        healthy = eq is not None and float(eq) > 0
-        if not healthy:
-            error_detail = f"get_equity returned {eq!r}"
-    except Exception as e:
-        error_detail = f"{type(e).__name__}: {e}"
-        healthy = False
+    attempt_errors = []
+    for attempt in range(1, max_attempts + 1):
+        try:
+            eq = client.get_equity()
+            if eq is not None and float(eq) > 0:
+                healthy = True
+                break
+            attempt_errors.append(f"attempt {attempt}: get_equity returned {eq!r}")
+        except Exception as e:
+            attempt_errors.append(f"attempt {attempt}: {type(e).__name__}: {e}")
+        # Retry nur wenn noch Versuche uebrig
+        if attempt < max_attempts:
+            log.warning("Broker-Healthcheck attempt %d/%d failed (%s) — retry in %.1fs",
+                        attempt, max_attempts, attempt_errors[-1], retry_wait_s)
+            # Force-Disconnect bevor Retry: gibt IBG-Pool Zeit aufzuraeumen
+            try:
+                if hasattr(client, "disconnect"):
+                    client.disconnect()
+            except Exception:
+                pass
+            _time.sleep(retry_wait_s)
+
+    if not healthy:
+        error_detail = " | ".join(attempt_errors)
 
     new_state = "ok" if healthy else "fail"
 
