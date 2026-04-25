@@ -925,6 +925,102 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v19 — W4 Live-Smoke-Test + Production-Hardening (2026-04-25)
+
+**Hintergrund:** Code-Deploy zum VPS + Live-Validierung gegen Paper-Account
+DUP108015. 4/4 Stufen erfolgreich, 4 echte Bugs gefunden und gefixt.
+
+### Stufen-Ergebnis
+
+| Stufe | Test | Ergebnis |
+|---|---|---|
+| 1 | `healthcheck()` -> Connect + accounts + server time | ✅ server v176, account DUP108015 |
+| 2 | `get_equity/cash/invested + portfolio` | ✅ Equity $1.062.145, Cash $1.062.052, 0 Positionen |
+| 3 | Resolver + Quote fuer AAPL (etoro_id=6408) | ✅ AAPL conId=265598, Quote $270.90 (Delayed) |
+| 4 | `buy(6408, $300)` -> Order placed -> Cancel | ✅ orderId=8 Submitted, danach erfolgreich gecancelt |
+
+### Gefundene Bugs (alle gefixt)
+
+**1. `ib_insync` nicht in requirements.txt**
+War im alten Container manuell via `pip install` installiert, beim Container-
+Rebuild verloren. Jetzt `ib_insync>=0.9.86` in `requirements.txt` (Commit b4fafb8).
+
+**2. `IBC ReadOnlyApi` defaulted to "yes"**
+Env-var `READ_ONLY_API` war nicht gesetzt, IBC interpretierte leeren Wert
+als Read-Only. Trading geblockt mit `Error 321: API interface is currently
+in Read-Only mode`. Fix: `READ_ONLY_API=no` in `/opt/ib-gateway/docker-compose.yml`
+(VPS-seitig, **nicht im Bot-Repo getrackt** — gehoert zur IBG-Infra).
+
+**3. `get_quote()` Crash bei `marketPrice`**
+ib_insync 0.9.86 hat `Ticker.marketPrice` als **Methode**, nicht Attribut.
+`getattr(ticker, 'marketPrice') > 0` warf `TypeError: '>' not supported
+between 'method' and 'int'`. Fix: `_safe_num()` Helper konvertiert
+callable/NaN/None in `Optional[float]` (Commit a3b80c1).
+
+**4. `MarketOrder` von Paper-Account abgelehnt**
+`Warning 202: Order Canceled - reason: No market data on major exchange
+for market order`. Paper-Accounts ohne Market-Data-Abo lehnen MarketOrders
+ab (Sicherheits-Policy von IBKR). Fix: `LimitOrder` als Default mit 0.5%
+Slippage-Buffer (`LIMIT_SLIPPAGE_PCT` Konstante). MarketOrder bleibt
+verfuegbar via `order_type='MARKET'` Param. Auch `close_position` umgestellt.
+(Commit 03443ae)
+
+### Smart Currency-Filter
+
+`get_equity/cash/invested` returnten `None` weil Filter
+`currency in ('USD', 'BASE')` zu strikt war. IBKR liefert NetLiquidation
+oft mit `currency=''` fuer aggregierte Werte. Neuer `_get_account_value()`
+Helper mit Praeferenz `USD > BASE > '' > any` — robust gegen IBKR's
+inkonsistente Currency-Tags.
+
+### Delayed-Market-Data-Auto-Switch
+
+`get_quote()` ruft jetzt `ib.reqMarketDataType(3)` auf wenn
+`allow_delayed=True` (default). Damit funktionieren Quotes auch bei
+Paper-Accounts ohne RT-MD-Abo (15-Min-delayed). In Production mit
+RT-Abo wird automatisch der Live-Tick genutzt (IBKR honoriert das Abo).
+
+### Order-Lifecycle (W4 verifiziert)
+
+```
+ib.placeOrder(LimitOrder)
+  -> PendingSubmit  (clientside)
+  -> PreSubmitted   (IBKR validiert)
+  -> Submitted      (live im Order Book, wartet auf Match)
+  -> Filled / Cancelled (terminal)
+```
+
+`_place_market_order` wartet 30s und gibt aktuellen Status zurueck.
+Bei `Submitted` (= placed aber noch nicht gefuellt — z.B. ausserhalb RTH)
+ist das ok: Order ist scharf, fuellt sich beim naechsten Match.
+
+### VPS-seitige Aenderungen (NICHT im Bot-Repo)
+
+Diese Patches leben in `/opt/ib-gateway/` und `/home/ibgateway/Jts/`:
+
+| Pfad | Aenderung | Persistenz |
+|---|---|---|
+| `/opt/ib-gateway/docker-compose.yml` | `+READ_ONLY_API=no` | Container-Recreate-safe (env-var) |
+| `/home/ibgateway/Jts/jts.ini` | `TrustedIPs=127.0.0.1,172.18.0.2` | Geht bei Container-Recreate verloren — TODO Volume-Mount |
+| `/home/ibgateway/ibc/config.ini.tmpl` | `TrustedTwsApiClientIPs=172.18.0.2` | Geht bei Image-Update verloren |
+
+**TODO (W5)**: Volume-Mount `/opt/ib-gateway/jts:/home/ibgateway/Jts` in
+docker-compose.yml damit jts.ini-Patch persistent ueberlebt.
+
+### Bot kann nun live IBKR-Paper traden
+
+Voraussetzung Cutover: in `data/config.json` setzen:
+```json
+{ "broker": "ibkr", "ibkr": { "host": "ib-gateway", "port": 4004, "client_id": 1 } }
+```
+
+Bot rebuild + restart. Dann tradet er ueber IBKR Paper. eToro bleibt
+verfuegbar via `"broker": "etoro"`.
+
+**Empfehlung**: Vor Cutover Stand 25.04.: 1 Tag Paper-Live-Beobachtung
+(Bot-Cycle laeuft, Trades werden durchgefuehrt, Verifikation gegen
+Trade-History im IBKR Account-Portal).
+
 ## v18 — IBKR Write-Operations + Contract-Resolver (W3, 2026-04-25)
 
 **Hintergrund:** v17 hatte `IbkrBroker.buy/sell/close_position` als
