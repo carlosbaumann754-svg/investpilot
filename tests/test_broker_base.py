@@ -33,16 +33,19 @@ def test_ibkr_implements_broker_base():
     assert broker.port == 4004, "Default-Port muss 4004 sein (socat-Bridge), nicht 4002"
 
 
-def test_ibkr_write_ops_raise_not_implemented():
-    """W2 stubs Write-Ops bewusst — sicher dass es nicht stillschweigend was tut."""
+def test_ibkr_write_ops_implemented_w3():
+    """W3: Write-Ops sind implementiert — duerfen nicht mehr NotImplementedError werfen.
+
+    Detail-Tests fuer das Verhalten in tests/test_ibkr_write_ops.py."""
     from app.ibkr_client import IbkrBroker
     broker = IbkrBroker({})
-    with pytest.raises(NotImplementedError, match="W3"):
-        broker.buy(instrument_id=1, amount_usd=100)
-    with pytest.raises(NotImplementedError, match="W3"):
-        broker.sell(instrument_id=1, amount_usd=100)
-    with pytest.raises(NotImplementedError, match="W3"):
-        broker.close_position(position_id="abc")
+    # Methoden existieren als callable, nicht abstrakte Stubs
+    assert callable(getattr(broker, "buy", None))
+    assert callable(getattr(broker, "sell", None))
+    assert callable(getattr(broker, "close_position", None))
+    # Method.__qualname__ zeigt: liegt in IbkrBroker, nicht ABC-Stub
+    assert IbkrBroker.buy.__qualname__.startswith("IbkrBroker.")
+    assert IbkrBroker.close_position.__qualname__.startswith("IbkrBroker.")
 
 
 def test_factory_routes_etoro():

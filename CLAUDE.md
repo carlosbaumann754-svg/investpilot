@@ -925,6 +925,72 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v18 — IBKR Write-Operations + Contract-Resolver (W3, 2026-04-25)
+
+**Hintergrund:** v17 hatte `IbkrBroker.buy/sell/close_position` als
+`NotImplementedError`-Stubs. v18 macht sie echt — Bot kann jetzt theoretisch
+gegen IBKR Paper-Account traden (nicht aktivieren bis Live-Test gegen VPS
+durchgeführt).
+
+### Neu: `app/ibkr_contract_resolver.py`
+
+Loest eToro-instrument_id (Integer) zu IBKR-Contract auf:
+
+1. **Cache-Lookup** in `data/ibkr_contract_cache.json`
+2. **Reverse-Lookup** in `market_scanner.ASSET_UNIVERSE` (etoro_id -> symbol + class)
+3. **Class-Mapping** stocks/etf -> STK auf SMART, Crypto -> CRYPTO auf PAXOS,
+   Forex -> CASH auf IDEALPRO. Andere -> `NotImplementedError` (W4)
+4. **`ib.qualifyContracts()`** ergaenzt conId/primaryExchange
+5. **Cache-Eintrag** persistent fuer naechste Resolutions
+
+Plus `get_quote(ib, contract, timeout=3.0)` — Snapshot-Quote (last -> mid -> close)
+fuer Quantity-Berechnung. `amount_to_quantity(amount_usd, price, min_qty=1)` — floor-division mit Guards.
+
+### IbkrBroker.buy/sell/close_position — echt implementiert
+
+- **`_place_market_order(...)`** als gemeinsame Submission:
+  resolve -> quote -> qty -> placeOrder -> wait-for-fill mit 30s Timeout
+- **Bracket-Orders**: SL/TP werden bei IBKR als Child-Orders nachgeschickt
+  (StopOrder/LimitOrder mit `parentId`, `transmit=True` nur bei letzter)
+- **`buy/sell`**: Wrapper um `_place_market_order` mit BUY/SELL action.
+  `leverage`-Parameter wird ignoriert (Stock-Margin via IBKR-Account-Setup)
+- **`close_position`**: Sucht Position via conId in `ib.positions()`,
+  feuert opposite-side MarketOrder mit gleicher qty
+- **Response-Format**: eToro-kompatibel (`orderForOpen.orderID/statusID/
+  filledQuantity/avgFillPrice`) plus IBKR-spezifische Meta (`_broker`,
+  `_contract`, `_amount_usd_target/actual`, `_child_orders`)
+
+### Tests
+
+`tests/test_ibkr_write_ops.py` — 11 Tests, alle gruen. Mockt ib_insync
+komplett (Modul ist nur am VPS installiert):
+- Resolver: class-normalize, exchange-mapping, qty-calculation, cache-hit
+- Write-Ops: unknown-id -> None, zero-quote -> None, amount-below-share -> None,
+  filled-order -> eToro-kompatibles Response, close-without-position -> None,
+  close mit position -> opposite-side order
+
+`tests/test_broker_base.py::test_ibkr_write_ops_implemented_w3` — verifiziert
+dass die Methoden in `IbkrBroker` definiert sind (nicht ABC-Stubs).
+
+### Bekannte Grenzen
+
+- **Ganze Aktien only**: Fractional Shares bei IBKR sind kontoabhaengig — wir
+  bleiben konservativ bei Integer-qty. Bei amount < 1 Aktie wird der Trade
+  uebersprungen (Returns None, Bot loggt warning)
+- **Forex/Crypto sind theoretisch unterstuetzt**, aber nicht live-getestet
+- **Indizes/Futures/Commodities** -> `NotImplementedError` in Resolver (W4)
+- **Order-Tracking ist synchron mit Timeout**: `placeOrder` -> 30s warten ->
+  Status zurueckgeben. Async-Refinement (Callback bei Late-Fill) folgt bei Bedarf
+- **Kein Live-Test** durchgefuehrt: Code muss zum VPS deployed werden
+  (Container-Rebuild oder bind-mount), dann `IbkrBroker.buy(6408, 200)` als Smoke-Test
+
+### Wichtige Sicherheits-Schalter
+
+- `config.json: broker = "etoro"` (default) — Bot tradet weiter gegen eToro
+- Vor IBKR-Aktivierung: 1-Trade-Smoke-Test im Paper-Account, Order-Lifecycle
+  manuell verifizieren (placed -> filled -> closed)
+- Erst dann `config.json: broker = "ibkr"` setzen
+
 ## v17 — Broker-Abstraktion (W2, 2026-04-25)
 
 **Hintergrund:** Damit der Bot konfigurations-gesteuert zwischen eToro und

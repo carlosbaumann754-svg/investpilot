@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -241,24 +242,211 @@ class IbkrBroker(BrokerBase):
         """Roher P/L. Bei IBKR mappen wir das auf get_portfolio() (kompatibel)."""
         return self.get_portfolio()
 
-    # --- Write-Operations (TODO W3) ---
+    # --- Write-Operations (W3 LIVE — gegen Paper-Account verifizieren!) ---
+
+    def _place_market_order(
+        self,
+        instrument_id: int,
+        amount_usd: float,
+        action: str,  # "BUY" oder "SELL"
+        stop_loss_pct: float = 0,
+        take_profit_pct: float = 0,
+        fill_timeout: float = 30.0,
+    ) -> Optional[dict]:
+        """
+        Gemeinsame Order-Submission. Returns eToro-kompatibles Response-Dict.
+
+        Workflow:
+        1. Contract aufloesen via ibkr_contract_resolver
+        2. Live-Quote fetchen
+        3. amount_usd -> quantity umrechnen (qty = floor(amount/price))
+        4. MarketOrder einreichen via ib.placeOrder
+        5. Bis Fill warten (oder timeout)
+        6. (optional) Bracket: SL/TP als Child-Orders nachschicken
+        7. Response im eToro-Format zurueckgeben
+
+        Bei IBKR werden SL/TP als separate Stop/Limit-Orders eingereicht
+        (Bracket-Order). eToro nimmt sie als Order-Parameter — wir
+        emulieren das durch sequentielle Submission.
+        """
+        from app.ibkr_contract_resolver import resolve_contract, get_quote, amount_to_quantity
+        from ib_insync import MarketOrder, StopOrder, LimitOrder
+
+        try:
+            ib = self._get_ib()
+            contract = resolve_contract(ib, instrument_id)
+            price = get_quote(ib, contract)
+            if price is None or price <= 0:
+                log.error("Kein Live-Quote fuer instrument_id=%d (%s) — Order abgebrochen",
+                          instrument_id, contract.symbol)
+                return None
+
+            qty = amount_to_quantity(amount_usd, price)
+            if qty <= 0:
+                log.warning("amount=$%.2f bei price=$%.2f -> qty=0 — uebersprungen",
+                            amount_usd, price)
+                return None
+
+            log.info("ORDER %s %d %s @ ~$%.2f (target $%.2f)",
+                     action, qty, contract.symbol, price, amount_usd)
+
+            # 1. Main-Order
+            order = MarketOrder(action, qty)
+            order.transmit = (stop_loss_pct == 0 and take_profit_pct == 0)
+            trade = ib.placeOrder(contract, order)
+
+            # 2. Bracket-Orders (SL/TP) wenn gewuenscht
+            child_trades = []
+            if stop_loss_pct > 0 or take_profit_pct > 0:
+                # SL = price * (1 - stop_loss_pct/100) bei BUY, umgekehrt bei SELL
+                opposite = "SELL" if action == "BUY" else "BUY"
+                sign = -1 if action == "BUY" else 1
+
+                if stop_loss_pct > 0:
+                    sl_price = round(price * (1 + sign * stop_loss_pct / 100.0), 2)
+                    sl_order = StopOrder(opposite, qty, sl_price)
+                    sl_order.parentId = trade.order.orderId
+                    sl_order.transmit = (take_profit_pct == 0)
+                    child_trades.append(ib.placeOrder(contract, sl_order))
+
+                if take_profit_pct > 0:
+                    tp_price = round(price * (1 - sign * take_profit_pct / 100.0), 2)
+                    tp_order = LimitOrder(opposite, qty, tp_price)
+                    tp_order.parentId = trade.order.orderId
+                    tp_order.transmit = True
+                    child_trades.append(ib.placeOrder(contract, tp_order))
+
+            # 3. Auf Fill warten
+            deadline = time.time() + fill_timeout
+            while time.time() < deadline:
+                ib.sleep(0.2)
+                if trade.isDone():
+                    break
+
+            status = trade.orderStatus.status  # "Filled", "Submitted", "Cancelled", ...
+            fill_qty = trade.orderStatus.filled
+            avg_fill_price = trade.orderStatus.avgFillPrice
+
+            log.info("Order %s status=%s filled=%d avgPrice=%.4f",
+                     trade.order.orderId, status, fill_qty, avg_fill_price)
+
+            # 4. eToro-kompatibles Response
+            return {
+                "orderForOpen": {
+                    "orderID": str(trade.order.orderId),
+                    "statusID": status,
+                    "filledQuantity": int(fill_qty),
+                    "avgFillPrice": float(avg_fill_price or 0),
+                },
+                "_broker": "ibkr",
+                "_contract": {
+                    "symbol": contract.symbol,
+                    "conId": contract.conId,
+                    "secType": contract.secType,
+                },
+                "_amount_usd_target": amount_usd,
+                "_amount_usd_actual": float((fill_qty or qty) * (avg_fill_price or price)),
+                "_child_orders": [
+                    {"orderId": ct.order.orderId, "status": ct.orderStatus.status}
+                    for ct in child_trades
+                ],
+            }
+        except (ValueError, NotImplementedError) as e:
+            # Resolver-Fehler (etoro_id unknown, asset class unsupported)
+            log.error("Order-Resolve failed: %s", e)
+            return None
+        except Exception as e:
+            log.exception("Order failed: %s", e)
+            return None
 
     def buy(self, instrument_id, amount_usd, leverage=1, stop_loss=0, take_profit=0):
-        raise NotImplementedError(
-            "IbkrBroker.buy() ist W3 — eToro 'amount_usd' muss zu IBKR 'quantity' "
-            "uebersetzt werden via Live-Quote (qty = floor(amount_usd / price)). "
-            "Erfordert Contract-Resolution (instrument_id -> IBKR conId/symbol). "
-            "Bis dahin: BROKER=etoro in config.json belassen."
+        """
+        Market-BUY by Amount USD.
+
+        Args:
+            instrument_id: eToro instrument_id (wird via ASSET_UNIVERSE auf IBKR Contract gemappt)
+            amount_usd: Ziel-Volumen in USD (qty = floor(amount/price))
+            leverage: IBKR Stock-Trades sind 1x — Margin macht IBKR automatisch.
+                      Parameter wird IGNORIERT (nur fuer eToro-API-Kompatibilitaet).
+            stop_loss: % unter Entry-Price fuer Stop-Loss (0 = kein SL)
+            take_profit: % ueber Entry-Price fuer Take-Profit (0 = kein TP)
+        """
+        if leverage != 1:
+            log.warning("IbkrBroker.buy: leverage=%d ignoriert (Stock-Margin via IBKR-Account-Setup)",
+                        leverage)
+        return self._place_market_order(
+            instrument_id, amount_usd, "BUY",
+            stop_loss_pct=stop_loss, take_profit_pct=take_profit,
         )
 
     def sell(self, instrument_id, amount_usd, leverage=1):
-        raise NotImplementedError("IbkrBroker.sell() ist W3 (siehe buy())")
+        """Market-SELL by Amount USD (Short-Open)."""
+        if leverage != 1:
+            log.warning("IbkrBroker.sell: leverage=%d ignoriert", leverage)
+        return self._place_market_order(instrument_id, amount_usd, "SELL")
 
     def close_position(self, position_id, instrument_id=None):
-        raise NotImplementedError(
-            "IbkrBroker.close_position() ist W3 — IBKR braucht Closing-Order "
-            "(opposite side, gleiche qty, gleicher Contract)."
-        )
+        """
+        Position schliessen via opposite-side Market-Order.
+
+        IBKR braucht Contract+qty; position_id allein reicht nicht.
+        Wir suchen die Position via ib.positions() und feuern eine
+        Closing-Order in entgegengesetzter Richtung.
+
+        Args:
+            position_id: bei eToro UUID, bei IBKR string-form von conId.
+                         Wir nutzen instrument_id wenn gegeben, sonst position_id als conId.
+        """
+        from ib_insync import MarketOrder
+
+        try:
+            ib = self._get_ib()
+            target_con_id = None
+            if instrument_id is not None:
+                from app.ibkr_contract_resolver import resolve_contract
+                target_con_id = resolve_contract(ib, instrument_id).conId
+            else:
+                try:
+                    target_con_id = int(position_id)
+                except (ValueError, TypeError):
+                    log.error("close_position: position_id '%s' ist keine conId und instrument_id fehlt",
+                              position_id)
+                    return None
+
+            positions = [p for p in ib.positions() if getattr(p.contract, "conId", None) == target_con_id]
+            if not positions:
+                log.error("Keine offene Position fuer conId=%s", target_con_id)
+                return None
+
+            pos = positions[0]
+            qty = abs(int(pos.position))
+            action = "SELL" if pos.position > 0 else "BUY"
+
+            log.info("CLOSE Position %s qty=%d (%s)", pos.contract.symbol, qty, action)
+            order = MarketOrder(action, qty)
+            trade = ib.placeOrder(pos.contract, order)
+
+            # Wait for fill
+            deadline = time.time() + 30.0
+            while time.time() < deadline:
+                ib.sleep(0.2)
+                if trade.isDone():
+                    break
+
+            return {
+                "orderForOpen": {
+                    "orderID": str(trade.order.orderId),
+                    "statusID": trade.orderStatus.status,
+                    "filledQuantity": int(trade.orderStatus.filled),
+                    "avgFillPrice": float(trade.orderStatus.avgFillPrice or 0),
+                },
+                "_broker": "ibkr",
+                "_action": "close",
+                "_closed_position_id": str(target_con_id),
+            }
+        except Exception as e:
+            log.exception("close_position failed: %s", e)
+            return None
 
     # --- Instruments ---
 
