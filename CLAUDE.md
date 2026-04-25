@@ -925,6 +925,65 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v16 — IBKR API-Connection live (W2 Start, 2026-04-25)
+
+**Hintergrund:** Erste echte ib_insync-Verbindung vom `investpilot` Container
+zum `ib-gateway` Container am VPS. Login bei Paper-Account DUP108015 erfolgreich,
+alle 3 Data-Farms (usfarm Market, ushmds HMDS, secdefil SecDef) gruen,
+server version 176.
+
+### Bug-Hunt-Story
+
+Symptom: `ib_insync.connect("ib-gateway", 4002)` -> `Connected -> Disconnected`
+in 4ms, dann `TimeoutError`. Klassisches API-Reject ohne Logmessage.
+
+**Falsche Hypothesen (verworfen):**
+- `ctciAutoEncrypt=true` in jts.ini (war bereits `false`)
+- `TrustedIPs=127.0.0.1` zu restriktiv (Patch in IBC `TrustedTwsApiClientIPs=172.18.0.2`
+  hilft nicht, weil Verbindung eh nie 4002 direkt nutzt)
+
+**Echte Ursache — Image-Architektur (`gnzsnz/ib-gateway:stable`):**
+- IB Gateway lauscht intern **nur auf 127.0.0.1:4002** (strict localhost)
+- Ein **socat**-Daemon im Container exposed Port `0.0.0.0:4004` und forwarded
+  zu `127.0.0.1:4002`
+- Damit sieht IBG die Connection als "lokal" und akzeptiert sie
+
+**Fix:** ib_insync MUSS zu Port **4004** connecten, NICHT 4002.
+```python
+ib.connect("ib-gateway", 4004, clientId=1, timeout=15)
+```
+
+### Neue Datei: `app/ibkr_client.py`
+
+Stub-Modul mit:
+- `IBG_HOST`, `IBG_PORT=4004`, `IBG_CLIENT_ID`, `IBG_TIMEOUT` als Konstanten
+  (env-var-overridable)
+- `connect(host, port, client_id, timeout, readonly)` — Wrapper um `ib_insync.IB`
+- `healthcheck() -> dict` — schneller Connectivity-Check ohne Side-Effects
+- CLI-Modus: `python -m app.ibkr_client` -> JSON-Output mit Status
+
+Vollstaendige Doku im Modul-Docstring, inkl. Port-Architektur-Erklaerung
+damit zukuenftige Entwickler nicht in dieselbe 4002-Falle laufen.
+
+### Persistente Settings am VPS
+
+In `/opt/ib-gateway/` Container:
+- `IBC config.ini.tmpl`: `TrustedTwsApiClientIPs=172.18.0.2` gepatcht
+  (Belt-and-Suspenders, falls jemand mal 4002 direkt nutzen will)
+- `Jts/jts.ini`: `TrustedIPs=127.0.0.1,172.18.0.2` (wird von IBC bei jedem
+  Restart aus Template neu generiert)
+
+**Bekannte Persistenz-Grenze:** Bei `docker compose down + up` (Container-Recreate
+ohne Volume-Mount) gehen die Patches verloren weil sie im Image-FS liegen.
+Saubere Loesung waere Volume-Mount fuer `/home/ibgateway/Jts/` oder Custom-Image
+mit angepasstem `IBC config.ini.tmpl` — TODO fuer W3.
+
+### Naechster Schritt (W2)
+
+`app/broker_base.py` als abstrakte Broker-Klasse, `etoro_client.py` als
+`EtoroBroker`-Implementation, `IbkrBroker`-Implementation in
+`app/ibkr_client.py` ausbauen (Order-Submit, Portfolio-Pull, Trade-History).
+
 ## v15 — Tooling: Image-Size Guards fuer Claude Code (2026-04-25)
 
 **Hintergrund:** Claude Code Sessions im InvestPilot-Projekt scheiterten
