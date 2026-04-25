@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     expose:
       - '8000'
+    ports:
+      - '127.0.0.1:8000:8000'  # Lokaler SSH-Tunnel-Zugang bis DNS-Wechsel
     volumes:
       - /opt/investpilot/data:/app/data
       - /opt/investpilot/Bericht:/app/Bericht

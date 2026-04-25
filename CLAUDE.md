@@ -925,6 +925,130 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v22 — Paper-Phase-Paket + Async-Saga + Hotfixes (2026-04-25)
+
+**Hintergrund:** Nach W5-Cutover am 25.04. ein vollstaendiger Sweep durch
+11 Folge-Items (Cleanup, Observability, Quality, W7-Features) plus eine
+Async-Saga zur Loesung von Loop-Konflikten zwischen FastAPI und ib_insync.
+
+### Paper-Phase-Paket (11 Items)
+
+1. **Reconciliation-Skript** (`scripts/ibkr_reconcile.py`) — Bot-State vs IBKR
+   Realitaet, exit-codes 0/1/2 fuer Cron, --alert flag fuer Telegram
+2. **Dashboard-Broker-Badge** im Header (Broker, Modus, Connection-LED, Equity-Tooltip)
+3. **Telegram-Connection-Alert** via `app/alerts.py:check_broker_health()` mit
+   State-Deduplication (sendet nur bei state-change ok->fail oder fail->ok)
+4. **W4-Regression-Tests** (`tests/test_w4_regression.py`) — 8 Tests fuer alle
+   4 W4-Bugs + W6-Hotfix v21 + W2-Port-4004
+5. **eToro-Container-Cleanup** — bereits clean, nichts zu tun
+6. **IBKR-Setup-Doku** (`docs/IBKR_SETUP.md`) — Quickstart + alle Bug-Hist + Cutover-Liste
+7. **Entnahme-Planer MVP** (`app/withdrawal_planner.py`) + Plan-Card im Dashboard
+8. **Universe-Reset-Button** (`POST /api/universe/reset` + Card-Button)
+9. **Asset-Class-Erweiterung im Resolver**: IND (Index Read-Only), FUT/CMDTY
+   bewusst NotImplementedError mit klarer Begruendung
+10. **Bot Nr. 5 Pairs Trading SKELETON** (`app/pairs_trading.py`) mit
+    Architektur-Doc und TODO-W2-W4 Stubs
+11. **Async-Order-Tracking**: `CANCEL_ON_TIMEOUT=True`, Auto-Cancel haengender
+    Orders nach `fill_timeout` (sicherer Default)
+
+### W21-Hotfix: get_portfolio() Top-Level-Keys
+
+`IbkrBroker.get_portfolio()` returnte `creditByRealizedEquity`/`availableCash`
+als Top-Level-Keys. trader.py liest aber eToro-Standard `credit`/`unrealizedPnL`
+-> Bot las cash=$0 -> sofort `TAGES-DRAWDOWN-STOP -100%` -> Bot pausiert.
+Fix: Top-Level-Keys auf `credit` + `unrealizedPnL` + `positions` umgestellt
+(Legacy-Aliases bleiben fuer backwards-compat).
+
+### Async-Saga (FastAPI vs ib_insync Loop-Conflicts)
+
+Beim ersten Live-Dashboard-Check zeigte sich: Cards `Cash`/`Investiert`/
+`Positionen` blieben "--" weil **/api/portfolio** und andere Endpoints
+zwar `connected=true` meldeten aber `get_equity()` ein leeres Resultat
+gaben oder mit `attached to a different loop` crashten.
+
+5 Iterationen bis zur stabilen Loesung:
+
+1. **`asyncio.to_thread(_broker_status_sync)`** — isoliert ib_insync vom
+   FastAPI-Loop. Half teilweise.
+2. **`_ensure_event_loop()`** — neuer Loop pro Thread wenn keiner da.
+   Fixed `to_thread`-Fehler aber nicht den Live-FastAPI-Pfad.
+3. **`nest_asyncio.apply()`** — patcht laufenden Loop fuer nested calls.
+   Crashte mit `Can't patch loop of type uvloop.Loop`.
+4. **`uvicorn --loop asyncio`** statt default uvloop in entrypoint.sh —
+   nest_asyncio kann patchen. Aber: weiterhin `attached to a different loop`
+   Errors wegen ib_insync's internem state.
+5. **Final pragmatic fix**: `/api/portfolio` liest IBKR-Werte aus
+   `brain_state.performance_snapshots` (vom Bot-Cycle alle 5 Min geschrieben).
+   Kein Loop-Conflict, max 5 Min alt — akzeptabel fuer Dashboard.
+   eToro-Pfad bleibt live (REST-API ist loop-safe).
+
+### ClientID-Strategie
+
+**Problem**: Bot nutzt `clientId=1`, alle Dashboard-Endpoints connecten neu
+mit gleicher ID -> IBKR `Error 326: client id already in use`.
+
+**Fix in `IbkrBroker.__init__`**:
+- `readonly=True` ODER kein expliciter id -> random clientId(100, 999)
+- `readonly=False` + explicit id -> nutze diese (Bot-Hauptinstanz: id=1)
+
+`get_broker(config, readonly=True)` reicht das durch. 9 Dashboard-Endpoints
++ Reconciliation-Cron migriert. trader.py UNCHANGED (Bot braucht id=1).
+
+### Health-Check-Retry
+
+`check_broker_health()` mit `max_attempts=2`, 5s wait + force-disconnect
+zwischen Attempts. Verhindert false-positive Cycle-Skips durch
+race-conditions mit Reconciliation-Cron.
+
+### Bot Live-Trading verifiziert
+
+Erste echte Bot-Order am 25.04. um 14:24 UTC:
+```
+Order #9: BUY 461 ROKU @ Limit $115.73 (target $53.4k)
+PendingSubmit -> PreSubmitted -> Submitted -> 30s spaeter Auto-Cancelled
+```
+
+Bot tradet aktiv im Paper-Account `DUP108015`. Auto-Cancel funktionierte
+exakt wie programmiert (CANCEL_ON_TIMEOUT). Kein hangender Order-Risk.
+
+### Deploy-Hotfixes
+
+- `scripts/__init__.py` (leer) damit `python -m scripts.ibkr_reconcile`
+  funktioniert
+- `Dockerfile` `COPY scripts/ scripts/` (war nicht im Image)
+- Reconciliation `clientId=99` + `readonly=True` (vermeidet Bot-Conflict)
+- `nest_asyncio>=1.6.0` + `--loop asyncio` in entrypoint
+- `_portfolio_from_brain_cache()` in `web/app.py` als fallback
+
+### VPS-seitige Aenderungen (jetzt im Repo)
+
+- `docker-compose.vps.yml` erweitert um `127.0.0.1:8000:8000` Port-Mapping
+  (fuer SSH-Tunnel-Zugriff bis DNS-Wechsel)
+- `/opt/ib-gateway/docker-compose.yml`: `READ_ONLY_API=no` env-var
+  + Volume-Mounts fuer config.ini.tmpl + jts.ini.tmpl
+- VPS-Cron `*/30 * * * *` fuer Reconciliation in `/opt/investpilot/logs/reconcile.log`
+
+### Tests
+
+47/47 gruen (39 Bestand + 8 W4-Regression).
+
+## v21 — Hotfix get_portfolio() eToro-Standard-Keys (2026-04-25)
+
+`IbkrBroker.get_portfolio()` returnte falsche Top-Level-Keys
+(`creditByRealizedEquity` statt `credit`). trader.py las daher cash=$0 ->
+TAGES-DRAWDOWN-STOP triggered -> Bot pausierte sofort nach IBKR-Cutover.
+
+**Fix**: Top-Level-Keys auf eToro-Standard umgestellt:
+- `credit` (Cash, vorher fehlte)
+- `unrealizedPnL` (vorher fehlte)
+- `positions` (war ok)
+
+Legacy-Aliases (`creditByRealizedEquity`, `availableCash`) bleiben fuer
+backwards-compat. Plus IBKR-Meta-Felder (`_equity`, `_realized_pnl`,
+`_gross_position_value`) mit `_`-Prefix.
+
+Test: `tests/test_w4_regression.py::test_v21_hotfix_get_portfolio_returns_etoro_compatible_keys`.
+
 ## v20 — W5 Volume-Persistence + Trader-Migration (2026-04-25)
 
 **Hintergrund:** v19 hatte zwei offene TODOs: (a) IBG-Patches (TrustedIPs)
