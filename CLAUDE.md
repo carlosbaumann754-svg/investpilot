@@ -925,6 +925,94 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v20 — W5 Volume-Persistence + Trader-Migration (2026-04-25)
+
+**Hintergrund:** v19 hatte zwei offene TODOs: (a) IBG-Patches (TrustedIPs)
+gehen bei `docker compose down + up` verloren, (b) Bot's Trading-Cycle
+ruft noch hart `EtoroClient(config)` auf — Migration auf `get_broker()`
+fehlt damit `broker='ibkr'` tatsaechlich Trading-Verhalten aendert.
+
+### A — Volume-Mount fuer Template-Persistence
+
+**Strategie**: Single-File-Bind-Mounts statt ganzes Verzeichnis.
+Vermeidet Risiko dass IB-Gateway-Binaries vom Image durch Host-Snapshot
+ueberschrieben werden.
+
+In `/opt/ib-gateway/docker-compose.yml`:
+```yaml
+volumes:
+  - /opt/ib-gateway/config.ini.tmpl:/home/ibgateway/ibc/config.ini.tmpl:ro
+  - /opt/ib-gateway/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl:ro
+```
+
+Host-Templates haben die Patches:
+- `config.ini.tmpl`: `TrustedTwsApiClientIPs=172.18.0.2`
+- `jts.ini.tmpl`: `TrustedIPs=127.0.0.1,172.18.0.2`
+
+**Verifiziert**: Hard-Recreate (`docker compose down && up`) erhaelt
+TrustedIPs in IBC config.ini, jts.ini und in der Live-Connection.
+Healthcheck nach Recreate: `ok=true, server v176, account DUP108015`.
+
+### B — Trader+Dashboard auf get_broker() Factory
+
+10 Stellen migriert von `client = EtoroClient(...)` -> `client = get_broker(...)`:
+
+| Datei | Zeile | Kontext |
+|---|---:|---|
+| `app/trader.py` | 1343 | **Trading-Cycle (kritischer Pfad)** |
+| `app/asset_discovery.py` | 120 | Wochentliche Asset-Suche |
+| `app/equity_snapshot.py` | 113 | Daily Snapshot fuer Equity-Curve |
+| `web/app.py` | 372,579,933,1712,1746,1822,3171,3643 | Dashboard-Endpoints |
+
+`from app.etoro_client import EtoroClient` bleibt in jedem File fuer die
+12 `EtoroClient.parse_position()` static-Aufrufe — funktioniert auch fuer
+IBKR weil `IbkrBroker.get_portfolio()` eToro-kompatibles Dict liefert
+(positionID, instrumentID, amount, isBuy etc.).
+
+Trading-Cycle Logging zeigt jetzt: `INFO Trading-Cycle mit Broker 'etoro'`
+(bzw. `'ibkr'`).
+
+### Cutover (was jetzt zu tun ist)
+
+```bash
+# 1. data/config.json patchen am VPS:
+ssh root@178.104.236.157 "cat > /opt/investpilot/data/config.json.tmp" <<EOF
+... (mit "broker": "ibkr" + ibkr-Block)
+EOF
+
+# 2. Container restart:
+cd /opt/investpilot
+docker compose -f docker-compose.vps.yml restart investpilot
+
+# 3. Bot logs beobachten:
+docker logs -f investpilot --tail 100
+# -> Sollte 'Trading-Cycle mit Broker ibkr' zeigen
+```
+
+### Verifiziert end-to-end
+
+```
+Default config (broker missing):
+  Resolved broker: etoro, configured: True
+
+Override broker=ibkr in-memory:
+  Resolved broker: ibkr
+  equity: 1062145.27
+  positions: 0
+  Connect-cycle: 974ms
+```
+
+### Bekannte Caveats
+
+- Bot+Dashboard sind nun **synchron** auf demselben Broker — das ist gut.
+  ABER: User kann nicht mehr im Dashboard parallel den eToro-Account
+  einsehen waehrend der Bot via IBKR tradet. Wenn das gewuenscht ist:
+  zweiter `client_etoro = EtoroClient(config)` fuer Read-Only-Display
+  in spezifischen Dashboard-Endpoints.
+- `parse_position()` ist Static auf EtoroClient. Sauberer waere als
+  Free-Function in `broker_base.py` oder als Static auf `BrokerBase`.
+  Heute funktional ok da Format kompatibel — Refactor bei Gelegenheit.
+
 ## v19 — W4 Live-Smoke-Test + Production-Hardening (2026-04-25)
 
 **Hintergrund:** Code-Deploy zum VPS + Live-Validierung gegen Paper-Account
