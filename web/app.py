@@ -365,6 +365,93 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
 # API ENDPOINTS
 # ============================================================
 
+@app.get("/api/withdrawal/status")
+async def api_withdrawal_status(user=Depends(require_auth)):
+    """Status des aktiven Entnahme-Plans (Withdrawal Scheduler)."""
+    try:
+        from app.withdrawal_planner import get_status
+        return get_status()
+    except Exception as e:
+        log.error(f"Withdrawal-Status: {e}", exc_info=True)
+        return {"active": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/withdrawal/plan")
+async def api_withdrawal_plan(payload: dict, user=Depends(require_auth)):
+    """Neuen Entnahme-Plan erstellen (ueberschreibt alten falls vorhanden).
+
+    Payload: {"amount": float, "deadline": "YYYY-MM-DD", "strategy": "fifo", "notes": str}
+    """
+    try:
+        from app.withdrawal_planner import create_plan
+        plan = create_plan(
+            target_amount_usd=float(payload.get("amount", 0)),
+            deadline=str(payload.get("deadline", "")),
+            strategy=str(payload.get("strategy", "fifo")),
+            notes=str(payload.get("notes", "")),
+        )
+        return {"status": "ok", "plan": plan}
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        log.error(f"Withdrawal-Plan-Create: {e}", exc_info=True)
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+
+@app.delete("/api/withdrawal/plan")
+async def api_withdrawal_cancel(user=Depends(require_auth)):
+    """Aktiven Entnahme-Plan stornieren."""
+    try:
+        from app.withdrawal_planner import cancel_plan
+        plan = cancel_plan()
+        if plan is None:
+            return {"status": "noop", "message": "Kein aktiver Plan vorhanden"}
+        return {"status": "ok", "cancelled_plan": plan}
+    except Exception as e:
+        log.error(f"Withdrawal-Cancel: {e}", exc_info=True)
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/universe/reset")
+async def api_universe_reset(user=Depends(require_auth)):
+    """Universe-Reset: leert disabled_symbols-Liste, damit beim naechsten
+    Backtest alle Symbole wieder evaluiert werden.
+
+    Use-Case: Die statisch disabled-Liste (21 Symbole seit v12-Rollout) wird
+    nie automatisch ueberprueft. Dieser Endpoint erlaubt einen Ad-hoc
+    Re-Check ohne Code-Change. Nach Reset:
+    1. Naechster Backtest (Sonntag oder manuell) bewertet ALLE 71 Symbole
+    2. Performante Symbole bleiben aktiv, schwache landen via Universe-Health
+       wieder auf der Liste
+    3. Backup der alten Liste in disabled_symbols_backup_<timestamp> falls Rollback noetig
+    """
+    try:
+        config = load_config()
+        old_disabled = list(config.get("disabled_symbols", []) or [])
+        if not old_disabled:
+            return {"status": "noop", "message": "disabled_symbols ist bereits leer"}
+        # Backup mit Timestamp
+        from datetime import datetime
+        backup_key = f"disabled_symbols_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        config[backup_key] = old_disabled
+        config["disabled_symbols"] = []
+        save_config(config)
+        log.info(f"Universe-Reset: {len(old_disabled)} disabled_symbols geleert. "
+                 f"Backup unter '{backup_key}'.")
+        return {
+            "status": "ok",
+            "cleared_count": len(old_disabled),
+            "cleared_symbols": old_disabled,
+            "backup_key": backup_key,
+            "next_step": "Naechster Backtest (manuell oder Sonntag 06:00 UTC) "
+                         "bewertet alle Symbole neu. Schwache Performer landen "
+                         "via Universe-Health wieder auf der Liste.",
+        }
+    except Exception as e:
+        log.error(f"Universe-Reset fehlgeschlagen: {e}", exc_info=True)
+        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/api/broker-status")
 async def api_broker_status():
     """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth.

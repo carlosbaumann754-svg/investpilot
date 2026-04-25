@@ -255,6 +255,37 @@
             <div class="card-title">Universe Health<span class="tip" data-tip="Welche Symbole beim letzten Daten-Download von Yahoo Finance Probleme hatten. 'Ok' = frische Kursdaten da, 'bad' = Symbol liefert keine brauchbaren Daten (z.B. wegen Rebranding/Delisting) und sollte in die Disabled-Liste.">?</span></div>
             <div id="uh-summary" class="card-sub" style="margin-bottom:8px;">--</div>
             <div id="uh-bad-list" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+            <div style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">
+                <button onclick="universeReset()" class="btn-secondary" style="font-size:0.85em;padding:6px 12px;cursor:pointer;"
+                        title="Loescht die disabled_symbols-Liste, damit alle 71 Symbole beim naechsten Backtest neu bewertet werden. Schwache Performer landen via Universe-Health automatisch wieder drauf. Backup wird automatisch angelegt.">
+                    🔄 Universe-Reset (Liste leeren)
+                </button>
+                <span id="universe-reset-status" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
+            </div>
+        </div>
+
+        <!-- WITHDRAWAL PLANNER -->
+        <div class="card" id="withdrawal-card">
+            <div class="card-title">Entnahme-Planer<span class="tip" data-tip="Schrittweise Liquidation fuer groessere Ausgaben (Auto, Haus, etc.). Bot reduziert Risiko von 'alles am Tief verkauft' durch zeitliche Verteilung. MVP-Status: Plan-Persistenz aktiv, Trader-Integration folgt in W8 (heute keine automatischen Sells).">?</span></div>
+            <div id="wd-status" class="card-sub" style="margin-bottom:8px;">--</div>
+            <div id="wd-progress-bar" style="display:none;height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin:8px 0;">
+                <div id="wd-progress-fill" style="height:100%;background:linear-gradient(90deg,#10b981,#3b82f6);transition:width 0.5s;"></div>
+            </div>
+            <div id="wd-details" style="font-size:0.85em;opacity:0.85;margin-bottom:10px;"></div>
+            <div id="wd-no-plan" style="display:none;">
+                <details>
+                    <summary style="cursor:pointer;font-size:0.9em;">+ Neuen Plan erstellen</summary>
+                    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
+                        <input type="number" id="wd-amount" placeholder="Zielbetrag USD (z.B. 5000)" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
+                        <input type="date" id="wd-deadline" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
+                        <input type="text" id="wd-notes" placeholder="Notiz (optional, z.B. Auto-Anzahlung)" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
+                        <button onclick="withdrawalCreate()" class="btn-secondary" style="padding:6px;cursor:pointer;">Plan anlegen</button>
+                    </div>
+                </details>
+            </div>
+            <div id="wd-active" style="display:none;">
+                <button onclick="withdrawalCancel()" class="btn-secondary" style="font-size:0.8em;padding:4px 10px;cursor:pointer;opacity:0.8;">Plan stornieren</button>
+            </div>
         </div>
 
         <!-- NEWS SOURCES -->

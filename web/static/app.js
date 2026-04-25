@@ -1721,18 +1721,126 @@ async function askQuestion() {
     loadWatchdog();
     loadV15Sizing();
     loadBrokerStatus();
+    loadWithdrawalStatus();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
     setInterval(loadWatchdog, 300000); // Watchdog alle 5 Min
     setInterval(loadV15Sizing, 60000); // v15 Sizing/DCA alle 1 Min
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
+    setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
         }
     }, 30000);
 })();
+
+/**
+ * Withdrawal Planner — Status laden + Form-Handling.
+ */
+async function loadWithdrawalStatus() {
+    const statusEl = document.getElementById('wd-status');
+    const detailsEl = document.getElementById('wd-details');
+    const barEl = document.getElementById('wd-progress-bar');
+    const fillEl = document.getElementById('wd-progress-fill');
+    const noPlanEl = document.getElementById('wd-no-plan');
+    const activeEl = document.getElementById('wd-active');
+    if (!statusEl) return;
+    try {
+        const resp = await fetch('/api/withdrawal/status');
+        const s = await resp.json();
+        if (!s.active) {
+            statusEl.textContent = 'Kein aktiver Plan';
+            detailsEl.textContent = '';
+            barEl.style.display = 'none';
+            noPlanEl.style.display = 'block';
+            activeEl.style.display = 'none';
+        } else {
+            statusEl.textContent = `$${s.withdrawn_so_far_usd.toLocaleString()} / $${s.target_amount_usd.toLocaleString()} (${s.progress_pct}%)`;
+            barEl.style.display = 'block';
+            fillEl.style.width = Math.min(100, s.progress_pct) + '%';
+            const daysColor = s.days_left < 7 ? 'color:#f59e0b;' : '';
+            detailsEl.innerHTML =
+                `Deadline: <b>${s.deadline}</b> (<span style="${daysColor}">${s.days_left} Tage</span>) · ` +
+                `Strategie: ${s.strategy} · ` +
+                `Empf. Tagesrate: $${s.recommended_daily_liquidation_usd.toLocaleString()}<br>` +
+                (s.notes ? `<i>${s.notes}</i>` : '');
+            noPlanEl.style.display = 'none';
+            activeEl.style.display = 'block';
+        }
+    } catch (e) {
+        statusEl.textContent = `❌ Status-Fetch failed: ${e}`;
+    }
+}
+
+async function withdrawalCreate() {
+    const amount = parseFloat(document.getElementById('wd-amount').value);
+    const deadline = document.getElementById('wd-deadline').value;
+    const notes = document.getElementById('wd-notes').value;
+    if (!amount || !deadline) {
+        alert('Bitte Zielbetrag und Deadline ausfuellen');
+        return;
+    }
+    try {
+        const resp = await fetch('/api/withdrawal/plan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({amount, deadline, strategy: 'fifo', notes}),
+        });
+        const r = await resp.json();
+        if (r.status === 'ok') {
+            await loadWithdrawalStatus();
+        } else {
+            alert(`Fehler: ${r.error}`);
+        }
+    } catch (e) {
+        alert(`Request failed: ${e}`);
+    }
+}
+
+async function withdrawalCancel() {
+    if (!confirm('Aktiven Plan wirklich stornieren?')) return;
+    try {
+        const resp = await fetch('/api/withdrawal/plan', {method: 'DELETE'});
+        await resp.json();
+        await loadWithdrawalStatus();
+    } catch (e) {
+        alert(`Cancel failed: ${e}`);
+    }
+}
+
+/**
+ * Universe-Reset: Leert disabled_symbols-Liste mit Bestaetigung.
+ * Zeigt Resultat als Status-Text neben dem Button.
+ */
+async function universeReset() {
+    const statusEl = document.getElementById('universe-reset-status');
+    if (!confirm(
+        'Universe-Reset durchfuehren?\n\n' +
+        'Die disabled_symbols-Liste wird geleert. Beim naechsten Backtest ' +
+        'werden alle Symbole neu bewertet. Schwache landen via Universe-Health ' +
+        'wieder auf der Liste. Backup wird automatisch angelegt.'
+    )) return;
+    statusEl.textContent = 'läuft...';
+    try {
+        const resp = await fetch('/api/universe/reset', {method: 'POST'});
+        const r = await resp.json();
+        if (r.status === 'ok') {
+            statusEl.style.color = '#10b981';
+            statusEl.textContent = `✅ ${r.cleared_count} Symbole geleert · Backup: ${r.backup_key}`;
+        } else if (r.status === 'noop') {
+            statusEl.style.color = '#f59e0b';
+            statusEl.textContent = `ℹ️ ${r.message}`;
+        } else {
+            statusEl.style.color = '#ef4444';
+            statusEl.textContent = `❌ ${r.error || 'Unbekannter Fehler'}`;
+        }
+    } catch (e) {
+        statusEl.style.color = '#ef4444';
+        statusEl.textContent = `❌ Request failed: ${e}`;
+    }
+}
 
 /**
  * Broker-Badge im Header — zeigt aktuellen Broker (eToro/IBKR), Modus
