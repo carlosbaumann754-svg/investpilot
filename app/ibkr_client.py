@@ -208,22 +208,60 @@ class IbkrBroker(BrokerBase):
             asyncio.set_event_loop(asyncio.new_event_loop())
 
     def _get_ib(self):
-        """Lazy-init der IB-Instanz."""
+        """Lazy-init der IB-Instanz mit Auto-Retry bei 'client id already in use'.
+
+        IBG haelt nach disconnect oft 5-30s eine 'Geist-Session' im Pool. Wenn
+        der naechste Bot-Cycle zu schnell mit derselben clientId reconnected,
+        sieht IBG die alte Session noch -> Error 326 -> get_equity returnt None.
+
+        Workaround: bei Conflict-Error automatisch random clientId(100,999) probieren.
+        Damit haengt der Bot nicht an einer 'kontaminierten' ID fest.
+        """
         if self._ib is None or not self._ib.isConnected():
             self._ensure_event_loop()
-            self._ib = connect(
-                host=self.host,
-                port=self.port,
-                client_id=self.client_id,
-                timeout=self.timeout,
-                readonly=self.readonly,
-            )
+            try:
+                self._ib = connect(
+                    host=self.host,
+                    port=self.port,
+                    client_id=self.client_id,
+                    timeout=self.timeout,
+                    readonly=self.readonly,
+                )
+            except Exception as primary_err:
+                err_msg = str(primary_err).lower()
+                # Error 326 / TimeoutError / Peer closed -> retry mit fresh clientId
+                if any(k in err_msg for k in ("already in use", "timeout", "peer closed", "326")):
+                    import random
+                    fresh_id = random.randint(100, 999)
+                    log.warning(
+                        "IBG-Connect mit clientId=%d failed (%s) — Retry mit fresh clientId=%d",
+                        self.client_id, type(primary_err).__name__, fresh_id,
+                    )
+                    self._ib = connect(
+                        host=self.host,
+                        port=self.port,
+                        client_id=fresh_id,
+                        timeout=self.timeout,
+                        readonly=self.readonly,
+                    )
+                    # Nicht permanent overriden — naechster Cycle versucht wieder die config-ID
+                else:
+                    raise
         return self._ib
 
     def disconnect(self) -> None:
-        """Verbindung schliessen (manuell aufrufen wenn fertig)."""
+        """Verbindung schliessen mit kurzem Wait — gibt IBG Zeit fuer Pool-Cleanup.
+
+        Ohne Wait haelt IBG die clientId-Session manchmal 5-30s als 'Geist' im
+        Pool. Naechster Connect mit derselben ID landet dort -> Error 326.
+        Mit 2s Wait ist der Cleanup meist durch.
+        """
         if self._ib is not None and self._ib.isConnected():
             self._ib.disconnect()
+            try:
+                self._ib.sleep(2.0)  # IBG Cleanup-Window
+            except Exception:
+                pass
         self._ib = None
 
     # --- Read-Operations (LIVE) ---
