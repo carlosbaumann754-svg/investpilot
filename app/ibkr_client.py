@@ -167,6 +167,37 @@ class IbkrBroker(BrokerBase):
 
     # --- Read-Operations (LIVE) ---
 
+    def _get_account_value(self, tag: str) -> Optional[float]:
+        """
+        Holt einen Account-Value (NetLiquidation, AvailableFunds etc.) per Tag.
+
+        Bevorzugt Currency=USD, dann BASE, sonst irgendeinen Match (IBKR
+        liefert manchmal '' als currency fuer aggregierte Werte).
+        """
+        try:
+            ib = self._get_ib()
+            matches = [av for av in ib.accountValues() if av.tag == tag]
+            if not matches:
+                return None
+            # Praeferenz USD > BASE > leer > rest
+            for pref in ("USD", "BASE", ""):
+                for av in matches:
+                    if av.currency == pref:
+                        try:
+                            return float(av.value)
+                        except (TypeError, ValueError):
+                            continue
+            # Fallback: erster nutzbarer
+            for av in matches:
+                try:
+                    return float(av.value)
+                except (TypeError, ValueError):
+                    continue
+            return None
+        except Exception as e:
+            log.error("_get_account_value(%s) failed: %s", tag, e)
+            return None
+
     def get_portfolio(self) -> Optional[dict]:
         """
         Portfolio-Snapshot im eToro-kompatiblen Format.
@@ -177,7 +208,6 @@ class IbkrBroker(BrokerBase):
         try:
             ib = self._get_ib()
             positions = ib.positions()
-            account_values = {av.tag: av for av in ib.accountValues() if av.currency in ("USD", "BASE")}
 
             mapped_positions = []
             for p in positions:
@@ -191,8 +221,8 @@ class IbkrBroker(BrokerBase):
                     "isBuy": p.position > 0,
                 })
 
-            equity = float(account_values["NetLiquidation"].value) if "NetLiquidation" in account_values else 0.0
-            cash = float(account_values["AvailableFunds"].value) if "AvailableFunds" in account_values else 0.0
+            equity = self._get_account_value("NetLiquidation") or 0.0
+            cash = self._get_account_value("AvailableFunds") or 0.0
 
             return {
                 "positions": mapped_positions,
@@ -206,37 +236,13 @@ class IbkrBroker(BrokerBase):
             return None
 
     def get_equity(self) -> Optional[float]:
-        try:
-            ib = self._get_ib()
-            for av in ib.accountValues():
-                if av.tag == "NetLiquidation" and av.currency in ("USD", "BASE"):
-                    return float(av.value)
-            return None
-        except Exception as e:
-            log.error("get_equity failed: %s", e)
-            return None
+        return self._get_account_value("NetLiquidation")
 
     def get_available_cash(self) -> Optional[float]:
-        try:
-            ib = self._get_ib()
-            for av in ib.accountValues():
-                if av.tag == "AvailableFunds" and av.currency in ("USD", "BASE"):
-                    return float(av.value)
-            return None
-        except Exception as e:
-            log.error("get_available_cash failed: %s", e)
-            return None
+        return self._get_account_value("AvailableFunds")
 
     def get_total_invested(self) -> Optional[float]:
-        try:
-            ib = self._get_ib()
-            for av in ib.accountValues():
-                if av.tag == "GrossPositionValue" and av.currency in ("USD", "BASE"):
-                    return float(av.value)
-            return None
-        except Exception as e:
-            log.error("get_total_invested failed: %s", e)
-            return None
+        return self._get_account_value("GrossPositionValue")
 
     def get_pnl(self) -> Optional[dict]:
         """Roher P/L. Bei IBKR mappen wir das auf get_portfolio() (kompatibel)."""

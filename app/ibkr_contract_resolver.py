@@ -203,41 +203,72 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
     return qc
 
 
-def get_quote(ib, contract, timeout: float = 3.0) -> Optional[float]:
+def _safe_num(v) -> Optional[float]:
+    """Wandle ib_insync-Ticker-Werte (kann float, NaN, callable, None sein) in Optional[float] um."""
+    import math
+    try:
+        if v is None:
+            return None
+        # Callable abfangen (ticker.marketPrice() ist eine method in ib_insync)
+        if callable(v):
+            try:
+                v = v()
+            except Exception:
+                return None
+        f = float(v)
+        if math.isnan(f) or f <= 0:
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
+def get_quote(ib, contract, timeout: float = 5.0, allow_delayed: bool = True) -> Optional[float]:
     """
-    Schneller Mid-Price-Snapshot fuer Quantity-Berechnung.
+    Schneller Price-Snapshot fuer Quantity-Berechnung.
 
     Versucht in folgender Reihenfolge:
     1. Last-Price (wenn frisch)
     2. Mid (Bid+Ask)/2
-    3. Bid oder Ask (falls eine Seite fehlt)
-    4. Close (fallback aus Tagesdaten)
+    3. marketPrice() (ib_insync's smart fallback)
+    4. Close (Vortagesschluss)
 
-    Args:
-        ib: ib_insync.IB
-        contract: qualifizierter Contract
-        timeout: max Sekunden fuer Snapshot-Wait
+    Bei Paper-Accounts ohne Market-Data-Abo: schaltet auf Delayed-Data
+    via reqMarketDataType(3) wenn allow_delayed=True (default).
 
     Returns:
-        Mid-Price als float, oder None wenn kein Quote verfuegbar.
+        Price als float, oder None wenn kein Quote verfuegbar.
     """
     try:
+        if allow_delayed:
+            try:
+                # 1=Live, 2=Frozen, 3=Delayed, 4=Delayed-Frozen
+                ib.reqMarketDataType(3)
+            except Exception:
+                pass
+
         ticker = ib.reqMktData(contract, snapshot=True, regulatorySnapshot=False)
-        # ib_insync's snapshot fuellt nach kurzem Wait
         deadline = time.time() + timeout
         while time.time() < deadline:
             ib.sleep(0.1)
-            if ticker.last and ticker.last > 0:
-                return float(ticker.last)
-            if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
-                return (float(ticker.bid) + float(ticker.ask)) / 2.0
-            if ticker.close and ticker.close > 0:
-                return float(ticker.close)
-        # Endwerte versuchen
-        for attr in ("last", "marketPrice", "close"):
-            v = getattr(ticker, attr, None)
-            if v and v > 0:
-                return float(v)
+            last = _safe_num(getattr(ticker, "last", None))
+            if last:
+                return last
+            bid = _safe_num(getattr(ticker, "bid", None))
+            ask = _safe_num(getattr(ticker, "ask", None))
+            if bid and ask:
+                return (bid + ask) / 2.0
+            mp = _safe_num(getattr(ticker, "marketPrice", None))
+            if mp:
+                return mp
+            close = _safe_num(getattr(ticker, "close", None))
+            if close:
+                return close
+        # Final Fallback nach Timeout
+        for attr in ("last", "marketPrice", "close", "bid", "ask"):
+            v = _safe_num(getattr(ticker, attr, None))
+            if v:
+                return v
         return None
     except Exception as e:
         log.error("get_quote failed: %s", e)
