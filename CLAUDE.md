@@ -925,6 +925,383 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v20 — W5 Volume-Persistence + Trader-Migration (2026-04-25)
+
+**Hintergrund:** v19 hatte zwei offene TODOs: (a) IBG-Patches (TrustedIPs)
+gehen bei `docker compose down + up` verloren, (b) Bot's Trading-Cycle
+ruft noch hart `EtoroClient(config)` auf — Migration auf `get_broker()`
+fehlt damit `broker='ibkr'` tatsaechlich Trading-Verhalten aendert.
+
+### A — Volume-Mount fuer Template-Persistence
+
+**Strategie**: Single-File-Bind-Mounts statt ganzes Verzeichnis.
+Vermeidet Risiko dass IB-Gateway-Binaries vom Image durch Host-Snapshot
+ueberschrieben werden.
+
+In `/opt/ib-gateway/docker-compose.yml`:
+```yaml
+volumes:
+  - /opt/ib-gateway/config.ini.tmpl:/home/ibgateway/ibc/config.ini.tmpl:ro
+  - /opt/ib-gateway/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl:ro
+```
+
+Host-Templates haben die Patches:
+- `config.ini.tmpl`: `TrustedTwsApiClientIPs=172.18.0.2`
+- `jts.ini.tmpl`: `TrustedIPs=127.0.0.1,172.18.0.2`
+
+**Verifiziert**: Hard-Recreate (`docker compose down && up`) erhaelt
+TrustedIPs in IBC config.ini, jts.ini und in der Live-Connection.
+Healthcheck nach Recreate: `ok=true, server v176, account DUP108015`.
+
+### B — Trader+Dashboard auf get_broker() Factory
+
+10 Stellen migriert von `client = EtoroClient(...)` -> `client = get_broker(...)`:
+
+| Datei | Zeile | Kontext |
+|---|---:|---|
+| `app/trader.py` | 1343 | **Trading-Cycle (kritischer Pfad)** |
+| `app/asset_discovery.py` | 120 | Wochentliche Asset-Suche |
+| `app/equity_snapshot.py` | 113 | Daily Snapshot fuer Equity-Curve |
+| `web/app.py` | 372,579,933,1712,1746,1822,3171,3643 | Dashboard-Endpoints |
+
+`from app.etoro_client import EtoroClient` bleibt in jedem File fuer die
+12 `EtoroClient.parse_position()` static-Aufrufe — funktioniert auch fuer
+IBKR weil `IbkrBroker.get_portfolio()` eToro-kompatibles Dict liefert
+(positionID, instrumentID, amount, isBuy etc.).
+
+Trading-Cycle Logging zeigt jetzt: `INFO Trading-Cycle mit Broker 'etoro'`
+(bzw. `'ibkr'`).
+
+### Cutover (was jetzt zu tun ist)
+
+```bash
+# 1. data/config.json patchen am VPS:
+ssh root@178.104.236.157 "cat > /opt/investpilot/data/config.json.tmp" <<EOF
+... (mit "broker": "ibkr" + ibkr-Block)
+EOF
+
+# 2. Container restart:
+cd /opt/investpilot
+docker compose -f docker-compose.vps.yml restart investpilot
+
+# 3. Bot logs beobachten:
+docker logs -f investpilot --tail 100
+# -> Sollte 'Trading-Cycle mit Broker ibkr' zeigen
+```
+
+### Verifiziert end-to-end
+
+```
+Default config (broker missing):
+  Resolved broker: etoro, configured: True
+
+Override broker=ibkr in-memory:
+  Resolved broker: ibkr
+  equity: 1062145.27
+  positions: 0
+  Connect-cycle: 974ms
+```
+
+### Bekannte Caveats
+
+- Bot+Dashboard sind nun **synchron** auf demselben Broker — das ist gut.
+  ABER: User kann nicht mehr im Dashboard parallel den eToro-Account
+  einsehen waehrend der Bot via IBKR tradet. Wenn das gewuenscht ist:
+  zweiter `client_etoro = EtoroClient(config)` fuer Read-Only-Display
+  in spezifischen Dashboard-Endpoints.
+- `parse_position()` ist Static auf EtoroClient. Sauberer waere als
+  Free-Function in `broker_base.py` oder als Static auf `BrokerBase`.
+  Heute funktional ok da Format kompatibel — Refactor bei Gelegenheit.
+
+## v19 — W4 Live-Smoke-Test + Production-Hardening (2026-04-25)
+
+**Hintergrund:** Code-Deploy zum VPS + Live-Validierung gegen Paper-Account
+DUP108015. 4/4 Stufen erfolgreich, 4 echte Bugs gefunden und gefixt.
+
+### Stufen-Ergebnis
+
+| Stufe | Test | Ergebnis |
+|---|---|---|
+| 1 | `healthcheck()` -> Connect + accounts + server time | ✅ server v176, account DUP108015 |
+| 2 | `get_equity/cash/invested + portfolio` | ✅ Equity $1.062.145, Cash $1.062.052, 0 Positionen |
+| 3 | Resolver + Quote fuer AAPL (etoro_id=6408) | ✅ AAPL conId=265598, Quote $270.90 (Delayed) |
+| 4 | `buy(6408, $300)` -> Order placed -> Cancel | ✅ orderId=8 Submitted, danach erfolgreich gecancelt |
+
+### Gefundene Bugs (alle gefixt)
+
+**1. `ib_insync` nicht in requirements.txt**
+War im alten Container manuell via `pip install` installiert, beim Container-
+Rebuild verloren. Jetzt `ib_insync>=0.9.86` in `requirements.txt` (Commit b4fafb8).
+
+**2. `IBC ReadOnlyApi` defaulted to "yes"**
+Env-var `READ_ONLY_API` war nicht gesetzt, IBC interpretierte leeren Wert
+als Read-Only. Trading geblockt mit `Error 321: API interface is currently
+in Read-Only mode`. Fix: `READ_ONLY_API=no` in `/opt/ib-gateway/docker-compose.yml`
+(VPS-seitig, **nicht im Bot-Repo getrackt** — gehoert zur IBG-Infra).
+
+**3. `get_quote()` Crash bei `marketPrice`**
+ib_insync 0.9.86 hat `Ticker.marketPrice` als **Methode**, nicht Attribut.
+`getattr(ticker, 'marketPrice') > 0` warf `TypeError: '>' not supported
+between 'method' and 'int'`. Fix: `_safe_num()` Helper konvertiert
+callable/NaN/None in `Optional[float]` (Commit a3b80c1).
+
+**4. `MarketOrder` von Paper-Account abgelehnt**
+`Warning 202: Order Canceled - reason: No market data on major exchange
+for market order`. Paper-Accounts ohne Market-Data-Abo lehnen MarketOrders
+ab (Sicherheits-Policy von IBKR). Fix: `LimitOrder` als Default mit 0.5%
+Slippage-Buffer (`LIMIT_SLIPPAGE_PCT` Konstante). MarketOrder bleibt
+verfuegbar via `order_type='MARKET'` Param. Auch `close_position` umgestellt.
+(Commit 03443ae)
+
+### Smart Currency-Filter
+
+`get_equity/cash/invested` returnten `None` weil Filter
+`currency in ('USD', 'BASE')` zu strikt war. IBKR liefert NetLiquidation
+oft mit `currency=''` fuer aggregierte Werte. Neuer `_get_account_value()`
+Helper mit Praeferenz `USD > BASE > '' > any` — robust gegen IBKR's
+inkonsistente Currency-Tags.
+
+### Delayed-Market-Data-Auto-Switch
+
+`get_quote()` ruft jetzt `ib.reqMarketDataType(3)` auf wenn
+`allow_delayed=True` (default). Damit funktionieren Quotes auch bei
+Paper-Accounts ohne RT-MD-Abo (15-Min-delayed). In Production mit
+RT-Abo wird automatisch der Live-Tick genutzt (IBKR honoriert das Abo).
+
+### Order-Lifecycle (W4 verifiziert)
+
+```
+ib.placeOrder(LimitOrder)
+  -> PendingSubmit  (clientside)
+  -> PreSubmitted   (IBKR validiert)
+  -> Submitted      (live im Order Book, wartet auf Match)
+  -> Filled / Cancelled (terminal)
+```
+
+`_place_market_order` wartet 30s und gibt aktuellen Status zurueck.
+Bei `Submitted` (= placed aber noch nicht gefuellt — z.B. ausserhalb RTH)
+ist das ok: Order ist scharf, fuellt sich beim naechsten Match.
+
+### VPS-seitige Aenderungen (NICHT im Bot-Repo)
+
+Diese Patches leben in `/opt/ib-gateway/` und `/home/ibgateway/Jts/`:
+
+| Pfad | Aenderung | Persistenz |
+|---|---|---|
+| `/opt/ib-gateway/docker-compose.yml` | `+READ_ONLY_API=no` | Container-Recreate-safe (env-var) |
+| `/home/ibgateway/Jts/jts.ini` | `TrustedIPs=127.0.0.1,172.18.0.2` | Geht bei Container-Recreate verloren — TODO Volume-Mount |
+| `/home/ibgateway/ibc/config.ini.tmpl` | `TrustedTwsApiClientIPs=172.18.0.2` | Geht bei Image-Update verloren |
+
+**TODO (W5)**: Volume-Mount `/opt/ib-gateway/jts:/home/ibgateway/Jts` in
+docker-compose.yml damit jts.ini-Patch persistent ueberlebt.
+
+### Bot kann nun live IBKR-Paper traden
+
+Voraussetzung Cutover: in `data/config.json` setzen:
+```json
+{ "broker": "ibkr", "ibkr": { "host": "ib-gateway", "port": 4004, "client_id": 1 } }
+```
+
+Bot rebuild + restart. Dann tradet er ueber IBKR Paper. eToro bleibt
+verfuegbar via `"broker": "etoro"`.
+
+**Empfehlung**: Vor Cutover Stand 25.04.: 1 Tag Paper-Live-Beobachtung
+(Bot-Cycle laeuft, Trades werden durchgefuehrt, Verifikation gegen
+Trade-History im IBKR Account-Portal).
+
+## v18 — IBKR Write-Operations + Contract-Resolver (W3, 2026-04-25)
+
+**Hintergrund:** v17 hatte `IbkrBroker.buy/sell/close_position` als
+`NotImplementedError`-Stubs. v18 macht sie echt — Bot kann jetzt theoretisch
+gegen IBKR Paper-Account traden (nicht aktivieren bis Live-Test gegen VPS
+durchgeführt).
+
+### Neu: `app/ibkr_contract_resolver.py`
+
+Loest eToro-instrument_id (Integer) zu IBKR-Contract auf:
+
+1. **Cache-Lookup** in `data/ibkr_contract_cache.json`
+2. **Reverse-Lookup** in `market_scanner.ASSET_UNIVERSE` (etoro_id -> symbol + class)
+3. **Class-Mapping** stocks/etf -> STK auf SMART, Crypto -> CRYPTO auf PAXOS,
+   Forex -> CASH auf IDEALPRO. Andere -> `NotImplementedError` (W4)
+4. **`ib.qualifyContracts()`** ergaenzt conId/primaryExchange
+5. **Cache-Eintrag** persistent fuer naechste Resolutions
+
+Plus `get_quote(ib, contract, timeout=3.0)` — Snapshot-Quote (last -> mid -> close)
+fuer Quantity-Berechnung. `amount_to_quantity(amount_usd, price, min_qty=1)` — floor-division mit Guards.
+
+### IbkrBroker.buy/sell/close_position — echt implementiert
+
+- **`_place_market_order(...)`** als gemeinsame Submission:
+  resolve -> quote -> qty -> placeOrder -> wait-for-fill mit 30s Timeout
+- **Bracket-Orders**: SL/TP werden bei IBKR als Child-Orders nachgeschickt
+  (StopOrder/LimitOrder mit `parentId`, `transmit=True` nur bei letzter)
+- **`buy/sell`**: Wrapper um `_place_market_order` mit BUY/SELL action.
+  `leverage`-Parameter wird ignoriert (Stock-Margin via IBKR-Account-Setup)
+- **`close_position`**: Sucht Position via conId in `ib.positions()`,
+  feuert opposite-side MarketOrder mit gleicher qty
+- **Response-Format**: eToro-kompatibel (`orderForOpen.orderID/statusID/
+  filledQuantity/avgFillPrice`) plus IBKR-spezifische Meta (`_broker`,
+  `_contract`, `_amount_usd_target/actual`, `_child_orders`)
+
+### Tests
+
+`tests/test_ibkr_write_ops.py` — 11 Tests, alle gruen. Mockt ib_insync
+komplett (Modul ist nur am VPS installiert):
+- Resolver: class-normalize, exchange-mapping, qty-calculation, cache-hit
+- Write-Ops: unknown-id -> None, zero-quote -> None, amount-below-share -> None,
+  filled-order -> eToro-kompatibles Response, close-without-position -> None,
+  close mit position -> opposite-side order
+
+`tests/test_broker_base.py::test_ibkr_write_ops_implemented_w3` — verifiziert
+dass die Methoden in `IbkrBroker` definiert sind (nicht ABC-Stubs).
+
+### Bekannte Grenzen
+
+- **Ganze Aktien only**: Fractional Shares bei IBKR sind kontoabhaengig — wir
+  bleiben konservativ bei Integer-qty. Bei amount < 1 Aktie wird der Trade
+  uebersprungen (Returns None, Bot loggt warning)
+- **Forex/Crypto sind theoretisch unterstuetzt**, aber nicht live-getestet
+- **Indizes/Futures/Commodities** -> `NotImplementedError` in Resolver (W4)
+- **Order-Tracking ist synchron mit Timeout**: `placeOrder` -> 30s warten ->
+  Status zurueckgeben. Async-Refinement (Callback bei Late-Fill) folgt bei Bedarf
+- **Kein Live-Test** durchgefuehrt: Code muss zum VPS deployed werden
+  (Container-Rebuild oder bind-mount), dann `IbkrBroker.buy(6408, 200)` als Smoke-Test
+
+### Wichtige Sicherheits-Schalter
+
+- `config.json: broker = "etoro"` (default) — Bot tradet weiter gegen eToro
+- Vor IBKR-Aktivierung: 1-Trade-Smoke-Test im Paper-Account, Order-Lifecycle
+  manuell verifizieren (placed -> filled -> closed)
+- Erst dann `config.json: broker = "ibkr"` setzen
+
+## v17 — Broker-Abstraktion (W2, 2026-04-25)
+
+**Hintergrund:** Damit der Bot konfigurations-gesteuert zwischen eToro und
+IBKR umschalten kann, brauchen alle Konsumenten (`trader.py`, `brain.py`,
+`web/app.py`, etc.) ein gemeinsames Interface. Bisher war `EtoroClient`
+direkt importiert — Broker-Wechsel haette ueberall Code-Aenderungen erfordert.
+
+### Architektur — Adapter-Pattern, nicht-breaking
+
+- **`app/broker_base.py`** (NEU): Abstract Base `BrokerBase` mit dem
+  vollstaendigen eToro-API-Surface (10 Methoden + `broker_name` Property).
+  Plus Factory `get_broker(config) -> BrokerBase`.
+- **`app/etoro_client.py`**: `EtoroClient` erbt jetzt formal von
+  `BrokerBase` — kein Verhalten geaendert, alle bestehenden Imports
+  funktionieren weiter.
+- **`app/ibkr_client.py`**: `IbkrBroker(BrokerBase)` Klasse hinzugefuegt.
+  Read-Operations (Portfolio, Equity, Cash, P/L, Search, Instruments) sind
+  LIVE und gegen Paper-Account DUP108015 verifiziert. Write-Operations
+  (`buy/sell/close_position`) sind bewusst `NotImplementedError`-Stubs mit
+  klarer W3-TODO-Begruendung.
+- **`config.json`**: Neue Top-Level-Keys `broker: "etoro"` (default,
+  backwards-compat) und `ibkr: {host, port, client_id, timeout, readonly}`.
+
+### Warum Read-Live + Write-Stub?
+
+eToro's `buy(instrument_id, amount_usd)` ist API-asymmetrisch zu IBKR's
+`placeOrder(Contract, MarketOrder(quantity))`. Eine ehrliche Implementierung
+braucht:
+1. Live-Quote-Lookup fuer `qty = floor(amount_usd / price)`
+2. Contract-Resolution: `instrument_id` (eToro-int) -> IBKR `conId` + `symbol` + `exchange` + `currency`
+3. Order-Tracking: IBKR liefert Order-Status asynchron, anders als eToro's
+   sofortige Response
+
+Das wird in W3 ausgebaut. Bis dahin: **`broker = "etoro"` in `config.json`
+belassen** — der Bot tradet weiter wie gewohnt. `IbkrBroker` ist verfuegbar
+fuer Read-Only-Experimente (Portfolio-Abfragen, Search) ohne Live-Trading.
+
+### Migration-Pfad
+
+Bestehende 8 Importer (`trader.py:1343`, `web/app.py:372` u.a. — siehe
+`grep "from app.etoro_client"`) sind nicht angefasst. Nach und nach koennen
+sie von `EtoroClient(config)` auf `get_broker(config)` migriert werden.
+Beispiel:
+```python
+# Alt:
+from app.etoro_client import EtoroClient
+client = EtoroClient(config)
+
+# Neu (broker-agnostic):
+from app.broker_base import get_broker
+client = get_broker(config)
+```
+
+### Tests
+
+`tests/test_broker_base.py` mit 9 Tests, alle gruen:
+- Interface-Compliance (EtoroClient + IbkrBroker erfuellen ABC)
+- Factory-Routing (etoro/ibkr/default/case-insensitive/unknown)
+- Write-Op-Stubs werfen `NotImplementedError` mit "W3"-Marker
+- Config-Override fuer host/port/client_id
+
+### Naechster Schritt (W3)
+
+`IbkrBroker.buy/sell/close_position` echt implementieren:
+- Contract-Resolution-Cache (eToro-instrument_id -> IBKR `Contract`)
+- Live-Quote-Service fuer Amount-zu-Quantity-Mapping
+- Async-Order-Tracking-Adapter (IBKR -> eToro-aehnliche synchrone Response)
+
+## v16 — IBKR API-Connection live (W2 Start, 2026-04-25)
+
+**Hintergrund:** Erste echte ib_insync-Verbindung vom `investpilot` Container
+zum `ib-gateway` Container am VPS. Login bei Paper-Account DUP108015 erfolgreich,
+alle 3 Data-Farms (usfarm Market, ushmds HMDS, secdefil SecDef) gruen,
+server version 176.
+
+### Bug-Hunt-Story
+
+Symptom: `ib_insync.connect("ib-gateway", 4002)` -> `Connected -> Disconnected`
+in 4ms, dann `TimeoutError`. Klassisches API-Reject ohne Logmessage.
+
+**Falsche Hypothesen (verworfen):**
+- `ctciAutoEncrypt=true` in jts.ini (war bereits `false`)
+- `TrustedIPs=127.0.0.1` zu restriktiv (Patch in IBC `TrustedTwsApiClientIPs=172.18.0.2`
+  hilft nicht, weil Verbindung eh nie 4002 direkt nutzt)
+
+**Echte Ursache — Image-Architektur (`gnzsnz/ib-gateway:stable`):**
+- IB Gateway lauscht intern **nur auf 127.0.0.1:4002** (strict localhost)
+- Ein **socat**-Daemon im Container exposed Port `0.0.0.0:4004` und forwarded
+  zu `127.0.0.1:4002`
+- Damit sieht IBG die Connection als "lokal" und akzeptiert sie
+
+**Fix:** ib_insync MUSS zu Port **4004** connecten, NICHT 4002.
+```python
+ib.connect("ib-gateway", 4004, clientId=1, timeout=15)
+```
+
+### Neue Datei: `app/ibkr_client.py`
+
+Stub-Modul mit:
+- `IBG_HOST`, `IBG_PORT=4004`, `IBG_CLIENT_ID`, `IBG_TIMEOUT` als Konstanten
+  (env-var-overridable)
+- `connect(host, port, client_id, timeout, readonly)` — Wrapper um `ib_insync.IB`
+- `healthcheck() -> dict` — schneller Connectivity-Check ohne Side-Effects
+- CLI-Modus: `python -m app.ibkr_client` -> JSON-Output mit Status
+
+Vollstaendige Doku im Modul-Docstring, inkl. Port-Architektur-Erklaerung
+damit zukuenftige Entwickler nicht in dieselbe 4002-Falle laufen.
+
+### Persistente Settings am VPS
+
+In `/opt/ib-gateway/` Container:
+- `IBC config.ini.tmpl`: `TrustedTwsApiClientIPs=172.18.0.2` gepatcht
+  (Belt-and-Suspenders, falls jemand mal 4002 direkt nutzen will)
+- `Jts/jts.ini`: `TrustedIPs=127.0.0.1,172.18.0.2` (wird von IBC bei jedem
+  Restart aus Template neu generiert)
+
+**Bekannte Persistenz-Grenze:** Bei `docker compose down + up` (Container-Recreate
+ohne Volume-Mount) gehen die Patches verloren weil sie im Image-FS liegen.
+Saubere Loesung waere Volume-Mount fuer `/home/ibgateway/Jts/` oder Custom-Image
+mit angepasstem `IBC config.ini.tmpl` — TODO fuer W3.
+
+### Naechster Schritt (W2)
+
+`app/broker_base.py` als abstrakte Broker-Klasse, `etoro_client.py` als
+`EtoroBroker`-Implementation, `IbkrBroker`-Implementation in
+`app/ibkr_client.py` ausbauen (Order-Submit, Portfolio-Pull, Trade-History).
+
 ## v15 — Tooling: Image-Size Guards fuer Claude Code (2026-04-25)
 
 **Hintergrund:** Claude Code Sessions im InvestPilot-Projekt scheiterten

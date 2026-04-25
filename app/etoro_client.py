@@ -2,6 +2,10 @@
 InvestPilot - Unified eToro API Client
 Vereint beide bisherigen Client-Klassen (demo_trader.py + investpilot.py).
 Unterstuetzt automatische Key-Erkennung und beide Environments (demo/real).
+
+Implementiert das BrokerBase-Interface (W2 Migration eToro -> IBKR), behaelt
+aber den Klassennamen `EtoroClient` fuer Backwards-Compatibility mit allen
+bestehenden Importern.
 """
 
 import uuid
@@ -12,11 +16,18 @@ try:
 except ImportError:
     raise ImportError("pip install requests")
 
+from app.broker_base import BrokerBase
+
 log = logging.getLogger("EtoroClient")
 
 
-class EtoroClient:
-    """Unified Client fuer die eToro Public API."""
+class EtoroClient(BrokerBase):
+    """Unified Client fuer die eToro Public API. Erfuellt das BrokerBase-Interface."""
+
+    @property
+    def broker_name(self) -> str:
+        return "etoro"
+
 
     def __init__(self, config):
         etoro = config.get("etoro", {})

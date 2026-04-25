@@ -106,10 +106,11 @@ def _fetch_portfolio_total_value() -> float | None:
     except Exception as e:
         log.debug(f"Brain-Snapshot-Read fehlgeschlagen: {e}")
 
-    # Fallback: Live aus eToro
+    # Fallback: Live aus Broker (eToro/IBKR)
     try:
-        from app.etoro_client import EtoroClient
-        client = EtoroClient()
+        from app.etoro_client import EtoroClient  # noqa: F401 — fuer parse_position falls genutzt
+        from app.broker_base import get_broker
+        client = get_broker()
         port = client.get_portfolio()
         if not port:
             return None

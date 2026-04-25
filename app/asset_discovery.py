@@ -11,6 +11,7 @@ from datetime import datetime
 
 from app.config_manager import load_config, load_json, save_json
 from app.etoro_client import EtoroClient
+from app.broker_base import get_broker
 
 log = logging.getLogger("AssetDiscovery")
 
@@ -117,7 +118,7 @@ def discover_new_assets():
         log.warning("Config nicht geladen - Discovery abgebrochen")
         return []
 
-    client = EtoroClient(config)
+    client = get_broker(config)
     if not client.configured:
         log.warning("eToro Client nicht konfiguriert - Discovery abgebrochen")
         return []
