@@ -481,3 +481,54 @@ def check_telegram_commands(config=None):
     except Exception as e:
         log.debug(f"Telegram Command Check Fehler: {e}")
         return None
+
+
+# ============================================================
+# BROKER CONNECTION HEALTH (W6+ — IBKR Paper-Phase)
+# ============================================================
+
+def check_broker_health(client, config=None):
+    """Schneller Health-Check des aktiven Brokers + Telegram-Alert bei Drop.
+
+    Wird von run_trading_cycle() VOR dem ersten get_portfolio() aufgerufen.
+    Dedupliziert Alerts via alert_state['broker_last_health'] — sendet nur
+    bei State-Wechsel (ok->fail, fail->ok), nicht bei jedem Cycle.
+
+    Returns:
+        True wenn Broker erreichbar, False sonst.
+    """
+    state = _load_alert_state()
+    last = state.get("broker_last_health", "unknown")  # "ok" | "fail" | "unknown"
+    broker_name = getattr(client, "broker_name", "?")
+
+    healthy = False
+    error_detail = None
+    try:
+        eq = client.get_equity()
+        healthy = eq is not None and float(eq) > 0
+        if not healthy:
+            error_detail = f"get_equity returned {eq!r}"
+    except Exception as e:
+        error_detail = f"{type(e).__name__}: {e}"
+        healthy = False
+
+    new_state = "ok" if healthy else "fail"
+
+    if last != new_state:
+        # State-Change → Alert
+        if new_state == "fail":
+            send_alert(
+                f"🔴 Broker '{broker_name.upper()}' Connection LOST\n"
+                f"Detail: {error_detail}\n"
+                f"Bot pausiert keine Trades — naechster Cycle versucht erneut.",
+                level="ERROR", config=config,
+            )
+        else:
+            send_alert(
+                f"🟢 Broker '{broker_name.upper()}' Connection RESTORED",
+                level="INFO", config=config,
+            )
+        state["broker_last_health"] = new_state
+        _save_alert_state(state)
+
+    return healthy

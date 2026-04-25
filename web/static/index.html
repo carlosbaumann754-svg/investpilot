@@ -12,6 +12,10 @@
 <!-- HEADER -->
 <div class="header">
     <h1>InvestPilot</h1>
+    <div id="broker-badge" class="broker-badge broker-badge-loading" title="Broker-Status wird geladen...">
+        <span class="broker-badge-dot"></span>
+        <span class="broker-badge-text">…</span>
+    </div>
     <div class="trading-toggle">
         <span class="toggle-label" id="toggle-label">OFF</span>
         <label class="toggle-switch">
@@ -20,6 +24,41 @@
         </label>
     </div>
 </div>
+
+<style>
+/* Broker-Badge — sichtbarer State-Indikator (eToro/IBKR + Paper/Real + Connection-LED) */
+.broker-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; margin-left: 12px;
+    border-radius: 12px; font-size: 0.85em; font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.05);
+    cursor: help;
+}
+.broker-badge-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #888;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+    transition: all 0.3s;
+}
+.broker-badge-loading .broker-badge-dot { background: #888; }
+.broker-badge-ok .broker-badge-dot {
+    background: #10b981; box-shadow: 0 0 8px #10b98166;
+}
+.broker-badge-warn .broker-badge-dot {
+    background: #f59e0b; box-shadow: 0 0 8px #f59e0b66;
+    animation: pulse 1.5s infinite;
+}
+.broker-badge-error .broker-badge-dot {
+    background: #ef4444; box-shadow: 0 0 8px #ef444466;
+    animation: pulse 1s infinite;
+}
+.broker-badge-real { border-color: #f59e0b; background: rgba(245,158,11,0.1); }
+@keyframes pulse {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+</style>
 
 <!-- TABS -->
 <div class="tabs">

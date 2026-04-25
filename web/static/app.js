@@ -1720,17 +1720,57 @@ async function askQuestion() {
     loadDashboard();
     loadWatchdog();
     loadV15Sizing();
+    loadBrokerStatus();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
     setInterval(loadWatchdog, 300000); // Watchdog alle 5 Min
     setInterval(loadV15Sizing, 60000); // v15 Sizing/DCA alle 1 Min
+    setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
         }
     }, 30000);
 })();
+
+/**
+ * Broker-Badge im Header — zeigt aktuellen Broker (eToro/IBKR), Modus
+ * (Paper/Demo/Real) und Connection-Status (gruene LED = ok, gelb =
+ * configured aber not connected, rot = error).
+ */
+async function loadBrokerStatus() {
+    const el = document.getElementById('broker-badge');
+    if (!el) return;
+    try {
+        const resp = await fetch('/api/broker-status');
+        const s = await resp.json();
+        const broker = (s.broker || '?').toUpperCase();
+        const mode = (s.mode || '').toUpperCase();
+        const account = s.account ? ` · ${s.account}` : '';
+        let statusClass = 'broker-badge-ok';
+        let title = `${broker} ${mode}${account}`;
+        if (s.error) {
+            statusClass = 'broker-badge-error';
+            title += ` · ERROR: ${s.error}`;
+        } else if (!s.connected) {
+            statusClass = 'broker-badge-warn';
+            title += ` · not connected`;
+        }
+        if (s.equity != null) {
+            title += ` · Equity $${Math.round(s.equity).toLocaleString()}`;
+        }
+        // REAL-Modus = oranger Border (Warnsignal)
+        const realClass = mode === 'REAL' ? ' broker-badge-real' : '';
+        el.className = `broker-badge ${statusClass}${realClass}`;
+        el.title = title;
+        el.querySelector('.broker-badge-text').textContent = `${broker} · ${mode}`;
+    } catch (e) {
+        el.className = 'broker-badge broker-badge-error';
+        el.title = `Fetch failed: ${e}`;
+        el.querySelector('.broker-badge-text').textContent = 'API ?';
+    }
+}
 
 // === 2FA / TOTP ===
 async function load2FAStatus() {

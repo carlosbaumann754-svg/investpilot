@@ -124,6 +124,12 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
         RuntimeError wenn IBKR die Qualifikation ablehnt (Symbol unbekannt).
     """
     from ib_insync import Stock, Contract, Crypto, Forex
+    # Optional: erweiterte Asset-Klassen (Index/Future) — falls in dieser
+    # ib_insync-Version vorhanden (>=0.9.86 hat sie alle).
+    try:
+        from ib_insync import Index, Future
+    except ImportError:
+        Index = Future = None
 
     cache = _load_cache()
     cache_key = str(int(etoro_id))
@@ -162,11 +168,36 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
     elif sec_type == "CASH":
         # Forex: symbol = base currency (z.B. EUR), counter = currency (z.B. USD)
         c = Forex(f"{symbol}{currency}")
+    elif sec_type == "IND":
+        # Indizes (z.B. SPX, NDX) — nur Quote/Read-Only sinnvoll, nicht direkt handelbar
+        # Nutzer muss das via Future oder ETF-Proxy traden (z.B. ES Future fuer SPX,
+        # SPY ETF als Equity-Proxy)
+        if Index is None:
+            raise NotImplementedError("ib_insync.Index nicht importiert — Version pruefen")
+        c = Index(symbol, exchange, currency)
+        log.warning(
+            "Index-Contract %s erstellt — Trades NICHT empfohlen, nur Quotes. "
+            "Fuer Trading nutze ETF-Proxy (z.B. SPY statt SPX) oder Future (ES).",
+            symbol,
+        )
+    elif sec_type == "FUT":
+        # Futures sind komplex (Multiplier, Expiry, Margin) — heute bewusst geblockt
+        raise NotImplementedError(
+            f"Futures noch nicht supportet (Asset {symbol}). Braucht: lastTradeDateOrContractMonth, "
+            f"Multiplier-Beruecksichtigung in Quantity-Calc, Margin-Check vor Submit. "
+            f"Implementierung in W7+ wenn Bot Nr. 5 Pairs Trading futures nutzt."
+        )
+    elif sec_type == "CMDTY":
+        # Commodities meist via Future oder ETF (z.B. GLD fuer Gold) — heute geblockt
+        raise NotImplementedError(
+            f"Direct-Commodity-Trades nicht supportet (Asset {symbol}). "
+            f"Workaround: ETF-Proxy in ASSET_UNIVERSE eintragen (GLD/SLV/USO/etc.) "
+            f"als 'class: stocks' — dann via STK-Pfad."
+        )
     else:
         raise NotImplementedError(
             f"Asset-Class '{meta['class']}' (-> {sec_type}) noch nicht unterstuetzt. "
-            f"Aktuell: STK (Stocks/ETFs), CRYPTO, CASH (Forex). "
-            f"Futures/Indizes/Commodities folgen in W4."
+            f"Aktuell: STK (Stocks/ETFs), CRYPTO, CASH (Forex), IND (Index, Read-Only)."
         )
 
     # 4. Qualifizieren (IBKR ergaenzt conId, primaryExchange, etc.)

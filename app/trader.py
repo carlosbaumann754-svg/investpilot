@@ -1348,6 +1348,15 @@ def run_trading_cycle():
         return
     log.info("Trading-Cycle mit Broker '%s'", client.broker_name)
 
+    # Broker-Health-Check mit Telegram-Alert bei Connection-Lost (state-deduped)
+    try:
+        from app.alerts import check_broker_health
+        if not check_broker_health(client, config):
+            log.error("Broker-Healthcheck fehlgeschlagen — Cycle wird uebersprungen")
+            return
+    except Exception as e:
+        log.warning("Broker-Healthcheck nicht verfuegbar: %s", e)
+
     # Module laden
     rm = _import_risk_manager()
     mc = _import_market_context()

@@ -266,6 +266,11 @@ class IbkrBroker(BrokerBase):
     # Slippage-Buffer fuer LimitOrders: BUY akzeptiert +0.5% ueber Quote, SELL -0.5% drunter
     LIMIT_SLIPPAGE_PCT = 0.5
 
+    # Default-Verhalten fuer noch nicht gefuellte Orders nach fill_timeout:
+    #   True  = sicherer Default (cancel automatisch, kein Hanging-Order-Risk)
+    #   False = Order bleibt im IBKR-Order-Book (z.B. Limit fuer After-Hours)
+    CANCEL_ON_TIMEOUT = True
+
     def _place_market_order(
         self,
         instrument_id: int,
@@ -275,6 +280,7 @@ class IbkrBroker(BrokerBase):
         take_profit_pct: float = 0,
         fill_timeout: float = 30.0,
         order_type: str = "LIMIT",  # "LIMIT" (default, sicherer) oder "MARKET"
+        cancel_on_timeout: Optional[bool] = None,  # None -> CANCEL_ON_TIMEOUT default
     ) -> Optional[dict]:
         """
         Gemeinsame Order-Submission. Returns eToro-kompatibles Response-Dict.
@@ -361,6 +367,24 @@ class IbkrBroker(BrokerBase):
             status = trade.orderStatus.status  # "Filled", "Submitted", "Cancelled", ...
             fill_qty = trade.orderStatus.filled
             avg_fill_price = trade.orderStatus.avgFillPrice
+
+            # 3b. Auto-Cancel wenn nach Timeout noch nicht filled (sicherer Default)
+            #     Verhindert haengende Limit-Orders die ueberraschend Tage spaeter fuellen
+            should_cancel = self.CANCEL_ON_TIMEOUT if cancel_on_timeout is None else cancel_on_timeout
+            if not trade.isDone() and should_cancel and status not in ("Filled", "Cancelled"):
+                log.warning("Order %s nach %.0fs noch %s — Auto-Cancel (cancel_on_timeout=True)",
+                            trade.order.orderId, fill_timeout, status)
+                try:
+                    ib.cancelOrder(trade.order)
+                    # Bis zu 5s warten dass Cancel durchkommt
+                    cancel_deadline = time.time() + 5.0
+                    while time.time() < cancel_deadline and not trade.isDone():
+                        ib.sleep(0.2)
+                    status = trade.orderStatus.status
+                    fill_qty = trade.orderStatus.filled
+                    avg_fill_price = trade.orderStatus.avgFillPrice
+                except Exception as e:
+                    log.error("Auto-Cancel von Order %s failed: %s", trade.order.orderId, e)
 
             log.info("Order %s status=%s filled=%d avgPrice=%.4f",
                      trade.order.orderId, status, fill_qty, avg_fill_price)

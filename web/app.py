@@ -365,9 +365,63 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
 # API ENDPOINTS
 # ============================================================
 
+@app.get("/api/broker-status")
+async def api_broker_status():
+    """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth.
+
+    Nutzbar fuer Dashboard-Badge + externes Monitoring. Macht einen schnellen
+    Health-Check via get_equity() (1 Network-Roundtrip ~1s).
+    """
+    try:
+        config = load_config()
+        broker_name = (config.get("broker") or "etoro").lower()
+        client = get_broker(config)
+        connected = False
+        account = None
+        equity = None
+        error = None
+        if client.configured:
+            try:
+                eq = client.get_equity()
+                if eq is not None:
+                    connected = True
+                    equity = float(eq)
+                    # IBKR: extra accounts pull
+                    if broker_name == "ibkr":
+                        try:
+                            ib = client._get_ib()
+                            accs = ib.managedAccounts()
+                            account = accs[0] if accs else None
+                        except Exception:
+                            pass
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+        # Live mode flag (paper vs real)
+        mode = "paper"
+        if broker_name == "etoro":
+            mode = (config.get("etoro", {}) or {}).get("environment", "demo")
+            mode = "real" if mode == "real" else "demo"
+        elif broker_name == "ibkr":
+            # DUP/DU-Account-Praefix = Paper, U... = Real
+            if account:
+                mode = "real" if not account.startswith(("DU", "DUP")) else "paper"
+        return {
+            "broker": broker_name,
+            "configured": bool(client.configured),
+            "connected": connected,
+            "account": account,
+            "equity": equity,
+            "mode": mode,  # "paper" | "demo" | "real"
+            "error": error,
+        }
+    except Exception as e:
+        return {"broker": "?", "configured": False, "connected": False,
+                "error": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/api/portfolio")
 async def api_portfolio(user=Depends(require_auth)):
-    """Live Portfolio-Status von eToro."""
+    """Live Portfolio-Status vom konfigurierten Broker."""
     try:
         config = load_config()
         client = get_broker(config)
