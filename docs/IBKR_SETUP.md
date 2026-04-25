@@ -221,6 +221,67 @@ Vor dem Wechsel von Paper-Account `DUP108015` auf Real-Account `U...`:
 
 ---
 
+## Troubleshooting: IBG / Bot-Connection-Hangs
+
+### Symptom: "Healthcheck attempt 1/2 failed (get_equity returned None)"
+
+Ueber Stunden hinweg wiederholte Cycle-Skips. `brain_state.json` stagniert.
+Reconciliation-Cron mit `clientId=99` (readonly) funktioniert weiter, aber
+Bot-Cycles mit `clientId=1` failen.
+
+**Ursache (W6+): "Geist von clientId=N"**
+IBG haelt manchmal eine alte Session mit derselben clientId noch im Speicher.
+Jeder Bot-Reconnect mit derselben ID landet in einem kontaminierten
+Connection-Pool -> Timeouts auf positions/openOrders/completedOrders requests.
+
+**Recovery (in dieser Reihenfolge):**
+
+1. **clientId aendern** (5-Sekunden-Fix):
+   ```bash
+   docker exec investpilot python -c '
+   import json
+   p = "/app/data/config.json"
+   c = json.load(open(p))
+   c["ibkr"]["client_id"] = 5  # neuer Wert
+   json.dump(c, open(p, "w"), indent=2)
+   '
+   docker restart investpilot
+   ```
+   Nach 5 Min sollte naechster Cycle sauber laufen.
+
+2. **IBG hard-restart** (raeumt alte Sessions auf):
+   ```bash
+   cd /opt/ib-gateway && docker compose restart
+   sleep 70  # Login dauert ~60s
+   ```
+
+3. **Wenn beides nicht hilft** (sehr selten): IB Gateway neu installieren
+   ```bash
+   cd /opt/ib-gateway
+   docker compose down
+   docker volume prune -f
+   docker compose up -d
+   ```
+
+### Symptom: "Cron-Race" mit Bot-Cycle
+
+Wenn Reconciliation-Cron auf `:00 + :30` laeuft und Bot-Cycle ueberlappt
+(beide ~5s aktiv), kann IBG einen davon kicken.
+
+**Fix**: Cron auf nicht-typische Minuten setzen (z.B. `:13 + :43`):
+```cron
+13,43 * * * * docker exec investpilot python -m scripts.ibkr_reconcile --alert >> /opt/investpilot/logs/reconcile.log 2>&1
+```
+
+### Symptom: "client id already in use"
+
+Mehrere Prozesse versuchen mit derselben `clientId` zu connecten.
+
+**Fix**: Reconciliation/Dashboard nutzen `readonly=True` -> automatisch
+random `clientId(100,999)`. Bot's Hauptinstanz hat eigene explizite ID
+(z.B. 5). Sicherstellen dass kein Cron-Job + kein Test mit `clientId=1`
+parallel laeuft.
+
 ## Offene W4+ Punkte
 
 Aus CLAUDE.md v18-v20:

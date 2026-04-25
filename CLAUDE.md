@@ -925,6 +925,41 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v24 — Operational Hotfix: clientId-Geist (2026-04-25)
+
+**Symptom**: Bot tradet seit ~14:28 nicht mehr stabil. Mehrere Cycles in
+Folge mit `Healthcheck attempt 1/2 failed (get_equity returned None)`.
+Reconciliation-Cron mit clientId=99 funktioniert aber, also IBG ist OK.
+
+**Ursache**: IBG haelt eine "Geist-Session" mit clientId=1 (Bot's
+Standard) im Speicher. Jeder neue Bot-Reconnect mit gleicher ID landet in
+diesem kontaminierten Pool -> positions/openOrders/completedOrders
+Requests timeouten -> get_equity returnt None.
+
+**Fix-Sequenz** (~5 Min):
+1. `data/config.json`: `ibkr.client_id` von 1 auf 5 gesetzt
+2. IBG hard-restart (`docker compose restart`) raeumt alte Sessions auf
+3. Bot-Container restart fuer config-reload
+4. Cycle 17:21 lief sauber: 40s, Snapshot #6535, Cash $1.062.052
+
+Plus: Reconciliation-Cron von `*/30` (= :00 + :30) auf `13,43 * * * *`
+(= :13 + :43) verschoben — Bot-Cycles laufen alle 5 Min ab Container-Start
+(typisch :00, :05, :10, ...), dadurch frueher haeufige Conflicts mit Cron.
+Neue Zeiten kollidieren nie.
+
+**Doku ergaenzt**: `docs/IBKR_SETUP.md` neue Troubleshooting-Sektion mit
+3 Recovery-Szenarien (clientId-Aenderung, IBG-Restart, Volume-Reset).
+Damit zukuenftige Hangs in <5 Min behebbar sind.
+
+**Lessons learned**:
+- clientId-Wechsel ist Standard-Recovery bei IBG-Hangs (nicht erst
+  Container-Reset)
+- Cron-Timing ist wichtiger als gedacht — Bot-Cycles haben einen
+  natuerlichen Rhythmus, externe Crons sollten dazwischen liegen
+- Read-Only-Operations (Reconciliation, Dashboard) brauchen separate
+  clientIds (random aus 100-999) — bereits in v22 implementiert,
+  hat sich heute bewaehrt: nur der Bot war betroffen, alles andere lief
+
 ## v23 — Paper-Phase Polish-Pack (Items 4-7, 2026-04-25)
 
 Vier Roadmap-Items vor der 4-Wochen-Paper-Phase fertig:
