@@ -250,6 +250,9 @@ class IbkrBroker(BrokerBase):
 
     # --- Write-Operations (W3 LIVE — gegen Paper-Account verifizieren!) ---
 
+    # Slippage-Buffer fuer LimitOrders: BUY akzeptiert +0.5% ueber Quote, SELL -0.5% drunter
+    LIMIT_SLIPPAGE_PCT = 0.5
+
     def _place_market_order(
         self,
         instrument_id: int,
@@ -258,22 +261,27 @@ class IbkrBroker(BrokerBase):
         stop_loss_pct: float = 0,
         take_profit_pct: float = 0,
         fill_timeout: float = 30.0,
+        order_type: str = "LIMIT",  # "LIMIT" (default, sicherer) oder "MARKET"
     ) -> Optional[dict]:
         """
         Gemeinsame Order-Submission. Returns eToro-kompatibles Response-Dict.
 
         Workflow:
         1. Contract aufloesen via ibkr_contract_resolver
-        2. Live-Quote fetchen
+        2. Live-Quote (oder Delayed-Quote) fetchen
         3. amount_usd -> quantity umrechnen (qty = floor(amount/price))
-        4. MarketOrder einreichen via ib.placeOrder
+        4. Order einreichen via ib.placeOrder
+           - LIMIT (default): limitPrice = quote * (1 + slippage_buffer * sign)
+           - MARKET: nur wenn order_type='MARKET' explizit, braucht RT-Marktdaten
         5. Bis Fill warten (oder timeout)
         6. (optional) Bracket: SL/TP als Child-Orders nachschicken
         7. Response im eToro-Format zurueckgeben
 
-        Bei IBKR werden SL/TP als separate Stop/Limit-Orders eingereicht
-        (Bracket-Order). eToro nimmt sie als Order-Parameter — wir
-        emulieren das durch sequentielle Submission.
+        Warum LIMIT default:
+        - Paper-Accounts ohne Market-Data-Abo lehnen MarketOrders ab
+          ('No market data on major exchange for market order')
+        - In Production verhindert Limit den Worst-Case-Slippage
+        - 0.5% Buffer ist liquide genug fuer Fills auf Major-Stocks
         """
         from app.ibkr_contract_resolver import resolve_contract, get_quote, amount_to_quantity
         from ib_insync import MarketOrder, StopOrder, LimitOrder
@@ -283,7 +291,7 @@ class IbkrBroker(BrokerBase):
             contract = resolve_contract(ib, instrument_id)
             price = get_quote(ib, contract)
             if price is None or price <= 0:
-                log.error("Kein Live-Quote fuer instrument_id=%d (%s) — Order abgebrochen",
+                log.error("Kein Quote fuer instrument_id=%d (%s) — Order abgebrochen",
                           instrument_id, contract.symbol)
                 return None
 
@@ -293,11 +301,19 @@ class IbkrBroker(BrokerBase):
                             amount_usd, price)
                 return None
 
-            log.info("ORDER %s %d %s @ ~$%.2f (target $%.2f)",
-                     action, qty, contract.symbol, price, amount_usd)
+            # 1. Main-Order: LIMIT mit Slippage-Buffer (default) oder MARKET
+            if order_type.upper() == "MARKET":
+                order = MarketOrder(action, qty)
+                limit_price_log = "MKT"
+            else:
+                slippage_sign = 1 if action == "BUY" else -1
+                limit_price = round(price * (1 + slippage_sign * self.LIMIT_SLIPPAGE_PCT / 100.0), 2)
+                order = LimitOrder(action, qty, limit_price)
+                limit_price_log = f"limit ${limit_price:.2f}"
 
-            # 1. Main-Order
-            order = MarketOrder(action, qty)
+            log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f)",
+                     action, qty, contract.symbol, limit_price_log, amount_usd, price)
+
             order.transmit = (stop_loss_pct == 0 and take_profit_pct == 0)
             trade = ib.placeOrder(contract, order)
 
@@ -428,8 +444,19 @@ class IbkrBroker(BrokerBase):
             qty = abs(int(pos.position))
             action = "SELL" if pos.position > 0 else "BUY"
 
-            log.info("CLOSE Position %s qty=%d (%s)", pos.contract.symbol, qty, action)
-            order = MarketOrder(action, qty)
+            # LimitOrder (statt MarketOrder) — siehe _place_market_order Doku
+            from app.ibkr_contract_resolver import get_quote
+            from ib_insync import LimitOrder
+            quote = get_quote(ib, pos.contract)
+            if quote is None or quote <= 0:
+                log.error("Kein Quote fuer Close von %s — Order abgebrochen", pos.contract.symbol)
+                return None
+            slippage_sign = 1 if action == "BUY" else -1
+            limit_price = round(quote * (1 + slippage_sign * self.LIMIT_SLIPPAGE_PCT / 100.0), 2)
+
+            log.info("CLOSE Position %s qty=%d %s @ limit $%.2f (quote $%.2f)",
+                     pos.contract.symbol, qty, action, limit_price, quote)
+            order = LimitOrder(action, qty, limit_price)
             trade = ib.placeOrder(pos.contract, order)
 
             # Wait for fill
