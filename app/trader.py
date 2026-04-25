@@ -10,7 +10,8 @@ import time
 from datetime import datetime
 
 from app.config_manager import load_config, save_json, load_json
-from app.etoro_client import EtoroClient
+from app.etoro_client import EtoroClient  # noqa: F401  — static parse_position() bleibt genutzt
+from app.broker_base import get_broker
 
 log = logging.getLogger("Trader")
 
@@ -1340,11 +1341,12 @@ def run_trading_cycle():
     log.info("=" * 55)
 
     config = load_config()
-    client = EtoroClient(config)
+    client = get_broker(config)  # broker-agnostic: 'etoro' (default) oder 'ibkr' aus config.json
 
     if not client.configured:
-        log.error("eToro Client nicht konfiguriert!")
+        log.error("Broker '%s' nicht konfiguriert!", client.broker_name)
         return
+    log.info("Trading-Cycle mit Broker '%s'", client.broker_name)
 
     # Module laden
     rm = _import_risk_manager()
