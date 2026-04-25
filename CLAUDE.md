@@ -925,6 +925,74 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v17 — Broker-Abstraktion (W2, 2026-04-25)
+
+**Hintergrund:** Damit der Bot konfigurations-gesteuert zwischen eToro und
+IBKR umschalten kann, brauchen alle Konsumenten (`trader.py`, `brain.py`,
+`web/app.py`, etc.) ein gemeinsames Interface. Bisher war `EtoroClient`
+direkt importiert — Broker-Wechsel haette ueberall Code-Aenderungen erfordert.
+
+### Architektur — Adapter-Pattern, nicht-breaking
+
+- **`app/broker_base.py`** (NEU): Abstract Base `BrokerBase` mit dem
+  vollstaendigen eToro-API-Surface (10 Methoden + `broker_name` Property).
+  Plus Factory `get_broker(config) -> BrokerBase`.
+- **`app/etoro_client.py`**: `EtoroClient` erbt jetzt formal von
+  `BrokerBase` — kein Verhalten geaendert, alle bestehenden Imports
+  funktionieren weiter.
+- **`app/ibkr_client.py`**: `IbkrBroker(BrokerBase)` Klasse hinzugefuegt.
+  Read-Operations (Portfolio, Equity, Cash, P/L, Search, Instruments) sind
+  LIVE und gegen Paper-Account DUP108015 verifiziert. Write-Operations
+  (`buy/sell/close_position`) sind bewusst `NotImplementedError`-Stubs mit
+  klarer W3-TODO-Begruendung.
+- **`config.json`**: Neue Top-Level-Keys `broker: "etoro"` (default,
+  backwards-compat) und `ibkr: {host, port, client_id, timeout, readonly}`.
+
+### Warum Read-Live + Write-Stub?
+
+eToro's `buy(instrument_id, amount_usd)` ist API-asymmetrisch zu IBKR's
+`placeOrder(Contract, MarketOrder(quantity))`. Eine ehrliche Implementierung
+braucht:
+1. Live-Quote-Lookup fuer `qty = floor(amount_usd / price)`
+2. Contract-Resolution: `instrument_id` (eToro-int) -> IBKR `conId` + `symbol` + `exchange` + `currency`
+3. Order-Tracking: IBKR liefert Order-Status asynchron, anders als eToro's
+   sofortige Response
+
+Das wird in W3 ausgebaut. Bis dahin: **`broker = "etoro"` in `config.json`
+belassen** — der Bot tradet weiter wie gewohnt. `IbkrBroker` ist verfuegbar
+fuer Read-Only-Experimente (Portfolio-Abfragen, Search) ohne Live-Trading.
+
+### Migration-Pfad
+
+Bestehende 8 Importer (`trader.py:1343`, `web/app.py:372` u.a. — siehe
+`grep "from app.etoro_client"`) sind nicht angefasst. Nach und nach koennen
+sie von `EtoroClient(config)` auf `get_broker(config)` migriert werden.
+Beispiel:
+```python
+# Alt:
+from app.etoro_client import EtoroClient
+client = EtoroClient(config)
+
+# Neu (broker-agnostic):
+from app.broker_base import get_broker
+client = get_broker(config)
+```
+
+### Tests
+
+`tests/test_broker_base.py` mit 9 Tests, alle gruen:
+- Interface-Compliance (EtoroClient + IbkrBroker erfuellen ABC)
+- Factory-Routing (etoro/ibkr/default/case-insensitive/unknown)
+- Write-Op-Stubs werfen `NotImplementedError` mit "W3"-Marker
+- Config-Override fuer host/port/client_id
+
+### Naechster Schritt (W3)
+
+`IbkrBroker.buy/sell/close_position` echt implementieren:
+- Contract-Resolution-Cache (eToro-instrument_id -> IBKR `Contract`)
+- Live-Quote-Service fuer Amount-zu-Quantity-Mapping
+- Async-Order-Tracking-Adapter (IBKR -> eToro-aehnliche synchrone Response)
+
 ## v16 — IBKR API-Connection live (W2 Start, 2026-04-25)
 
 **Hintergrund:** Erste echte ib_insync-Verbindung vom `investpilot` Container
