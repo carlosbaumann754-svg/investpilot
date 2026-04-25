@@ -27,4 +27,8 @@ trap "echo 'Stopping...'; kill $SCHEDULER_PID; exit 0" SIGTERM SIGINT
 # Render setzt PORT automatisch, Fallback auf 8000
 WEB_PORT="${PORT:-8000}"
 echo "Starte Web Dashboard auf Port ${WEB_PORT}..."
-exec uvicorn web.app:app --host 0.0.0.0 --port ${WEB_PORT} --log-level info
+# --loop asyncio statt default uvloop: nest_asyncio braucht patchbaren Loop
+# fuer ib_insync-Calls aus FastAPI-Handlern. uvloop unterstuetzt das nicht.
+# Trade-off: minimal langsamere Event-Loop (~5%), aber funktionierende
+# IBKR-Endpoints im Dashboard (Cash/Investiert/Positionen Cards).
+exec uvicorn web.app:app --host 0.0.0.0 --port ${WEB_PORT} --log-level info --loop asyncio
