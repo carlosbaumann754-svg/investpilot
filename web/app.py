@@ -516,18 +516,58 @@ async def api_broker_status():
                 "error": f"{type(e).__name__}: {e}"}
 
 
+def _portfolio_from_brain_cache():
+    """Lade Portfolio aus brain_state.performance_snapshots (last entry).
+
+    Vermeidet IBKR-Live-Connect aus FastAPI-Handler (asyncio loop conflicts).
+    Werte sind <5 Min alt (Bot-Cycle schreibt nach jedem Run).
+
+    Returns dict im selben Format wie client.get_portfolio() oder None.
+    """
+    from app.config_manager import load_json
+    brain = load_json("brain_state.json") or {}
+    snaps = brain.get("performance_snapshots") or []
+    if not snaps:
+        return None
+    last = snaps[-1]
+    # Bot's snapshot speichert: total_value, cash, invested, positions etc.
+    cash = float(last.get("cash") or last.get("credit") or 0)
+    total = float(last.get("total_value") or last.get("portfolio_value") or 0)
+    invested = float(last.get("invested") or 0)
+    positions = last.get("positions", []) or []
+    return {
+        "credit": cash,
+        "unrealizedPnL": float(last.get("unrealized_pnl") or 0),
+        "positions": positions,
+        "_total_value": total,
+        "_invested": invested,
+        "_source": f"brain_cache (snapshot {last.get('ts','?')})",
+    }
+
+
 @app.get("/api/portfolio")
 async def api_portfolio(user=Depends(require_auth)):
-    """Live Portfolio-Status vom konfigurierten Broker."""
+    """Portfolio-Status — bei IBKR aus brain_state.cache (vermeidet Loop-Conflict).
+
+    eToro: live via REST-API (loop-safe).
+    IBKR: aus letztem Bot-Cycle-Snapshot in brain_state.json (max 5 Min alt).
+    """
     try:
         config = load_config()
+        broker_name = (config.get("broker") or "etoro").lower()
         client = get_broker(config, readonly=True)
         if not client.configured:
-            return {"error": "eToro nicht konfiguriert"}
+            return {"error": f"Broker '{broker_name}' nicht konfiguriert"}
 
-        portfolio = client.get_portfolio()
-        if not portfolio:
-            return {"error": "Portfolio nicht verfuegbar"}
+        # IBKR -> brain-cache Pfad (asyncio-loop-safe)
+        if broker_name == "ibkr":
+            portfolio = _portfolio_from_brain_cache()
+            if not portfolio:
+                return {"error": "Portfolio noch nicht im brain_state — warte auf ersten Bot-Cycle"}
+        else:
+            portfolio = client.get_portfolio()
+            if not portfolio:
+                return {"error": "Portfolio nicht verfuegbar"}
 
         credit = portfolio.get("credit", 0)
         positions = portfolio.get("positions", [])
