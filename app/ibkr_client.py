@@ -131,13 +131,32 @@ class IbkrBroker(BrokerBase):
     Connection-Pool kuendigt sich von selbst nach 60s Idle (IBG-Default).
     """
 
-    def __init__(self, config: Optional[dict] = None):
+    def __init__(self, config: Optional[dict] = None, readonly: Optional[bool] = None):
+        """
+        Args:
+            config: Geladene config.json. ibkr.client_id wird IGNORIERT wenn
+                    readonly=True (random clientId 100-999 stattdessen).
+            readonly: Override fuer ibkr.readonly. Bei True wird zwingend
+                     eine eigene clientId genutzt (vermeidet Conflict mit Bot).
+        """
         ibkr_cfg = (config or {}).get("ibkr", {}) if config else {}
         self.host = ibkr_cfg.get("host") or IBG_HOST
         self.port = int(ibkr_cfg.get("port") or IBG_PORT)
-        self.client_id = int(ibkr_cfg.get("client_id") or IBG_CLIENT_ID)
+        self.readonly = readonly if readonly is not None else bool(ibkr_cfg.get("readonly", False))
+        # ClientID-Strategie:
+        #   - readonly=True ODER kein explicit id: random clientId (100-999)
+        #     -> Dashboard-Endpoints, Reconciliation-Cron, Ad-hoc-Calls
+        #     -> Vermeidet 'Error 326: client id already in use' bei
+        #        parallelen Connects mit der Bot-Hauptinstanz.
+        #   - readonly=False UND explicit id: nutze diese ID
+        #     -> Bot-Trader-Hauptinstanz: clientId=1 aus config.json
+        explicit_id = ibkr_cfg.get("client_id")
+        if self.readonly or explicit_id is None:
+            import random
+            self.client_id = random.randint(100, 999)
+        else:
+            self.client_id = int(explicit_id)
         self.timeout = int(ibkr_cfg.get("timeout") or IBG_TIMEOUT)
-        self.readonly = bool(ibkr_cfg.get("readonly", False))
         self._ib = None  # ib_insync.IB instance, lazy
         self.configured = True  # IBKR braucht keine API-Keys, nur Container-Reachability
 

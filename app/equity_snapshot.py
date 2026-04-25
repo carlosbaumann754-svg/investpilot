@@ -110,7 +110,7 @@ def _fetch_portfolio_total_value() -> float | None:
     try:
         from app.etoro_client import EtoroClient  # noqa: F401 — fuer parse_position falls genutzt
         from app.broker_base import get_broker
-        client = get_broker()
+        client = get_broker(readonly=True)
         port = client.get_portfolio()
         if not port:
             return None

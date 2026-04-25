@@ -118,7 +118,7 @@ def discover_new_assets():
         log.warning("Config nicht geladen - Discovery abgebrochen")
         return []
 
-    client = get_broker(config)
+    client = get_broker(config, readonly=True)
     if not client.configured:
         log.warning("eToro Client nicht konfiguriert - Discovery abgebrochen")
         return []

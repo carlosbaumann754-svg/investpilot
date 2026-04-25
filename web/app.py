@@ -462,7 +462,7 @@ async def api_broker_status():
     try:
         config = load_config()
         broker_name = (config.get("broker") or "etoro").lower()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         connected = False
         account = None
         equity = None
@@ -511,7 +511,7 @@ async def api_portfolio(user=Depends(require_auth)):
     """Live Portfolio-Status vom konfigurierten Broker."""
     try:
         config = load_config()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         if not client.configured:
             return {"error": "eToro nicht konfiguriert"}
 
@@ -718,7 +718,7 @@ async def api_exit_forecast(user=Depends(require_auth)):
     """Für jede offene Position: Abstand zum nächsten Exit-Trigger."""
     try:
         config = load_config()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         if not client.configured:
             return {"error": "eToro nicht konfiguriert", "positions": []}
 
@@ -1072,7 +1072,7 @@ async def api_pnl_periods(user=Depends(require_auth)):
         current_unrealized = 0.0
         try:
             config = load_config()
-            client = get_broker(config)
+            client = get_broker(config, readonly=True)
             if client.configured:
                 portfolio = client.get_portfolio() or {}
                 credit = portfolio.get("credit", 0) or 0
@@ -1851,7 +1851,7 @@ async def api_killswitch(user=Depends(require_auth)):
         from app.config_manager import load_config
 
         config = load_config()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         result = emergency_close_all(client, f"Dashboard Kill Switch von {user}")
 
         try:
@@ -1885,7 +1885,7 @@ async def api_risk(user=Depends(require_auth)):
         summary = get_risk_summary()
 
         config = load_config()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         if client.configured:
             portfolio = client.get_portfolio()
             if portfolio:
@@ -1961,7 +1961,7 @@ async def api_exposure(user=Depends(require_auth)):
         from app.config_manager import load_config
 
         config = load_config()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         if not client.configured:
             return {"error": "eToro nicht konfiguriert"}
 
@@ -3310,7 +3310,7 @@ async def api_position_correlations(user=Depends(require_auth)):
         from app.etoro_client import EtoroClient
 
         config = load_config()
-        client = get_broker(config)
+        client = get_broker(config, readonly=True)
         if not client.configured:
             return {"error": "eToro nicht konfiguriert"}
 
@@ -3782,7 +3782,7 @@ async def api_ask(req: AskRequest, user=Depends(require_auth)):
 
         # Portfolio live abfragen
         try:
-            client = get_broker(config)
+            client = get_broker(config, readonly=True)
             credit = client.get_credit()
             positions = client.get_portfolio()
             parsed = [EtoroClient.parse_position(p) for p in positions]

@@ -139,7 +139,7 @@ class BrokerBase(ABC):
 # Factory
 # ----------------------------------------------------------------------
 
-def get_broker(config: Optional[dict] = None) -> BrokerBase:
+def get_broker(config: Optional[dict] = None, readonly: bool = False) -> BrokerBase:
     """
     Liefert die Broker-Implementierung gemaess config.
 
@@ -152,6 +152,9 @@ def get_broker(config: Optional[dict] = None) -> BrokerBase:
     Args:
         config: Geladene Config-Struktur (dict). Wenn None, wird sie via
                 config_manager.load_config() geholt.
+        readonly: True fuer Dashboard-Endpoints / Reconciliation / Ad-hoc-Reads.
+                  Bei IBKR fuehrt das zu random clientId (vermeidet Conflict mit
+                  Bot-Hauptinstanz auf clientId=1). Hat keinen Effekt bei eToro.
 
     Returns:
         BrokerBase-Instanz, ready-to-use.
@@ -168,11 +171,12 @@ def get_broker(config: Optional[dict] = None) -> BrokerBase:
     if broker_name == "etoro":
         # Lazy-import to avoid circular dependencies
         from app.etoro_client import EtoroClient
+        # readonly Param wird ignoriert — eToro hat keine clientId-Konflikte
         return EtoroClient(config)
 
     if broker_name == "ibkr":
         from app.ibkr_client import IbkrBroker
-        return IbkrBroker(config)
+        return IbkrBroker(config, readonly=readonly)
 
     raise ValueError(
         f"Unbekannter Broker '{broker_name}'. Erwartet: 'etoro' oder 'ibkr'."
