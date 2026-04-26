@@ -925,6 +925,40 @@ sichtbar welche Position z.B. 0.13% vor TP-1 steht oder welche vom Time-Stop
 noch X Tage entfernt ist. Parameter-Tuning-Entscheidungen (TP-1 auf +2.5%
 senken?) sind datengetrieben statt aus dem Bauch.
 
+## v27 — Pairs Trading W3: Signal-Generation (2026-04-26)
+
+`PairsBot.calculate_signals(pairs, portfolio_value_usd, open_pair_positions)`
+echte Implementation. Workflow:
+
+1. yfinance Bulk-Download (5d) fuer alle eindeutigen Pair-Symbole
+2. Pro Pair: `spread_now = price_a - beta * price_b`
+3. `z-score = (spread_now - mean_spread) / std_spread`
+4. Signal-Logic:
+   - `z > +z_entry` -> `SHORT_A_LONG_B` (Spread sollte sinken)
+   - `z < -z_entry` -> `LONG_A_SHORT_B` (Spread sollte steigen)
+   - `|z| < z_exit AND open position` -> `CLOSE` (mean-reverted)
+5. Sizing: `portfolio * max_portfolio_pct / max_concurrent_pairs / 2`
+   (halbe Sume LONG, halbe SHORT fuer gleiche Dollar-Exposure)
+
+8 neue Regression-Tests in `tests/test_pairs_signals.py` mit yfinance-Mock.
+
+**Status Bot 5**: Discovery + Signal-Generation fertig. `execute_signal()`
+(2-Leg-Order-Submission) bleibt TODO W4. Aktivierung erst POST-LIVE.
+
+## v26 — Loop-Errors definitiv weg via patchAsyncio (2026-04-26)
+
+`ib_insync.util.patchAsyncio()` global beim Module-Import von
+`app/ibkr_client.py`. Patcht `asyncio.get_event_loop()` so dass nested
+calls (FastAPI -> ib_insync) ohne 'attached to a different loop' funktionieren.
+
+Validiert in 10 Min Live-Test:
+- 0 Loop-Errors (vorher: ~3-5 pro Cycle)
+- 0 Auto-Retries (Connect klappt 1st time)
+- Watchdog issues=[] (vorher: ERROR mit "wiederholte Fehlermuster")
+
+Damit ist der letzte Polish-Item fertig — Bot-Logs sind jetzt clean,
+Auto-Retry-Logic vom Singleton-Pool ist nur noch Sicherheitsnetz.
+
 ## v25 — Singleton-Connection-Pool + Cache-Reads (2026-04-25)
 
 **Hintergrund:** Nach v24 (Recovery via clientId-Wechsel) trat dasselbe
