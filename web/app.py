@@ -4026,7 +4026,17 @@ def api_insider_shadow_report():
     except Exception as e:
         return {"error": f"brain_state read: {e}"}
 
-    candidates = brain.get("scanner_results") or brain.get("top_signals") or []
+    # Brain-State hat instrument_scores als dict {symbol: {score, ...}} ODER
+    # scanner_results/top_signals als Liste — flexibel parsen
+    candidates = []
+    inst_scores = brain.get("instrument_scores") or {}
+    if isinstance(inst_scores, dict):
+        for sym, info in inst_scores.items():
+            if isinstance(info, dict):
+                candidates.append({"symbol": sym, "score": info.get("score") or info.get("total_score")})
+        candidates.sort(key=lambda x: (x.get("score") or -999), reverse=True)
+    if not candidates:
+        candidates = brain.get("scanner_results") or brain.get("top_signals") or []
     if not candidates:
         return {"error": "Keine Scanner-Kandidaten im Brain-State", "brain_keys": list(brain.keys())}
 
