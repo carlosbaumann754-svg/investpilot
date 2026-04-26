@@ -3910,3 +3910,150 @@ async def api_ask(req: AskRequest, user=Depends(require_auth)):
     except Exception as ex:
         log.error(f"Ask Fehler: {ex}")
         return {"error": f"Fehler: {str(ex)}"}
+
+
+# ============================================================
+# v31-v35 Insider-Signal Endpoints
+# ============================================================
+# Daten-Layer fuer "CEOWatcher-Aequivalent". Alle Endpoints sind
+# READ-ONLY und unterliegen keinem Auth (gleiche Policy wie /api/portfolio).
+# Aktivierung der Insider-Logik im Bot selbst weiterhin via Config-Flag
+# scanner.insider_signal_enabled (DEFAULT FALSE).
+
+@app.get("/api/insider/scores")
+def api_insider_scores():
+    """Insider-Score fuer alle Symbole im aktuellen Bot-Universum.
+
+    Liefert pro Symbol: base_score (v31), full_score (v32+v33 alle Filter aktiv),
+    delta. So sehen wir "was wuerde der Bot mit Filtern aktiv anders bewerten".
+    """
+    try:
+        from app.insider_signals import compute_insider_score
+        from app import finnhub_client
+        from app.market_scanner import ASSET_UNIVERSE
+    except Exception as e:
+        return {"error": f"import: {e}"}
+
+    if not finnhub_client.is_available():
+        return {"error": "Finnhub nicht verfuegbar — API-Key fehlt"}
+
+    out = []
+    # Nur stocks/etf — Crypto/Forex haben keine Insider
+    for sym, meta in ASSET_UNIVERSE.items():
+        cls = (meta.get("class") or "").lower()
+        if cls not in ("stocks", "stock", "etf", "etfs"):
+            continue
+        try:
+            txs = finnhub_client.fetch_insider_transactions(sym)
+        except Exception:
+            continue
+        if not txs:
+            continue
+        base = compute_insider_score(sym, transactions=txs)
+        full = compute_insider_score(
+            sym, transactions=txs,
+            quality_filter=True, detect_novelty=True, detect_contrarian=False,
+        )
+        out.append({
+            "symbol": sym,
+            "name": meta.get("name", sym),
+            "base_score_v31": base,
+            "full_score_v32_v33": full,
+            "delta": full - base,
+            "n_transactions": len(txs),
+        })
+
+    out.sort(key=lambda x: x["full_score_v32_v33"], reverse=True)
+    return {"updated_at": __import__("datetime").datetime.utcnow().isoformat(), "scores": out}
+
+
+@app.get("/api/insider/discovery")
+def api_insider_discovery():
+    """Top-Kandidaten ausserhalb unseres Universums mit High-Conviction Cluster-Buys."""
+    try:
+        from app.insider_discovery import get_latest_discovery
+        return get_latest_discovery()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/insider/discovery/run")
+def api_insider_discovery_run():
+    """Manueller Trigger fuer einen Discovery-Scan (sonst taeglich via Scheduler)."""
+    try:
+        from app.insider_discovery import run_discovery
+        return run_discovery(min_score=2, max_per_run=80)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/insider/top-insiders")
+def api_insider_top():
+    """Top-N Insider nach historischer Hit-Rate (v34 — anfangs leer)."""
+    try:
+        from app.insider_tracker import get_top_insiders
+        return {"top": get_top_insiders(n=15, min_trades=3)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/insider/shadow-report")
+def api_insider_shadow_report():
+    """Shadow-Report: vergleicht aktuelle Bot-Trade-Kandidaten mit Insider-Filter.
+
+    Was haette der Bot mit aktivem Insider-Signal anders entschieden?
+    - Aktuelle Top-BUY-Kandidaten aus Brain-State
+    - Insider-Score (v32+v33) pro Symbol
+    - Empfehlung: KEEP (score >= 0), DOWNGRADE (score < 0), BOOST (score >= 3)
+    """
+    try:
+        from app.insider_signals import compute_insider_score
+        from app import finnhub_client
+        from app.config_manager import get_data_path
+    except Exception as e:
+        return {"error": f"import: {e}"}
+
+    if not finnhub_client.is_available():
+        return {"error": "Finnhub nicht verfuegbar"}
+
+    # Brain-State lesen — letzte Scanner-Top-Picks
+    brain_path = get_data_path("brain_state.json")
+    if not brain_path.exists():
+        return {"error": "brain_state.json nicht vorhanden"}
+    try:
+        import json
+        brain = json.loads(brain_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"error": f"brain_state read: {e}"}
+
+    candidates = brain.get("scanner_results") or brain.get("top_signals") or []
+    if not candidates:
+        return {"error": "Keine Scanner-Kandidaten im Brain-State", "brain_keys": list(brain.keys())}
+
+    report = []
+    for cand in candidates[:20]:
+        sym = cand.get("symbol") or cand.get("ticker")
+        if not sym:
+            continue
+        try:
+            txs = finnhub_client.fetch_insider_transactions(sym)
+            score = compute_insider_score(
+                sym, transactions=txs,
+                quality_filter=True, detect_novelty=True, detect_contrarian=False,
+            )
+        except Exception:
+            score = 0
+        if score >= 3:
+            recommendation = "BOOST"
+        elif score < 0:
+            recommendation = "DOWNGRADE"
+        else:
+            recommendation = "KEEP"
+        report.append({
+            "symbol": sym,
+            "scanner_score": cand.get("score") or cand.get("total_score"),
+            "insider_score": score,
+            "insider_recommendation": recommendation,
+        })
+    return {"updated_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "candidates": report}
