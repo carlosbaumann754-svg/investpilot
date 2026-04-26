@@ -268,3 +268,50 @@ def fetch_economic_calendar(days_ahead: int = 1) -> list[dict]:
     _calendar_cache["events"] = events
     _calendar_cache["fetched_at"] = now
     return events
+
+
+# ============================================================
+# Insider Transactions (SEC Form 4 via Finnhub)
+# ============================================================
+# Im Free-Tier verfuegbar (verifiziert 2026-04-26: 735 NVDA-Records).
+# Liefert das Roh-CEOWatcher-Aequivalent gratis.
+
+_insider_cache: dict[str, dict[str, Any]] = {}
+_INSIDER_CACHE_TTL = 6 * 60 * 60  # 6h
+
+
+def fetch_insider_transactions(symbol: str) -> list[dict]:
+    """
+    Liefert die letzten Insider-Transaktionen (SEC Form 4 Filings) als Liste.
+
+    Jede Transaction: {name, transactionDate, share (post-trade-holdings),
+                       change (signed: +Buy / -Sell), transactionPrice, currency}
+    Cache 6h pro Symbol — Form 4 Filings sind taeglich, schnellere Refreshes
+    bringen nichts und brennen API-Quota.
+    """
+    if not symbol:
+        return []
+    now = time.time()
+    cached = _insider_cache.get(symbol)
+    if cached and now - cached["fetched_at"] < _INSIDER_CACHE_TTL:
+        return cached["transactions"]
+
+    data = _get("/stock/insider-transactions", {"symbol": symbol})
+    transactions: list[dict] = []
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        for tx in data["data"]:
+            if not isinstance(tx, dict):
+                continue
+            transactions.append({
+                "name": tx.get("name", ""),
+                "transactionDate": tx.get("transactionDate", ""),
+                "filingDate": tx.get("filingDate", ""),
+                "change": tx.get("change", 0),
+                "share": tx.get("share", 0),
+                "transactionPrice": tx.get("transactionPrice", 0.0),
+                "transactionCode": tx.get("transactionCode", ""),
+                "currency": tx.get("currency", "USD"),
+            })
+
+    _insider_cache[symbol] = {"fetched_at": now, "transactions": transactions}
+    return transactions
