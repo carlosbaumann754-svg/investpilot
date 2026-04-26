@@ -293,20 +293,111 @@ class PairsBot:
     # Signal-Generation (TODO W3)
     # ------------------------------------------------------------------
 
-    def calculate_signals(self, pairs: list[Pair]) -> list[PairsSignal]:
+    def calculate_signals(
+        self,
+        pairs: list[Pair],
+        portfolio_value_usd: float,
+        open_pair_positions: Optional[list[str]] = None,
+    ) -> list[PairsSignal]:
         """
         Pro Paar: aktueller Spread vs. historisches Mittel -> z-score -> Signal.
 
-        TODO W3:
-            - Live-Quotes A & B von broker.search_instrument oder yfinance
-            - spread_now = price_a - beta * price_b
-            - z = (spread_now - mean_spread) / std_spread
-            - if z > +entry: SHORT_A_LONG_B
-            - if z < -entry: LONG_A_SHORT_B
-            - if |z| < exit AND offene Position: CLOSE
-            - Position-Sizing: portfolio_value * max_portfolio_pct / max_concurrent_pairs
+        Workflow:
+        1. yfinance: aktuelle Closes (oder broker.live-quote falls verfuegbar)
+        2. spread_now = price_a - beta * price_b
+        3. z = (spread_now - mean_spread) / std_spread
+        4. Signal-Logic:
+           - z > +entry  -> SHORT_A_LONG_B (Spread sollte kleiner werden)
+           - z < -entry  -> LONG_A_SHORT_B (Spread sollte groesser werden)
+           - |z| < exit AND open position -> CLOSE
+           - sonst -> kein Signal (skip)
+        5. Sizing: portfolio_value * max_portfolio_pct / max_concurrent_pairs
+
+        Args:
+            pairs: Liste von Pair-Objekten aus discover_pairs()
+            portfolio_value_usd: aktuelles Equity (fuer Sizing)
+            open_pair_positions: Liste von pair.name strings die schon offen sind
+
+        Returns:
+            Liste von PairsSignal-Objekten (kann leer sein wenn nichts triggert).
         """
-        raise NotImplementedError("calculate_signals ist W3-TODO")
+        if not pairs:
+            return []
+        open_pair_positions = set(open_pair_positions or [])
+
+        # Live-Closes via yfinance (kompakt: 1 Tag, 1 Wert pro Symbol)
+        try:
+            import yfinance as yf
+        except ImportError:
+            log.error("yfinance fehlt — calculate_signals abgebrochen")
+            return []
+
+        # Sammle alle einzigartigen Symbole
+        all_syms = sorted({s for p in pairs for s in (p.symbol_a, p.symbol_b)})
+        try:
+            df = yf.download(all_syms, period="5d", progress=False, auto_adjust=True)["Close"]
+            df = df.dropna(how="all")
+            if df.empty:
+                log.warning("Keine Live-Closes verfuegbar")
+                return []
+            # Letzter verfuegbarer Close pro Symbol
+            last_closes = df.iloc[-1].to_dict()
+        except Exception as e:
+            log.error("yfinance live-fetch failed: %s", e)
+            return []
+
+        # Sizing: gleichmaessig auf max_concurrent_pairs verteilt
+        max_pairs_open = int(self.config["max_concurrent_pairs"])
+        portfolio_pct = float(self.config["max_portfolio_pct"]) / 100.0
+        per_pair_usd = portfolio_value_usd * portfolio_pct / max(1, max_pairs_open)
+        # Pro Pair: halbe Sume LONG, halbe SHORT (gleiche Dollar-Exposure)
+        per_leg_usd = per_pair_usd / 2.0
+
+        z_entry = float(self.config["z_score_entry"])
+        z_exit = float(self.config["z_score_exit"])
+
+        signals: list[PairsSignal] = []
+        for pair in pairs:
+            price_a = last_closes.get(pair.symbol_a)
+            price_b = last_closes.get(pair.symbol_b)
+            if price_a is None or price_b is None or pair.std_spread <= 0:
+                continue
+            try:
+                price_a, price_b = float(price_a), float(price_b)
+            except (TypeError, ValueError):
+                continue
+
+            spread_now = price_a - pair.beta * price_b
+            z = (spread_now - pair.mean_spread) / pair.std_spread
+
+            is_open = pair.name in open_pair_positions
+            direction = None
+            reason = None
+
+            # Close-Logic priorisiert (offene Position auflösen wenn z neutral)
+            if is_open and abs(z) < z_exit:
+                direction = "CLOSE"
+                reason = f"z={z:+.2f} < exit={z_exit} (mean-reverted)"
+            # Entry-Logic nur wenn nicht schon offen
+            elif not is_open and z > z_entry:
+                direction = "SHORT_A_LONG_B"
+                reason = f"z={z:+.2f} > +{z_entry} (Spread zu hoch -> wird sinken)"
+            elif not is_open and z < -z_entry:
+                direction = "LONG_A_SHORT_B"
+                reason = f"z={z:+.2f} < -{z_entry} (Spread zu tief -> wird steigen)"
+
+            if direction:
+                signals.append(PairsSignal(
+                    pair=pair,
+                    direction=direction,
+                    z_score=float(z),
+                    suggested_amount_usd=per_leg_usd,
+                    reason=reason or "",
+                ))
+
+        log.info("PairsBot: %d Signale aus %d Paaren (z_entry=%.1f, z_exit=%.1f)",
+                 len(signals), len(pairs), z_entry, z_exit)
+        return signals
 
     # ------------------------------------------------------------------
     # Order-Submission (TODO W4)
