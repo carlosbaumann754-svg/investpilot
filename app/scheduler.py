@@ -111,67 +111,43 @@ def is_trading_enabled():
 
 
 def is_us_stock_hours():
-    """US-Stock-Marktzeiten (NYSE/Nasdaq): Mo-Fr 15:30-22:00 CET."""
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
-    hour = now.hour
-    minute = now.minute
-    if hour < 15 or (hour == 15 and minute < 30) or hour >= 22:
-        return False
-    return True
+    """Kompat-Wrapper. Nutzt jetzt asset_classes.Registry (DST-aware via zoneinfo)."""
+    from app.asset_classes import is_asset_class_tradeable as _is_tradeable
+    return _is_tradeable("stocks")
 
 
 def is_forex_hours():
-    """Forex (FX): Sonntag 22:00 CET bis Freitag 22:00 CET (kein Wochenende)."""
-    now = datetime.now()
-    wd = now.weekday()  # 0=Mo, 6=So
-    hour = now.hour
-    # Samstag komplett zu
-    if wd == 5:
-        return False
-    # Sonntag bis 22:00 zu, danach offen
-    if wd == 6 and hour < 22:
-        return False
-    # Freitag nach 22:00 zu
-    if wd == 4 and hour >= 22:
-        return False
-    return True
+    """Kompat-Wrapper. Nutzt jetzt asset_classes.Registry."""
+    from app.asset_classes import is_asset_class_tradeable as _is_tradeable
+    return _is_tradeable("forex")
 
 
 def is_asset_class_tradeable(asset_class: str) -> bool:
     """Pruefe ob eine spezifische Asset-Klasse JETZT tradeable ist.
 
-    Asset-Classes:
-    - crypto: 24/7 immer
-    - forex: Mo-Fr ~24h (Wochenende zu)
-    - stocks/etf/indices/commodities: US-Stock-Hours (Mo-Fr 15:30-22:00 CET)
+    Delegiert vollstaendig an app.asset_classes (Single Source of Truth).
+    Alle bekannten Klassen siehe asset_classes.REGISTRY:
+      crypto, stocks, etf, stocks_extended, eu_stocks, uk_stocks, ch_stocks,
+      jp_stocks, hk_stocks, au_stocks, forex, futures, indices, commodities, bonds.
+
+    Unbekannte Klassen -> True (permissiv, damit neue Asset-Typen den Bot
+    nicht versehentlich stilllegen).
     """
-    cls = (asset_class or "").lower()
-    if cls in ("crypto", "cryptocurrency"):
-        return True  # 24/7
-    if cls in ("forex", "fx", "currency"):
-        return is_forex_hours()
-    # Default: US-Stock-Hours (stocks, etf, indices, commodities)
-    return is_us_stock_hours()
+    from app.asset_classes import is_asset_class_tradeable as _is_tradeable
+    return _is_tradeable(asset_class)
 
 
 def is_market_hours():
     """Pruefe ob IRGENDEINE Asset-Klasse im Universum JETZT tradeable ist.
 
-    v29 Refactor: Vorher (v28) blockierte der Filter outside US-Stock-Hours
-    den ganzen Cycle — aber Crypto im ASSET_UNIVERSE (BTC/ETH/etc, ~14% des
-    Universums) handelt 24/7. Mit v28 hätte Bot Sonntag/Nacht keine
-    Crypto-Signale traden können = verlorene Opportunities.
-
-    v29: Cycle laeuft solange MINDESTENS eine Asset-Klasse tradeable ist.
-    Da Crypto immer offen ist UND wir Crypto im Universum haben -> Cycle
-    laeuft 24/7. Aber: trader.py kann is_asset_class_tradeable(class) pro
-    Symbol nutzen um Stocks-Versuche outside RTH zu skippen.
+    v30 (asset_classes-Registry): Liest ASSET_UNIVERSE, sammelt alle vorkommenden
+    'class'-Werte und fragt die Registry. So bekommt der Klon-Bot, der z.B.
+    EU-Stocks oder Futures handelt, automatisch korrekte Trading-Hours ohne
+    Code-Change im Scheduler.
 
     Modi:
-    - eToro demo: 24/7 (eToro-Demo tradet always)
-    - sonst: 24/7 wenn Crypto im Universum, sonst US-Stock-Hours
+    - eToro demo: 24/7 (Demo handelt always)
+    - sonst: True wenn min. 1 Klasse im Universum tradeable ist
     """
     try:
         from app.config_manager import load_config
@@ -184,20 +160,16 @@ def is_market_hours():
         if env == "demo":
             return True
 
-    # Pruefe ob ASSET_UNIVERSE Crypto enthaelt
     try:
         from app.market_scanner import ASSET_UNIVERSE
-        has_crypto = any(
-            (m.get("class") or "").lower() in ("crypto", "cryptocurrency")
-            for m in ASSET_UNIVERSE.values()
-        )
-        if has_crypto:
-            return True  # Crypto ist 24/7 -> immer mindestens eine Klasse offen
-    except Exception:
-        pass
-
-    # Fallback: nur US-Stock-Hours
-    return is_us_stock_hours()
+        from app.asset_classes import any_class_tradeable
+        classes = {(m.get("class") or "stocks") for m in ASSET_UNIVERSE.values()}
+        if not classes:
+            return is_us_stock_hours()  # leeres Universum -> safe default
+        return any_class_tradeable(classes)
+    except Exception as e:
+        log.warning(f"is_market_hours fallback wegen Fehler: {e}")
+        return is_us_stock_hours()
 
 
 def _keep_alive():

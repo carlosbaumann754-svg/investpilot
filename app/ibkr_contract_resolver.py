@@ -35,30 +35,33 @@ log = logging.getLogger(__name__)
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "ibkr_contract_cache.json"
 
 
+def _registry_hints(asset_class: str) -> dict:
+    """Hole IBKR-Hints aus app.asset_classes.Registry. Fallback auf STK/SMART/USD."""
+    try:
+        from app.asset_classes import get_ibkr_hints
+        h = get_ibkr_hints(asset_class)
+        if h:
+            return h
+    except Exception as e:
+        log.debug("Registry-Lookup fehlgeschlagen (%s) — Fallback", e)
+    return {"secType": "STK", "exchange": "SMART", "currency": "USD"}
+
+
 def _normalize_class(asset_class: str) -> str:
-    """Map ASSET_UNIVERSE 'class' -> IBKR secType."""
-    c = (asset_class or "").lower().strip()
-    if c in ("stocks", "stock", "etf", "etfs", "equity", "equities"):
-        return "STK"
-    if c in ("crypto", "cryptocurrency"):
-        return "CRYPTO"
-    if c in ("forex", "fx", "currency"):
-        return "CASH"
-    if c in ("commodity", "commodities"):
-        return "CMDTY"  # selten direkt handelbar, meist via ETF-Proxy
-    if c in ("index", "indices"):
-        return "IND"
-    return "STK"  # Default fuer S&P-Style Symbole
+    """Kompat-Wrapper: Map ASSET_UNIVERSE 'class' -> IBKR secType (via Registry)."""
+    return _registry_hints(asset_class)["secType"]
 
 
 def _exchange_for_sec_type(sec_type: str) -> str:
-    """Default-Exchange pro IBKR secType."""
+    """Default-Exchange pro IBKR secType (Legacy-Fallback)."""
     return {
         "STK": "SMART",
         "CRYPTO": "PAXOS",
         "CASH": "IDEALPRO",
-        "CMDTY": "SMART",
+        "CMDTY": "NYMEX",
         "IND": "CBOE",
+        "FUT": "CME",
+        "BOND": "SMART",
     }.get(sec_type, "SMART")
 
 
@@ -156,12 +159,21 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
             f"Asset zuerst via market_scanner.ASSET_UNIVERSE oder asset_discovery aufnehmen."
         )
 
-    sec_type = _normalize_class(meta["class"])
-    exchange = _exchange_for_sec_type(sec_type)
+    # Hints aus Registry holen — Single Source of Truth fuer SecType/Exchange/Currency
+    hints = _registry_hints(meta["class"])
+    sec_type = hints["secType"]
+    # Symbol-Meta darf Registry-Defaults overrulen (per-Symbol Overrides moeglich)
+    exchange = meta.get("ibkr_exchange") or hints["exchange"]
+    # Currency: explicit param > Symbol-Meta-Override > Registry-Default
+    if currency == "USD" and (meta.get("ibkr_currency") or hints["currency"]) != "USD":
+        # User hat default USD nicht explizit overruled -> Registry-Currency nehmen
+        currency = meta.get("ibkr_currency") or hints["currency"]
     symbol = meta["symbol"]
 
     # 3. Vorlaeufiger Contract bauen
     if sec_type == "STK":
+        # Funktioniert fuer ALLE Equities-Boersen (NYSE/Nasdaq/IBIS/LSE/SEHK/TSEJ/ASX/EBS).
+        # IBKR's qualifyContracts() resolved primaryExchange automatisch.
         c = Stock(symbol, exchange, currency)
     elif sec_type == "CRYPTO":
         c = Crypto(symbol, exchange, currency)
@@ -181,19 +193,35 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
             symbol,
         )
     elif sec_type == "FUT":
-        # Futures sind komplex (Multiplier, Expiry, Margin) — heute bewusst geblockt
-        raise NotImplementedError(
-            f"Futures noch nicht supportet (Asset {symbol}). Braucht: lastTradeDateOrContractMonth, "
-            f"Multiplier-Beruecksichtigung in Quantity-Calc, Margin-Check vor Submit. "
-            f"Implementierung in W7+ wenn Bot Nr. 5 Pairs Trading futures nutzt."
-        )
+        # Futures: braucht expiry. Klone-Bot muss in ASSET_UNIVERSE folgendes setzen:
+        #   ibkr_expiry: 'YYYYMM' (z.B. '202506')  ODER  'YYYYMMDD'
+        #   ibkr_multiplier: optional, IBKR liefert Default
+        # Quantity-Calc beruecksichtigt Multiplier nicht automatisch — caller muss
+        # amount_to_quantity() mit price * multiplier aufrufen.
+        if Future is None:
+            raise NotImplementedError("ib_insync.Future nicht importiert — Version pruefen")
+        expiry = meta.get("ibkr_expiry")
+        if not expiry:
+            raise NotImplementedError(
+                f"Futures-Asset {symbol} braucht 'ibkr_expiry' (YYYYMM) in ASSET_UNIVERSE. "
+                f"Beispiel: meta['ibkr_expiry'] = '202506' fuer June-2025-Contract."
+            )
+        c = Future(symbol, expiry, exchange, currency=currency)
     elif sec_type == "CMDTY":
-        # Commodities meist via Future oder ETF (z.B. GLD fuer Gold) — heute geblockt
-        raise NotImplementedError(
-            f"Direct-Commodity-Trades nicht supportet (Asset {symbol}). "
-            f"Workaround: ETF-Proxy in ASSET_UNIVERSE eintragen (GLD/SLV/USO/etc.) "
-            f"als 'class: stocks' — dann via STK-Pfad."
-        )
+        # IBKR CMDTY-Pfad existiert (Spot Gold via XAUUSD), aber selten genutzt.
+        # Empfehlung bleibt: ETF-Proxy ('class: etf' in Universe). Wenn Klon-Bot
+        # echte CMDTY will, muss er Symbol z.B. "XAUUSD" + exchange "SMART" setzen.
+        c = Contract(secType="CMDTY", symbol=symbol, exchange=exchange, currency=currency)
+    elif sec_type == "BOND":
+        # US-Treasuries: braucht conId oder ISIN. Aktuell nur Stub —
+        # echter Klon-Bot muss meta['ibkr_conId'] setzen.
+        cid = meta.get("ibkr_conId")
+        if not cid:
+            raise NotImplementedError(
+                f"Bonds-Asset {symbol} braucht 'ibkr_conId' in ASSET_UNIVERSE. "
+                f"Bonds haben keine eindeutigen Ticker — IBKR conId aus Search nutzen."
+            )
+        c = Contract(secType="BOND", conId=int(cid), exchange=exchange, currency=currency)
     else:
         raise NotImplementedError(
             f"Asset-Class '{meta['class']}' (-> {sec_type}) noch nicht unterstuetzt. "
