@@ -27,6 +27,32 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+# ib_insync.util.patchAsyncio() patcht asyncio.get_event_loop() global so dass
+# nested calls (FastAPI -> ib_insync) funktionieren. Wird beim ersten Import
+# einmalig aufgerufen damit ALLE folgenden ib_insync-Calls Loop-safe sind.
+# Loest die "attached to a different loop" Errors die wir im Singleton-Pool
+# trotz Auto-Retry noch im Log hatten.
+_PATCH_DONE = False
+
+
+def _patch_asyncio_once() -> None:
+    global _PATCH_DONE
+    if _PATCH_DONE:
+        return
+    try:
+        from ib_insync import util as _ib_util
+        _ib_util.patchAsyncio()
+        _PATCH_DONE = True
+        log.info("ib_insync.util.patchAsyncio() applied — Loop-Conflicts geloest")
+    except Exception as e:
+        log.warning("patchAsyncio failed: %s", e)
+
+
+# Patch beim Module-Import (nicht beim ersten connect — sonst zu spaet bei
+# parallel laufenden FastAPI-Endpoints und Bot-Threads)
+_patch_asyncio_once()
+
+
 # Connection-Konstanten (siehe Modul-Docstring fuer Begruendung)
 IBG_HOST = os.environ.get("IBG_HOST", "ib-gateway")
 IBG_PORT = int(os.environ.get("IBG_PORT", "4004"))  # socat-bridge port, NICHT 4002
