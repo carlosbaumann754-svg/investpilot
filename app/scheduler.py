@@ -110,32 +110,8 @@ def is_trading_enabled():
         return False
 
 
-def is_market_hours():
-    """Pruefe ob US-Markt offen ist (Mo-Fr, 15:30-22:00 CET).
-
-    Modi:
-    - eToro demo: True (eToro-Demo tradet 24/7)
-    - eToro real: echte US-Marktzeiten
-    - IBKR (paper oder live): echte US-Marktzeiten — auch bei Paper, weil IBKR
-      Paper folgt echten Marktzeiten und Limit-Orders ausserhalb RTH werden nicht
-      gefilled (siehe ROKU-Repeat-Order am 25.+26.04. — Auto-Cancel funktioniert
-      aber unnoetiger Network-Traffic + Logs).
-
-    v28: Trading-Hours-Filter erweitert auf IBKR (vorher nur fuer eToro real).
-    """
-    try:
-        from app.config_manager import load_config
-        broker = (load_config().get("broker") or "etoro").lower()
-    except Exception:
-        broker = "etoro"
-
-    # Einzige Ausnahme: eToro-Demo tradet 24/7
-    if broker == "etoro":
-        env = os.environ.get("ETORO_ENVIRONMENT", "demo")
-        if env == "demo":
-            return True
-
-    # Sonst (eToro real, IBKR paper, IBKR live): echte US-Marktzeiten
+def is_us_stock_hours():
+    """US-Stock-Marktzeiten (NYSE/Nasdaq): Mo-Fr 15:30-22:00 CET."""
     now = datetime.now()
     if now.weekday() >= 5:
         return False
@@ -144,6 +120,84 @@ def is_market_hours():
     if hour < 15 or (hour == 15 and minute < 30) or hour >= 22:
         return False
     return True
+
+
+def is_forex_hours():
+    """Forex (FX): Sonntag 22:00 CET bis Freitag 22:00 CET (kein Wochenende)."""
+    now = datetime.now()
+    wd = now.weekday()  # 0=Mo, 6=So
+    hour = now.hour
+    # Samstag komplett zu
+    if wd == 5:
+        return False
+    # Sonntag bis 22:00 zu, danach offen
+    if wd == 6 and hour < 22:
+        return False
+    # Freitag nach 22:00 zu
+    if wd == 4 and hour >= 22:
+        return False
+    return True
+
+
+def is_asset_class_tradeable(asset_class: str) -> bool:
+    """Pruefe ob eine spezifische Asset-Klasse JETZT tradeable ist.
+
+    Asset-Classes:
+    - crypto: 24/7 immer
+    - forex: Mo-Fr ~24h (Wochenende zu)
+    - stocks/etf/indices/commodities: US-Stock-Hours (Mo-Fr 15:30-22:00 CET)
+    """
+    cls = (asset_class or "").lower()
+    if cls in ("crypto", "cryptocurrency"):
+        return True  # 24/7
+    if cls in ("forex", "fx", "currency"):
+        return is_forex_hours()
+    # Default: US-Stock-Hours (stocks, etf, indices, commodities)
+    return is_us_stock_hours()
+
+
+def is_market_hours():
+    """Pruefe ob IRGENDEINE Asset-Klasse im Universum JETZT tradeable ist.
+
+    v29 Refactor: Vorher (v28) blockierte der Filter outside US-Stock-Hours
+    den ganzen Cycle — aber Crypto im ASSET_UNIVERSE (BTC/ETH/etc, ~14% des
+    Universums) handelt 24/7. Mit v28 hätte Bot Sonntag/Nacht keine
+    Crypto-Signale traden können = verlorene Opportunities.
+
+    v29: Cycle laeuft solange MINDESTENS eine Asset-Klasse tradeable ist.
+    Da Crypto immer offen ist UND wir Crypto im Universum haben -> Cycle
+    laeuft 24/7. Aber: trader.py kann is_asset_class_tradeable(class) pro
+    Symbol nutzen um Stocks-Versuche outside RTH zu skippen.
+
+    Modi:
+    - eToro demo: 24/7 (eToro-Demo tradet always)
+    - sonst: 24/7 wenn Crypto im Universum, sonst US-Stock-Hours
+    """
+    try:
+        from app.config_manager import load_config
+        broker = (load_config().get("broker") or "etoro").lower()
+    except Exception:
+        broker = "etoro"
+
+    if broker == "etoro":
+        env = os.environ.get("ETORO_ENVIRONMENT", "demo")
+        if env == "demo":
+            return True
+
+    # Pruefe ob ASSET_UNIVERSE Crypto enthaelt
+    try:
+        from app.market_scanner import ASSET_UNIVERSE
+        has_crypto = any(
+            (m.get("class") or "").lower() in ("crypto", "cryptocurrency")
+            for m in ASSET_UNIVERSE.values()
+        )
+        if has_crypto:
+            return True  # Crypto ist 24/7 -> immer mindestens eine Klasse offen
+    except Exception:
+        pass
+
+    # Fallback: nur US-Stock-Hours
+    return is_us_stock_hours()
 
 
 def _keep_alive():
