@@ -112,16 +112,33 @@ def is_trading_enabled():
 
 def is_market_hours():
     """Pruefe ob US-Markt offen ist (Mo-Fr, 15:30-22:00 CET).
-    Im Demo-Modus immer True, da eToro Demo 24/7 tradet."""
-    env = os.environ.get("ETORO_ENVIRONMENT", "demo")
-    if env == "demo":
-        return True
 
+    Modi:
+    - eToro demo: True (eToro-Demo tradet 24/7)
+    - eToro real: echte US-Marktzeiten
+    - IBKR (paper oder live): echte US-Marktzeiten — auch bei Paper, weil IBKR
+      Paper folgt echten Marktzeiten und Limit-Orders ausserhalb RTH werden nicht
+      gefilled (siehe ROKU-Repeat-Order am 25.+26.04. — Auto-Cancel funktioniert
+      aber unnoetiger Network-Traffic + Logs).
+
+    v28: Trading-Hours-Filter erweitert auf IBKR (vorher nur fuer eToro real).
+    """
+    try:
+        from app.config_manager import load_config
+        broker = (load_config().get("broker") or "etoro").lower()
+    except Exception:
+        broker = "etoro"
+
+    # Einzige Ausnahme: eToro-Demo tradet 24/7
+    if broker == "etoro":
+        env = os.environ.get("ETORO_ENVIRONMENT", "demo")
+        if env == "demo":
+            return True
+
+    # Sonst (eToro real, IBKR paper, IBKR live): echte US-Marktzeiten
     now = datetime.now()
-    # Wochenende
     if now.weekday() >= 5:
         return False
-    # US Market Hours (CET): 15:30 - 22:00
     hour = now.hour
     minute = now.minute
     if hour < 15 or (hour == 15 and minute < 30) or hour >= 22:
