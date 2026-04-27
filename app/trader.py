@@ -230,7 +230,15 @@ def show_portfolio_status(client):
         parsed_positions.append(p)
         total_invested += p["invested"]
 
-    total_value = total_invested + unrealized_pnl + credit
+    # v36g — gleicher Fix wie in brain.record_snapshot:
+    # IBKR liefert _equity (NetLiquidation) — das ist die korrekte Equity.
+    # credit + invested + pnl ueberzaehlt bei IBKR, weil credit dort
+    # AvailableFunds (Cash MINUS Margin-Reserve) ist.
+    ibkr_equity = portfolio.get("_equity")
+    if ibkr_equity is not None and ibkr_equity > 0:
+        total_value = float(ibkr_equity)
+    else:
+        total_value = total_invested + unrealized_pnl + credit
 
     log.info(f"  Credit (Cash):     ${credit:>12,.2f}")
     log.info(f"  Investiert:        ${total_invested:>12,.2f}")
@@ -723,7 +731,13 @@ def execute_scanner_trades(client, config, scan_results):
     credit = portfolio.get("credit", 0)
     positions = portfolio.get("positions", [])
     parsed_positions = [EtoroClient.parse_position(pos) for pos in positions]
-    total_value = credit + sum(p["invested"] for p in parsed_positions)
+    # v36g — IBKR-Korrektur: credit ist AvailableFunds, nicht reines Cash.
+    # NetLiquidation aus _equity nutzen wenn verfuegbar (siehe brain.py).
+    ibkr_equity_pre = portfolio.get("_equity")
+    if ibkr_equity_pre is not None and ibkr_equity_pre > 0:
+        total_value = float(ibkr_equity_pre)
+    else:
+        total_value = credit + sum(p["invested"] for p in parsed_positions)
 
     # v15: Portfolio-Sizing skaliert mit Portfolio-Wert (Tier-Map + Prozent-basiert).
     if rm:
