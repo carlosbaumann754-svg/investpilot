@@ -4,7 +4,11 @@
     "target_go_live": "2026-04-27",
     "version": "v15",
     "note": "Config eingefroren nach Sensitivity-Tests (Baseline + A1 Score=35 + A2 Sizing=0.12). Alle Hard-Gates bestanden: Sharpe=3.65, MaxDD=2.67%, WinRate=55.1%, PF=2.42, Trades=1329. A1 bestaetigt Robustheit gegen Score-Variation (kein Overfitting). KEINE Parameter-Aenderungen bis Live-Gang ohne erneuten Backtest-Run.",
-    "validated_runs": ["24452478983", "24453011416", "24453213301"],
+    "validated_runs": [
+      "24452478983",
+      "24453011416",
+      "24453213301"
+    ],
     "seed_alignment_2026-04-20": "Seed stop_loss_pct von -2.5 auf -5 angeglichen (Live-Stand). Optimizer-Run 12.04. hat SL auf -5 angehoben (Grid-Search), Optimizer-Run 19.04. hat -5 mit OOS-Sharpe 7.14 / WinRate 58.5% / 359 OOS-Trades validiert als optimal. Seed war veraltet, Live war korrekt. Freeze bleibt fuer andere Keys wirksam."
   },
   "etoro": {
@@ -291,5 +295,14 @@
     "insider_min_score": -1,
     "insider_quality_filter": true,
     "insider_detect_novelty": true
+  },
+  "broker": "ibkr",
+  "ibkr": {
+    "_comment": "v36 (28.04.2026): IBKR Paper. Port 4004 = socat-bridge im gnzsnz/ib-gateway image (NICHT 4002! - das war ein Trial).",
+    "host": "ib-gateway",
+    "port": 4004,
+    "client_id": 1,
+    "timeout": 15,
+    "readonly": false
   }
 }
