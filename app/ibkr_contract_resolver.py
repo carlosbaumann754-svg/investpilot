@@ -100,12 +100,21 @@ def _lookup_etoro_id_in_universe(etoro_id: int) -> Optional[dict]:
 
     for symbol, meta in ASSET_UNIVERSE.items():
         if int(meta.get("etoro_id", -1)) == int(etoro_id):
-            return {
+            # v36d: passthrough aller IBKR-relevanten Felder (ibkr_override,
+            # ibkr_exchange, ibkr_currency, ibkr_expiry, ibkr_conId, ...).
+            # Vorher hat dieser Filter `ibkr_override` verloren -> Commodities
+            # haben weiter CMDTY/NYMEX versucht statt ETF-Proxy.
+            result = {
                 "symbol": symbol,
                 "class": meta.get("class", "stocks"),
                 "name": meta.get("name", symbol),
                 "sector": meta.get("sector"),
             }
+            for k in ("ibkr_override", "ibkr_exchange", "ibkr_currency",
+                      "ibkr_expiry", "ibkr_multiplier", "ibkr_conId"):
+                if k in meta:
+                    result[k] = meta[k]
+            return result
     return None
 
 
