@@ -284,5 +284,12 @@
     "dca_on_new_cash": true,
     "min_new_cash_trigger_usd": 500,
     "dca_spread_cycles": 5
+  },
+  "scanner": {
+    "_comment": "v36 (28.04.2026): Insider-Filter aktiviert. Block bei Insider-Score < min (-1 = blockt -2 'DOWN'). Quality-Filter ignoriert Award-Grants und Options-Exercise (Code A/M/G/F). Novelty-Detection vergibt Bonus fuer first-buy-in-2J Insider.",
+    "insider_signal_enabled": true,
+    "insider_min_score": -1,
+    "insider_quality_filter": true,
+    "insider_detect_novelty": true
   }
 }

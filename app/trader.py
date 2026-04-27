@@ -905,10 +905,92 @@ def execute_scanner_trades(client, config, scan_results):
             log.warning(f"  {recovery_restrictions.get('reason', 'RECOVERY MODE')}")
             min_score = max(min_score, recovery_restrictions.get("min_score", 30))
 
+    # v36 — Loop-Cooldown: blockiert Re-Buy desselben Symbols innerhalb
+    # cooldown_cycles falls vorheriger Versuch nicht in eine echte Position
+    # mündete (broker bestätigt nicht). Fix für ROKU-Fixierungs-Loop am
+    # 27.04. (133+ identische Buys).
+    cooldown_cycles = dt_config.get("buy_cooldown_cycles", 12)  # 12 × 5min = 1h
+    cooldown_state = load_json("buy_cooldown.json") or {}
+    now_iso = datetime.now().isoformat()
+    # Stale-Eintraege bereinigen (>24h)
+    cooldown_state = {
+        k: v for k, v in cooldown_state.items()
+        if (datetime.now() - datetime.fromisoformat(v["last_attempt"])).total_seconds() < 86400
+    }
+
+    def _in_cooldown(sym_id: int) -> tuple[bool, str]:
+        rec = cooldown_state.get(str(sym_id))
+        if not rec:
+            return False, ""
+        elapsed_cycles = (datetime.now() - datetime.fromisoformat(rec["last_attempt"])).total_seconds() / 300
+        if elapsed_cycles < cooldown_cycles:
+            return True, f"cooldown {elapsed_cycles:.1f}/{cooldown_cycles} cycles, {rec.get('attempts',1)} prev attempts"
+        return False, ""
+
     buy_candidates = [r for r in scan_results
                       if r["signal"] in ("BUY", "STRONG_BUY")
                       and r["score"] >= min_score
                       and r["etoro_id"] not in existing_ids]
+
+    # Cooldown-Filter
+    blocked_by_cooldown = []
+    filtered = []
+    for c in buy_candidates:
+        in_cd, reason = _in_cooldown(c["etoro_id"])
+        if in_cd:
+            blocked_by_cooldown.append((c["symbol"], reason))
+        else:
+            filtered.append(c)
+    if blocked_by_cooldown:
+        for sym, r in blocked_by_cooldown:
+            log.info(f"  COOLDOWN-SKIP {sym}: {r}")
+    buy_candidates = filtered
+
+    # v36 — Insider-Signal-Filter (CEOWatcher-Equivalent via Finnhub)
+    # Blockt Buys wenn Insider verkaufen (-2 Score). Filter ist via
+    # config.scanner.insider_signal_enabled aktiviert. Fix fuer ROKU
+    # (Insider-Score -2) das am 27.04. 67x gekauft werden sollte.
+    try:
+        from app import insider_signals
+        if insider_signals.is_enabled(config):
+            scanner_cfg = config.get("scanner", {}) or {}
+            insider_min_score = scanner_cfg.get("insider_min_score", -1)
+            quality_filter = scanner_cfg.get("insider_quality_filter", True)
+            detect_novelty = scanner_cfg.get("insider_detect_novelty", True)
+
+            insider_filtered = []
+            blocked_by_insider = []
+            for c in buy_candidates:
+                try:
+                    iscore = insider_signals.compute_insider_score(
+                        c["symbol"],
+                        quality_filter=quality_filter,
+                        detect_novelty=detect_novelty,
+                    )
+                    if iscore < insider_min_score:
+                        blocked_by_insider.append((c["symbol"], iscore))
+                        continue
+                    # Score als Bonus auf Scanner-Score (-2..+5 → bis +10 Bonus)
+                    if iscore != 0:
+                        original = c["score"]
+                        bonus = iscore * 2.0  # Skaliert: -2 Insider → -4 Score
+                        c["score"] = round(original + bonus, 1)
+                        log.info(f"  INSIDER {c['symbol']}: insider={iscore:+d} -> "
+                                 f"score {original:.1f} -> {c['score']:.1f}")
+                    insider_filtered.append(c)
+                except Exception as ie:
+                    log.debug(f"Insider-Score {c['symbol']} fehlgeschlagen: {ie}")
+                    insider_filtered.append(c)  # bei Fehler durchlassen
+
+            for sym, sc in blocked_by_insider:
+                log.info(f"  INSIDER-BLOCK {sym}: insider_score={sc:+d} "
+                         f"(min={insider_min_score})")
+            buy_candidates = [c for c in insider_filtered if c["score"] >= min_score]
+            buy_candidates.sort(key=lambda x: x["score"], reverse=True)
+    except ImportError:
+        pass
+    except Exception as e:
+        log.warning(f"Insider-Filter Fehler (non-fatal): {e}", exc_info=True)
 
     # ML Confidence: multiply scanner score by ML probability if enabled
     use_ml = dt_config.get("use_ml_scoring", False)
@@ -1212,6 +1294,18 @@ def execute_scanner_trades(client, config, scan_results):
                     credit -= amount
                     effective_cash -= amount
 
+                    # v36 — Cooldown-State updaten: jeder Buy wird notiert,
+                    # damit das Symbol fuer cooldown_cycles nicht erneut
+                    # gekauft wird (auch wenn Broker keine Position bestaetigt).
+                    sym_key = str(candidate["etoro_id"])
+                    prev = cooldown_state.get(sym_key, {})
+                    cooldown_state[sym_key] = {
+                        "symbol": symbol,
+                        "last_attempt": datetime.now().isoformat(),
+                        "attempts": prev.get("attempts", 0) + 1,
+                        "last_amount": amount,
+                    }
+
                     # v12: Meta-Labeler Shadow-Log (matched later via position_id)
                     if ml_decision is not None and ml_decision.get("p_win") is not None:
                         try:
@@ -1247,6 +1341,13 @@ def execute_scanner_trades(client, config, scan_results):
             rm.consume_dca_budget(spent_this_cycle)
         except Exception as e:
             log.warning(f"DCA-Budget Update fehlgeschlagen: {e}", exc_info=True)
+
+    # v36 — Cooldown-State persistieren
+    try:
+        from app.config_manager import save_json as _save_json
+        _save_json("buy_cooldown.json", cooldown_state)
+    except Exception as e:
+        log.warning(f"Cooldown-State save fehlgeschlagen: {e}")
 
     log.info(f"\n  Scanner-Trades: {len(trades_executed)} ausgefuehrt")
     return trades_executed
@@ -1437,7 +1538,23 @@ def run_trading_cycle():
         scan_state = _lj("scanner_state.json") or {"cycle_count": 0, "last_results": []}
         scan_state["cycle_count"] = scan_state.get("cycle_count", 0) + 1
 
-        if scan_state["cycle_count"] >= scan_interval or not scan_state.get("last_results"):
+        # v36 — Stale-Cache-Gate: cached scan-results NUR nutzen wenn jung
+        # genug. Fix fuer ROKU-Bug am 27.04. (identische RSI/Momentum ueber
+        # hunderte Cycles → veraltete Marktdaten generierten dauerhaft den
+        # gleichen Buy-Score 58.8 fuer ROKU).
+        max_cache_age_min = dt_config.get("scan_max_cache_age_minutes", 15)
+        last_scan_iso = scan_state.get("last_scan")
+        cache_too_old = True
+        if last_scan_iso:
+            try:
+                age_min = (datetime.now() - datetime.fromisoformat(last_scan_iso)).total_seconds() / 60
+                cache_too_old = age_min >= max_cache_age_min
+            except Exception:
+                cache_too_old = True
+
+        if (scan_state["cycle_count"] >= scan_interval
+                or not scan_state.get("last_results")
+                or cache_too_old):
             log.info("\n--- Market Scan wird ausgefuehrt ---")
             enabled_classes = dt_config.get("enabled_asset_classes",
                                             ["stocks", "etf", "crypto", "commodities", "forex", "indices"])
@@ -1448,7 +1565,8 @@ def run_trading_cycle():
             _sj("scanner_state.json", scan_state)
         else:
             log.info(f"\n  Scanner: Gespeicherte Ergebnisse "
-                     f"(naechster Scan in {scan_interval - scan_state['cycle_count']} Zyklen)")
+                     f"(naechster Scan in {scan_interval - scan_state['cycle_count']} Zyklen, "
+                     f"cache {age_min:.0f}min alt)")
             scan_results = scan_state.get("last_results", [])
 
     # 5. Portfolio aufbauen oder Scanner-Trades

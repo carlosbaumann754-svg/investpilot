@@ -146,19 +146,19 @@ def is_market_hours():
     Code-Change im Scheduler.
 
     Modi:
-    - eToro demo: 24/7 (Demo handelt always)
+    - PAPER_FORCE_24x7=1 ENV: Bypass aktiv (nur fuer Tests, NICHT Default)
     - sonst: True wenn min. 1 Klasse im Universum tradeable ist
-    """
-    try:
-        from app.config_manager import load_config
-        broker = (load_config().get("broker") or "etoro").lower()
-    except Exception:
-        broker = "etoro"
 
-    if broker == "etoro":
-        env = os.environ.get("ETORO_ENVIRONMENT", "demo")
-        if env == "demo":
-            return True
+    HISTORICAL FIX (2026-04-27): Vorher gab es einen broker==etoro+demo
+    Bypass, der das Marktzeiten-Gate IMMER auf True setzte. Folge: 67
+    SCANNER_BUY-Versuche fuer ROKU am 27.04. zwischen 01:45-06:22 UTC,
+    weit ausserhalb US-Marktzeiten. Bypass entfernt — nun gelten echte
+    Marktzeiten fuer ALLE Broker (eToro Demo/Real, IBKR Paper/Live).
+    Wer 24/7 will (z.B. fuer Crypto-only-Bots), aktiviert das via
+    PAPER_FORCE_24x7=1 oder hat Crypto im Universum (Registry).
+    """
+    if os.environ.get("PAPER_FORCE_24x7", "0") == "1":
+        return True
 
     try:
         from app.market_scanner import ASSET_UNIVERSE
