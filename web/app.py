@@ -554,12 +554,33 @@ def _broker_status_sync():
     }
 
 
+# v36 — Broker-Status Cache: Frontend-Dashboard pollt diesen Endpoint alle
+# paar Sekunden. Ohne Cache erzeugt jede Anfrage eine neue IBKR-Connection
+# mit random clientId — das thrasht den IB-Gateway und kollidiert mit dem
+# Scheduler-Cycle (clientId=1). 60s-Cache reicht dem UI vollkommen.
+_BROKER_STATUS_CACHE: dict = {"data": None, "ts": 0}
+_BROKER_STATUS_TTL_SECONDS = 60
+
+
 @app.get("/api/broker-status")
 async def api_broker_status():
-    """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth."""
-    import asyncio
+    """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth.
+
+    v36: 60s-Cache vor IBKR-Live-Call, damit Dashboard-Polling den
+    Scheduler-Cycle nicht mit parallelen Connections stoert.
+    """
+    import asyncio, time
+    now = time.time()
+    cached = _BROKER_STATUS_CACHE.get("data")
+    cached_ts = _BROKER_STATUS_CACHE.get("ts", 0)
+    if cached is not None and (now - cached_ts) < _BROKER_STATUS_TTL_SECONDS:
+        # Cache-Hit: aktuelle Daten ohne neuen IBKR-Call
+        return {**cached, "_cached": True, "_age_s": int(now - cached_ts)}
     try:
-        return await asyncio.to_thread(_broker_status_sync)
+        result = await asyncio.to_thread(_broker_status_sync)
+        _BROKER_STATUS_CACHE["data"] = result
+        _BROKER_STATUS_CACHE["ts"] = now
+        return result
     except Exception as e:
         return {"broker": "?", "configured": False, "connected": False,
                 "error": f"{type(e).__name__}: {e}"}
