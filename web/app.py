@@ -875,13 +875,19 @@ async def api_exit_forecast(user=Depends(require_auth)):
     """Für jede offene Position: Abstand zum nächsten Exit-Trigger."""
     try:
         config = load_config()
-        client = get_broker(config, readonly=True)
-        if not client.configured:
-            return {"error": "eToro nicht konfiguriert", "positions": []}
-
-        portfolio = client.get_portfolio()
-        if not portfolio:
-            return {"error": "Portfolio nicht verfuegbar", "positions": []}
+        broker_name = (config.get("broker") or "etoro").lower()
+        # v36g: bei IBKR aus brain_cache lesen (loop-safe), sonst Live-Call
+        if broker_name == "ibkr":
+            portfolio = _portfolio_from_brain_cache()
+            if not portfolio:
+                return {"error": "Portfolio noch nicht im brain_state — warte auf ersten Bot-Cycle", "positions": []}
+        else:
+            client = get_broker(config, readonly=True)
+            if not client.configured:
+                return {"error": "Broker nicht konfiguriert", "positions": []}
+            portfolio = client.get_portfolio()
+            if not portfolio:
+                return {"error": "Portfolio nicht verfuegbar", "positions": []}
 
         parsed = [EtoroClient.parse_position(p) for p in portfolio.get("positions", [])]
 
