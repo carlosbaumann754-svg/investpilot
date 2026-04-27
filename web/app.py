@@ -2077,6 +2077,15 @@ async def api_risk(user=Depends(require_auth)):
                 # IBKR brain-cache hat _total_value direkt, sonst aus credit + invested
                 total = portfolio.get("_total_value") or (credit + sum(p["invested"] for p in positions))
 
+                # v36g — asset_class anreichern fuer calculate_exposure
+                # (vorher zeigte by_class 'unknown' fuer alle IBKR-Positionen
+                # weil parse_position keine asset_class setzt). Nutzt Symbol
+                # aus Snapshot oder conId-Reverse-Lookup ueber Cache.
+                from app.trader import _lookup_asset_class
+                for p in positions:
+                    if not p.get("asset_class"):
+                        p["asset_class"] = _lookup_asset_class(p.get("instrument_id"))
+
                 exposure = calculate_exposure(positions)
                 margin_ok, margin_reason, exposure_detail = check_margin_safety(total, positions, config)
 
