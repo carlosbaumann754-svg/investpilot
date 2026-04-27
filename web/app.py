@@ -1212,19 +1212,34 @@ async def api_pnl_periods(user=Depends(require_auth)):
         history = read_json_safe("trade_history.json") or []
 
         # Aktueller Portfolio-Snapshot fuer Hybrid-Berechnung + % Basis
+        # v36f: IBKR -> brain_cache (vermeidet Loop-Conflict aus FastAPI),
+        # eToro -> Live-API (loop-safe). Fix fuer 7-Tage = -100% Bug
+        # (current_value war 0 weil IBKR-Live-Call aus FastAPI failed).
         current_value = 0.0
         current_unrealized = 0.0
         try:
             config = load_config()
-            client = get_broker(config, readonly=True)
-            if client.configured:
-                portfolio = client.get_portfolio() or {}
-                credit = portfolio.get("credit", 0) or 0
-                positions = portfolio.get("positions", []) or []
-                current_unrealized = portfolio.get("unrealizedPnL", 0) or 0
-                parsed = [EtoroClient.parse_position(p) for p in positions]
-                total_invested = sum(p["invested"] for p in parsed)
-                current_value = credit + total_invested + current_unrealized
+            broker_name = (config.get("broker") or "etoro").lower()
+            if broker_name == "ibkr":
+                p_cache = _portfolio_from_brain_cache()
+                if p_cache:
+                    credit = float(p_cache.get("credit") or 0)
+                    current_unrealized = float(p_cache.get("unrealizedPnL") or 0)
+                    parsed = [EtoroClient.parse_position(pos)
+                              for pos in (p_cache.get("positions") or [])]
+                    total_invested = sum(p["invested"] for p in parsed)
+                    current_value = (p_cache.get("_total_value")
+                                     or (credit + total_invested + current_unrealized))
+            else:
+                client = get_broker(config, readonly=True)
+                if client.configured:
+                    portfolio = client.get_portfolio() or {}
+                    credit = portfolio.get("credit", 0) or 0
+                    positions = portfolio.get("positions", []) or []
+                    current_unrealized = portfolio.get("unrealizedPnL", 0) or 0
+                    parsed = [EtoroClient.parse_position(p) for p in positions]
+                    total_invested = sum(p["invested"] for p in parsed)
+                    current_value = credit + total_invested + current_unrealized
         except Exception as e:
             log.warning(f"PnL-Periods: Portfolio-Fetch fehlgeschlagen: {e}")
 
@@ -1276,17 +1291,21 @@ async def api_pnl_periods(user=Depends(require_auth)):
                 mode = "realized"
 
             # Equity am Anfang des Fensters fuer % Basis
+            # v36f: pct=None signalisiert dem Frontend "N/A" — vermeidet
+            # falsche -100% Anzeige wenn current_value oder start_equity
+            # zu klein ist (Pre-IBKR-Phase mit $0 Snapshots).
             start_equity = current_value - total_pnl
-            if start_equity > 0:
-                pct = (total_pnl / start_equity) * 100
+            min_basis = 1000.0  # unter $1k ist die Berechnung Pseudozahl
+            if current_value > min_basis and start_equity > min_basis:
+                pct = round((total_pnl / start_equity) * 100, 2)
             else:
-                pct = 0.0
+                pct = None  # Frontend zeigt "N/A"
 
             periods.append({
                 "key": key,
                 "label": label,
                 "pnl_usd": round(total_pnl, 2),
-                "pnl_pct": round(pct, 2),
+                "pnl_pct": pct,
                 "realized_pnl": round(r_pnl, 2),
                 "unrealized_pnl": round(current_unrealized, 2) if hybrid else 0,
                 "mode": mode,

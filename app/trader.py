@@ -1353,28 +1353,50 @@ def execute_scanner_trades(client, config, scan_results):
     return trades_executed
 
 
-def _lookup_asset_class(instrument_id):
-    """Finde Asset-Klasse fuer eine Instrument-ID."""
+def _resolve_meta_for_id(instrument_id):
+    """v36f: Universal-Lookup eToro-ID ODER IBKR-conId -> ASSET_UNIVERSE meta.
+
+    Risk/Sector-Lookup kannte vorher nur eToro-IDs. Mit IBKR-Migration
+    haben Positionen jetzt conIds (z.B. 290651477 fuer ROKU). Wir
+    konsultieren ibkr_contract_cache.json fuer Reverse-Lookup conId
+    -> etoro_id, dann ASSET_UNIVERSE.
+    """
     try:
         from app.market_scanner import ASSET_UNIVERSE
-        for symbol, info in ASSET_UNIVERSE.items():
-            if info["etoro_id"] == instrument_id:
-                return info["class"]
     except ImportError:
+        return None
+    iid = int(instrument_id) if instrument_id is not None else None
+    if iid is None:
+        return None
+    # Direkt: etoro_id matcht
+    for symbol, info in ASSET_UNIVERSE.items():
+        if int(info.get("etoro_id", -1)) == iid:
+            return info
+    # IBKR-conId Reverse-Lookup
+    try:
+        from app.config_manager import load_json
+        cache = load_json("ibkr_contract_cache.json") or {}
+        for etoro_id_str, entry in cache.items():
+            if isinstance(entry, dict) and int(entry.get("conId", -1)) == iid:
+                etoro_id = int(etoro_id_str)
+                for symbol, info in ASSET_UNIVERSE.items():
+                    if int(info.get("etoro_id", -1)) == etoro_id:
+                        return info
+    except Exception:
         pass
-    return "stocks"
+    return None
+
+
+def _lookup_asset_class(instrument_id):
+    """Finde Asset-Klasse fuer eine Instrument-ID (eToro-ID oder IBKR-conId)."""
+    meta = _resolve_meta_for_id(instrument_id)
+    return meta.get("class", "stocks") if meta else "stocks"
 
 
 def _lookup_sector(instrument_id):
-    """Finde Sektor fuer eine Instrument-ID (tech, finance, health, etc.)."""
-    try:
-        from app.market_scanner import ASSET_UNIVERSE
-        for symbol, info in ASSET_UNIVERSE.items():
-            if info["etoro_id"] == instrument_id:
-                return info.get("sector", "")
-    except ImportError:
-        pass
-    return ""
+    """Finde Sektor fuer eine Instrument-ID (eToro-ID oder IBKR-conId)."""
+    meta = _resolve_meta_for_id(instrument_id)
+    return meta.get("sector", "") if meta else ""
 
 
 # ============================================================
