@@ -328,6 +328,23 @@ def _asset_meta_dict():
     return _ASSET_META_CACHE["dict"]
 
 
+def _ibkr_conid_to_etoro_id() -> dict:
+    """Reverse-Lookup: IBKR conId -> etoro_id via data/ibkr_contract_cache.json.
+
+    v36e: Erlaubt Anreicherung von Positionen die nur die IBKR-conId
+    (=instrument_id im Snapshot) tragen, mit Symbol/Name aus ASSET_UNIVERSE.
+    """
+    try:
+        from app.config_manager import load_json
+        cache = load_json("ibkr_contract_cache.json") or {}
+        # cache-Key ist der etoro_id als string, value enthält conId
+        return {int(entry["conId"]): int(etoro_id)
+                for etoro_id, entry in cache.items()
+                if isinstance(entry, dict) and entry.get("conId")}
+    except Exception:
+        return {}
+
+
 def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
     """Reichert eine Liste von Dicts um symbol/name/asset_class/sector an.
 
@@ -342,6 +359,8 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
     mapping = _asset_meta_dict()
     if not mapping:
         return items
+    # v36e: zusaetzlicher conId -> etoro_id Lookup fuer IBKR-Positionen
+    conid_to_etoro = _ibkr_conid_to_etoro_id()
     for t in items or []:
         if not isinstance(t, dict):
             continue
@@ -353,6 +372,11 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
         if iid is None:
             continue
         meta = mapping.get(iid)
+        # IBKR-Fallback: wenn iid keine etoro_id ist, ueber conId-Cache uebersetzen
+        if not meta and conid_to_etoro:
+            etoro_id = conid_to_etoro.get(int(iid)) if str(iid).isdigit() else None
+            if etoro_id is not None:
+                meta = mapping.get(etoro_id)
         if meta:
             t.setdefault("symbol", meta["symbol"])
             t.setdefault("name", meta["name"])

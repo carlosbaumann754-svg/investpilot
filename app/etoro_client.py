@@ -212,15 +212,32 @@ class EtoroClient(BrokerBase):
 
     @staticmethod
     def parse_position(pos):
-        """Extrahiere Position-Daten mit korrekten eToro API Feldnamen."""
-        iid = pos.get("instrumentID") or pos.get("instrumentId") or pos.get("InstrumentID")
-        invested = pos.get("amount") or pos.get("investedAmount") or pos.get("Amount") or 0
-        pid = pos.get("positionID") or pos.get("positionId") or pos.get("PositionID")
+        """Extrahiere Position-Daten mit korrekten eToro API Feldnamen.
+
+        v36e: snake_case-Keys aus brain_state.performance_snapshots
+        (IBKR-Format) zusaetzlich akzeptieren — vorher hat parse_position
+        nur eToro-CamelCase gelesen, IBKR-Cache-Daten kamen als null/0
+        ins Frontend (Dashboard zeigte "#null $0.00").
+        """
+        iid = (pos.get("instrumentID") or pos.get("instrumentId")
+               or pos.get("InstrumentID") or pos.get("instrument_id"))
+        invested = (pos.get("amount") or pos.get("investedAmount")
+                    or pos.get("Amount") or pos.get("invested") or 0)
+        pid = (pos.get("positionID") or pos.get("positionId")
+               or pos.get("PositionID") or pos.get("position_id"))
         leverage = pos.get("leverage", 1)
 
+        # PnL: eToro nested unrealizedPnL.pnL, IBKR flat pnl/pnl_pct
         pnl_raw = pos.get("unrealizedPnL", {})
-        pnl_val = pnl_raw.get("pnL", 0) if isinstance(pnl_raw, dict) else 0
-        pnl_pct = (pnl_val / invested * 100) if invested > 0 else 0
+        if isinstance(pnl_raw, dict) and pnl_raw:
+            pnl_val = pnl_raw.get("pnL", 0)
+        else:
+            pnl_val = pos.get("pnl") or pos.get("unrealized_pnl") or 0
+        pnl_pct_raw = pos.get("pnl_pct")
+        if pnl_pct_raw is not None:
+            pnl_pct = pnl_pct_raw
+        else:
+            pnl_pct = (pnl_val / invested * 100) if invested > 0 else 0
 
         # Preise aus der API extrahieren (verschiedene Feldnamen je nach Endpoint)
         current_price = (
@@ -244,9 +261,14 @@ class EtoroClient(BrokerBase):
             or pos.get("timestamp") or None
         )
 
+        # v36e: Symbol passthrough — IBKR-Positionen haben den Ticker, sollte
+        # bis ins Frontend durchgereicht werden statt nur die conId-Nummer.
+        symbol = pos.get("symbol") or pos.get("Symbol") or None
+
         return {
             "instrument_id": iid,
             "position_id": pid,
+            "symbol": symbol,
             "invested": invested,
             "pnl": round(pnl_val, 2),
             "pnl_pct": round(pnl_pct, 2),

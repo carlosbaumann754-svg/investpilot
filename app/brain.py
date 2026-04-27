@@ -69,12 +69,18 @@ def record_snapshot(portfolio):
         "unrealized_pnl": round(unrealized, 2),
         "total_value": round(credit + total_invested + unrealized, 2),
         "num_positions": len(positions),
+        # v36e: symbol + entry_price + current_price mit in den Snapshot,
+        # damit Dashboard nicht "#null" zeigen muss (vorher war nur conId/iid
+        # gespeichert, was im Frontend unleserlich ist).
         "positions": [{
             "instrument_id": p["instrument_id"],
+            "symbol": p.get("symbol"),
             "invested": p["invested"],
             "pnl": p["pnl"],
             "pnl_pct": p["pnl_pct"],
             "leverage": p["leverage"],
+            "entry_price": p.get("entry_price"),
+            "current_price": p.get("current_price"),
         } for p in parsed],
     }
 
