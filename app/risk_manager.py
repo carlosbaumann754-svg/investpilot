@@ -272,10 +272,14 @@ def check_drawdown_limits():
             state["paused_until"] = None
             _save_risk_state(state)
 
-    # Tages-Drawdown
-    if state["daily_pnl_pct"] <= daily_limit:
-        reason = (f"TAGES-DRAWDOWN-STOP: {state['daily_pnl_pct']:.1f}% "
-                  f"(Limit: {daily_limit}%, Verlust: ${state['daily_pnl_usd']:,.2f})")
+    # v36f: None-Safe — wenn Baseline frisch geresetted wurde (z.B. nach
+    # Broker-Migration, IBKR-Cutover) sind die *_pnl_pct Felder None bis
+    # zum naechsten Cycle-Update. Treat None als 0% (kein Drawdown).
+    daily_pct = state.get("daily_pnl_pct")
+    daily_usd = state.get("daily_pnl_usd") or 0
+    if daily_pct is not None and daily_pct <= daily_limit:
+        reason = (f"TAGES-DRAWDOWN-STOP: {daily_pct:.1f}% "
+                  f"(Limit: {daily_limit}%, Verlust: ${daily_usd:,.2f})")
         log.warning(f"  {reason}")
         # Pause bis naechsten Tag 09:00
         tomorrow = datetime.now().replace(hour=9, minute=0, second=0) + timedelta(days=1)
@@ -284,10 +288,12 @@ def check_drawdown_limits():
         _save_risk_state(state)
         return False, reason
 
-    # Wochen-Drawdown
-    if state["weekly_pnl_pct"] <= weekly_limit:
-        reason = (f"WOCHEN-DRAWDOWN-STOP: {state['weekly_pnl_pct']:.1f}% "
-                  f"(Limit: {weekly_limit}%, Verlust: ${state['weekly_pnl_usd']:,.2f})")
+    # Wochen-Drawdown (None-safe wie Daily)
+    weekly_pct = state.get("weekly_pnl_pct")
+    weekly_usd = state.get("weekly_pnl_usd") or 0
+    if weekly_pct is not None and weekly_pct <= weekly_limit:
+        reason = (f"WOCHEN-DRAWDOWN-STOP: {weekly_pct:.1f}% "
+                  f"(Limit: {weekly_limit}%, Verlust: ${weekly_usd:,.2f})")
         log.warning(f"  {reason}")
         # Pause bis naechsten Montag
         days_to_monday = (7 - datetime.now().weekday()) % 7 or 7
