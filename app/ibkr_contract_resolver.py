@@ -159,16 +159,33 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
             f"Asset zuerst via market_scanner.ASSET_UNIVERSE oder asset_discovery aufnehmen."
         )
 
-    # Hints aus Registry holen — Single Source of Truth fuer SecType/Exchange/Currency
-    hints = _registry_hints(meta["class"])
-    sec_type = hints["secType"]
-    # Symbol-Meta darf Registry-Defaults overrulen (per-Symbol Overrides moeglich)
-    exchange = meta.get("ibkr_exchange") or hints["exchange"]
-    # Currency: explicit param > Symbol-Meta-Override > Registry-Default
-    if currency == "USD" and (meta.get("ibkr_currency") or hints["currency"]) != "USD":
-        # User hat default USD nicht explizit overruled -> Registry-Currency nehmen
-        currency = meta.get("ibkr_currency") or hints["currency"]
-    symbol = meta["symbol"]
+    # v36d — ibkr_override: Per-Symbol-Routing fuer Assets, deren Standard-
+    # Resolution auf IBKR nicht funktioniert (z.B. Commodities: eToro tradet
+    # direkt CFD, IBKR hat keine CMDTY-Definition fuer GOLD/COPPER/etc. ->
+    # ETF-Proxy auf ARCA). Override hat hoechste Prioritaet vor Registry +
+    # per-Symbol Hints.
+    override = meta.get("ibkr_override") or {}
+    if override:
+        sec_type = override.get("secType", "STK")
+        exchange = override.get("exchange", "SMART")
+        symbol = override["symbol"]  # required: das echte IBKR-Ticker
+        if currency == "USD" and override.get("currency"):
+            currency = override["currency"]
+        log.info(
+            "ibkr_override: %s -> %s (%s/%s)",
+            meta["symbol"], symbol, sec_type, exchange,
+        )
+    else:
+        # Hints aus Registry holen — Single Source of Truth fuer SecType/Exchange/Currency
+        hints = _registry_hints(meta["class"])
+        sec_type = hints["secType"]
+        # Symbol-Meta darf Registry-Defaults overrulen (per-Symbol Overrides moeglich)
+        exchange = meta.get("ibkr_exchange") or hints["exchange"]
+        # Currency: explicit param > Symbol-Meta-Override > Registry-Default
+        if currency == "USD" and (meta.get("ibkr_currency") or hints["currency"]) != "USD":
+            # User hat default USD nicht explizit overruled -> Registry-Currency nehmen
+            currency = meta.get("ibkr_currency") or hints["currency"]
+        symbol = meta["symbol"]
 
     # 3. Vorlaeufiger Contract bauen
     if sec_type == "STK":

@@ -87,12 +87,27 @@ ASSET_UNIVERSE = {
     "AVAX":  {"etoro_id": 100072, "yf": "AVAX-USD", "class": "crypto", "name": "Avalanche",  "sector": "crypto_alt"},
     "LINK":  {"etoro_id": 100010, "yf": "LINK-USD", "class": "crypto", "name": "Chainlink",  "sector": "crypto_alt"},
     "MATIC": {"etoro_id": 100067, "yf": "MATIC-USD","class": "crypto", "name": "Polygon",    "sector": "crypto_alt"},
-    # --- Commodities (via eToro CFDs) ---
-    "GOLD":  {"etoro_id": 5002,  "yf": "GC=F",   "class": "commodities", "name": "Gold"},
-    "SILVER":{"etoro_id": 5003,  "yf": "SI=F",   "class": "commodities", "name": "Silver"},
-    "OIL":   {"etoro_id": 5001,  "yf": "CL=F",   "class": "commodities", "name": "Crude Oil"},
-    "NGAS":  {"etoro_id": 5007,  "yf": "NG=F",   "class": "commodities", "name": "Natural Gas"},
-    "COPPER":{"etoro_id": 5009,  "yf": "HG=F",   "class": "commodities", "name": "Copper"},
+    # --- Commodities (via eToro CFDs auf eToro; via ETF-Proxies auf IBKR) ---
+    # v36d (28.04.2026): ibkr_override Feld ergaenzt. eToro tradet direkt CFD,
+    # IBKR Paper hat keine CMDTY/NYMEX-Definition fuer diese Symbole — daher
+    # routen wir bei IBKR ueber liquide ETFs auf ARCA (gleiche Asset-Exposure,
+    # echte Settlement, kein Futures-Roll-Risiko fuer Bot-Position-Sizing).
+    # yfinance-Symbol bleibt das Future fuer Technische Analyse.
+    "GOLD":  {"etoro_id": 5002,  "yf": "GC=F",   "class": "commodities", "name": "Gold",
+              "ibkr_override": {"symbol": "GLD",  "secType": "STK", "exchange": "ARCA",
+                                "name": "SPDR Gold Trust"}},
+    "SILVER":{"etoro_id": 5003,  "yf": "SI=F",   "class": "commodities", "name": "Silver",
+              "ibkr_override": {"symbol": "SLV",  "secType": "STK", "exchange": "ARCA",
+                                "name": "iShares Silver Trust"}},
+    "OIL":   {"etoro_id": 5001,  "yf": "CL=F",   "class": "commodities", "name": "Crude Oil",
+              "ibkr_override": {"symbol": "USO",  "secType": "STK", "exchange": "ARCA",
+                                "name": "United States Oil Fund"}},
+    "NGAS":  {"etoro_id": 5007,  "yf": "NG=F",   "class": "commodities", "name": "Natural Gas",
+              "ibkr_override": {"symbol": "UNG",  "secType": "STK", "exchange": "ARCA",
+                                "name": "United States Natural Gas Fund"}},
+    "COPPER":{"etoro_id": 5009,  "yf": "HG=F",   "class": "commodities", "name": "Copper",
+              "ibkr_override": {"symbol": "CPER", "secType": "STK", "exchange": "ARCA",
+                                "name": "United States Copper Index Fund"}},
     # --- Forex ---
     "EURUSD":{"etoro_id": 1,     "yf": "EURUSD=X","class": "forex", "name": "EUR/USD"},
     "GBPUSD":{"etoro_id": 2,     "yf": "GBPUSD=X","class": "forex", "name": "GBP/USD"},
