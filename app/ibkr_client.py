@@ -417,18 +417,41 @@ class IbkrBroker(BrokerBase):
         """
         try:
             ib = self._get_ib()
-            positions = ib.positions()
+            # v36h: ib.portfolio() statt ib.positions() — liefert PortfolioItem
+            # mit unrealizedPNL/marketPrice/marketValue pro Position. Vorher
+            # zeigte Dashboard P/L $0.00 fuer alle Positionen weil
+            # ib.positions() (Position) keine PnL-Felder hat.
+            try:
+                items = ib.portfolio()  # liste von PortfolioItem
+            except Exception:
+                items = []
+            if not items:
+                # Fallback: positions() hat zumindest Contract+Qty+AvgCost
+                items = ib.positions()
 
             mapped_positions = []
-            for p in positions:
+            for p in items:
+                contract = getattr(p, "contract", None)
+                qty = float(getattr(p, "position", 0))
+                avg_cost = float(getattr(p, "averageCost", 0) or getattr(p, "avgCost", 0) or 0)
+                # PortfolioItem hat marketPrice, marketValue, unrealizedPNL
+                mkt_price = getattr(p, "marketPrice", None)
+                unreal = getattr(p, "unrealizedPNL", None)
+                cost_basis = qty * avg_cost
+                pnl_pct = (unreal / cost_basis * 100) if (unreal is not None and cost_basis) else 0
                 mapped_positions.append({
-                    "instrumentID": getattr(p.contract, "conId", None),
-                    "symbol": getattr(p.contract, "symbol", None),
-                    "amount": float(p.position) * float(p.avgCost),
-                    "positionID": str(getattr(p.contract, "conId", "")),
+                    "instrumentID": getattr(contract, "conId", None),
+                    "symbol": getattr(contract, "symbol", None),
+                    "amount": cost_basis,
+                    "positionID": str(getattr(contract, "conId", "")),
                     "leverage": 1,
-                    "openRate": float(p.avgCost),
-                    "isBuy": p.position > 0,
+                    "openRate": avg_cost,
+                    "currentRate": float(mkt_price) if mkt_price is not None else None,
+                    "pnl": float(unreal) if unreal is not None else 0,
+                    "pnl_pct": round(pnl_pct, 2),
+                    "isBuy": qty > 0,
+                    # eToro-kompatible PnL-Struct fuer parse_position
+                    "unrealizedPnL": {"pnL": float(unreal) if unreal is not None else 0},
                 })
 
             equity = self._get_account_value("NetLiquidation") or 0.0
