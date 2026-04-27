@@ -60,6 +60,21 @@ def record_snapshot(portfolio):
     parsed = [EtoroClient.parse_position(pos) for pos in positions]
     total_invested = sum(p["invested"] for p in parsed)
 
+    # v36g — IBKR-Korrektur fuer Total-Value:
+    # eToro: `credit` = reines Cash. total = credit + cost_basis + pnl ✓
+    # IBKR: `credit` = AvailableFunds (Cash MINUS InitialMargin-Reserve, also
+    #       Trading-Buying-Power). Zusaetzlich liefert IBKR _equity =
+    #       NetLiquidation (= echtes Total-Equity, was wir wollen).
+    # Vorher: total = AvailableFunds + cost_basis + pnl ueberzaehlte um die
+    #         Margin-Komponente (~$400k bei $493k Positionen).
+    # Jetzt: nutze _equity (NetLiquidation) direkt wenn verfuegbar.
+    ibkr_equity = portfolio.get("_equity")  # NetLiquidation aus IBKR
+    if ibkr_equity is not None and ibkr_equity > 0:
+        total_value = float(ibkr_equity)
+    else:
+        # eToro-Pfad: traditionelle Berechnung
+        total_value = credit + total_invested + unrealized
+
     snapshot = {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "time": datetime.now().strftime("%H:%M"),
@@ -67,7 +82,7 @@ def record_snapshot(portfolio):
         "credit": round(credit, 2),
         "invested": round(total_invested, 2),
         "unrealized_pnl": round(unrealized, 2),
-        "total_value": round(credit + total_invested + unrealized, 2),
+        "total_value": round(total_value, 2),
         "num_positions": len(positions),
         # v36e: symbol + entry_price + current_price mit in den Snapshot,
         # damit Dashboard nicht "#null" zeigen muss (vorher war nur conId/iid

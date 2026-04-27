@@ -673,11 +673,24 @@ async def api_portfolio(user=Depends(require_auth)):
         # Symbol/Name aus ASSET_UNIVERSE anreichern (Dashboard-freundlich)
         enrich_with_asset_meta(parsed)
 
+        # v36g — Total-Value: bei IBKR den NetLiquidation-Wert aus dem
+        # Brain-Snapshot bzw. _equity-Feld nehmen (= echtes Total-Equity).
+        # Vorher hat credit + invested + pnl ueberrechnet weil credit bei
+        # IBKR = AvailableFunds (Cash minus Margin-Reserve), nicht reines Cash.
+        cached_total = portfolio.get("_total_value")
+        ibkr_equity = portfolio.get("_equity")
+        if ibkr_equity and ibkr_equity > 0:
+            total_value = float(ibkr_equity)
+        elif cached_total and cached_total > 0:
+            total_value = float(cached_total)
+        else:
+            total_value = credit + total_invested + unrealized_pnl
+
         return {
             "credit": round(credit, 2),
             "invested": round(total_invested, 2),
             "unrealized_pnl": round(unrealized_pnl, 2),
-            "total_value": round(credit + total_invested + unrealized_pnl, 2),
+            "total_value": round(total_value, 2),
             "num_positions": len(positions),
             "positions": parsed,
         }
