@@ -310,6 +310,15 @@
                     <strong style="color:#f87171;">FEHLER:</strong> <span id="wfo-error-msg">--</span>
                 </div>
             </div>
+
+            <!-- Run-Button (Manual Trigger) -->
+            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <button onclick="wfoRunNow()" id="wfo-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
+                        title="Startet einen vollstaendigen WFO-Lauf JETZT (statt zu warten auf Sa 03.05.). Runtime ca. 10-15 Min, laeuft im Hintergrund. Status-Card aktualisiert sich live.">
+                    ▶ WFO jetzt starten (~10-15 Min)
+                </button>
+                <span id="wfo-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
+            </div>
         </div>
 
         <!-- WITHDRAWAL PLANNER -->

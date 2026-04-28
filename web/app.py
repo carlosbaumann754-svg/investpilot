@@ -4033,6 +4033,32 @@ async def api_wfo_status():
         return {"state": "error", "error": str(e)}
 
 
+@app.post("/api/wfo/run")
+async def api_wfo_run(user=Depends(require_auth)):
+    """Triggert einen vollstaendigen WFO-Lauf in einem Background-Thread.
+
+    Lauf dauert ~10-15 Min (144 Backtests). Frontend pollt /api/wfo/status fuer
+    Fortschritt. Auth required (kein anonymer Trigger).
+    """
+    import threading
+    from app.walk_forward_optimizer import read_status, write_status, run_walk_forward
+    cur = read_status()
+    if cur.get("state") == "running":
+        return {"ok": False, "error": "WFO laeuft bereits", "current": cur}
+    write_status("running", phase="starting",
+                 message="Lauf gestartet — laedt Histories...")
+
+    def _bg():
+        try:
+            run_walk_forward()
+        except Exception as e:
+            log.exception("WFO background run failed")
+            write_status("error", error=f"{type(e).__name__}: {e}")
+
+    threading.Thread(target=_bg, daemon=True, name="wfo-runner").start()
+    return {"ok": True, "message": "WFO-Lauf gestartet, ca. 10-15 Min Runtime"}
+
+
 @app.get("/api/insider/scores")
 def api_insider_scores():
     """Insider-Score fuer alle Symbole im aktuellen Bot-Universum.

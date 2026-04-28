@@ -1744,6 +1744,33 @@ async function askQuestion() {
 // =====================================================================
 // WALK-FORWARD-OPTIMIZATION (E1)
 // =====================================================================
+async function wfoRunNow() {
+    const btn = document.getElementById('wfo-run-btn');
+    const msg = document.getElementById('wfo-run-msg');
+    if (!confirm('WFO-Lauf JETZT starten?\n\n' +
+                 '• 144 Backtests (24 Param-Kombos x 6 Windows)\n' +
+                 '• Runtime ca. 10-15 Min im Hintergrund\n' +
+                 '• Bot tradet weiter, kein Live-Risiko\n' +
+                 '• Status-Card aktualisiert sich live')) return;
+    btn.disabled = true;
+    msg.textContent = 'Starte...';
+    try {
+        const r = await apiFetch('/api/wfo/run', {method: 'POST'});
+        const d = await r.json();
+        if (d.ok) {
+            msg.textContent = '✓ ' + d.message;
+            setTimeout(loadWfoStatus, 1000);
+        } else {
+            msg.textContent = '✗ ' + (d.error || 'Unbekannter Fehler');
+            btn.disabled = false;
+        }
+    } catch (e) {
+        msg.textContent = '✗ ' + e.message;
+        btn.disabled = false;
+    }
+}
+
+
 async function loadWfoStatus() {
     try {
         const r = await apiFetch('/api/wfo/status');
@@ -1754,7 +1781,10 @@ async function loadWfoStatus() {
         const running = document.getElementById('wfo-running-block');
         const done = document.getElementById('wfo-done-block');
         const errBlock = document.getElementById('wfo-error-block');
+        const runBtn = document.getElementById('wfo-run-btn');
         idle.style.display = running.style.display = done.style.display = errBlock.style.display = 'none';
+        // Run-Button nur deaktivieren waehrend running
+        if (runBtn) runBtn.disabled = (d.state === 'running');
 
         if (d.state === 'idle' || !d.state) {
             summary.innerHTML = 'Status: <strong>idle</strong> &middot; bereit fuer ersten Run';
@@ -1765,10 +1795,13 @@ async function loadWfoStatus() {
             document.getElementById('wfo-param-count').textContent = cfg.param_combinations || '--';
             document.getElementById('wfo-window-count').textContent = cfg.windows_planned || '--';
         } else if (d.state === 'running') {
-            summary.innerHTML = 'Status: <strong style="color:#fbbf24;">RUNNING</strong>';
+            const phase = d.phase || 'running';
+            summary.innerHTML = 'Status: <strong style="color:#fbbf24;">RUNNING</strong> &middot; Phase: ' + phase;
             running.style.display = 'block';
-            document.getElementById('wfo-current-window').textContent = d.current_window || '?';
-            document.getElementById('wfo-total-windows').textContent = (d.windows || []).length || '?';
+            document.getElementById('wfo-current-window').textContent =
+                (d.current_window != null ? d.current_window : '0');
+            document.getElementById('wfo-total-windows').textContent =
+                (d.windows_total || (d.windows || []).length || '?');
         } else if (d.state === 'done') {
             const agg = d.aggregate || {};
             const meanOos = agg.mean_oos_sharpe;
