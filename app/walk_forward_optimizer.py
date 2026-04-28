@@ -222,13 +222,16 @@ def _score_metrics(trades: list, position_sizing: Optional[dict] = None) -> dict
         return {"sharpe": None, "trades": 0, "max_dd": None, "pf": None,
                 "win_rate": None, "annual_return": None}
     m = calculate_metrics(trades, position_sizing=position_sizing)
+    # v37b: calculate_metrics liefert die Felder _pct-suffixed
+    # (max_drawdown_pct, win_rate_pct, annual_return_pct). Vorher haben
+    # wir die nicht-suffixed Keys gelesen -> immer None.
     return {
         "sharpe": m.get("sharpe_ratio"),
         "trades": m.get("total_trades", 0),
-        "max_dd": m.get("max_drawdown"),
+        "max_dd": m.get("max_drawdown_pct"),
         "pf": m.get("profit_factor"),
-        "win_rate": m.get("win_rate"),
-        "annual_return": m.get("annual_return"),
+        "win_rate": m.get("win_rate_pct"),
+        "annual_return": m.get("annual_return_pct"),
     }
 
 
