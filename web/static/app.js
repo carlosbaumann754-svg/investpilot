@@ -1722,6 +1722,7 @@ async function askQuestion() {
     loadV15Sizing();
     loadBrokerStatus();
     loadWithdrawalStatus();
+    loadWfoStatus();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1729,6 +1730,7 @@ async function askQuestion() {
     setInterval(loadV15Sizing, 60000); // v15 Sizing/DCA alle 1 Min
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
     setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
+    setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
@@ -1739,6 +1741,71 @@ async function askQuestion() {
 /**
  * Withdrawal Planner — Status laden + Form-Handling.
  */
+// =====================================================================
+// WALK-FORWARD-OPTIMIZATION (E1)
+// =====================================================================
+async function loadWfoStatus() {
+    try {
+        const r = await apiFetch('/api/wfo/status');
+        if (!r.ok) return;
+        const d = await r.json();
+        const summary = document.getElementById('wfo-state-summary');
+        const idle = document.getElementById('wfo-idle-block');
+        const running = document.getElementById('wfo-running-block');
+        const done = document.getElementById('wfo-done-block');
+        const errBlock = document.getElementById('wfo-error-block');
+        idle.style.display = running.style.display = done.style.display = errBlock.style.display = 'none';
+
+        if (d.state === 'idle' || !d.state) {
+            summary.innerHTML = 'Status: <strong>idle</strong> &middot; bereit fuer ersten Run';
+            idle.style.display = 'block';
+            const cfg = d.config || {};
+            document.getElementById('wfo-next-run').textContent = d.next_run_planned || '--';
+            document.getElementById('wfo-approach').textContent = cfg.approach || '--';
+            document.getElementById('wfo-param-count').textContent = cfg.param_combinations || '--';
+            document.getElementById('wfo-window-count').textContent = cfg.windows_planned || '--';
+        } else if (d.state === 'running') {
+            summary.innerHTML = 'Status: <strong style="color:#fbbf24;">RUNNING</strong>';
+            running.style.display = 'block';
+            document.getElementById('wfo-current-window').textContent = d.current_window || '?';
+            document.getElementById('wfo-total-windows').textContent = (d.windows || []).length || '?';
+        } else if (d.state === 'done') {
+            const agg = d.aggregate || {};
+            const meanOos = agg.mean_oos_sharpe;
+            const meanIs = agg.mean_is_sharpe;
+            const decay = (meanIs && meanOos) ? (meanOos / meanIs * 100) : null;
+            summary.innerHTML = 'Status: <strong style="color:#34d399;">DONE</strong> &middot; ' +
+                'Mean OOS-Sharpe <strong>' + (meanOos != null ? meanOos.toFixed(2) : '--') + '</strong>' +
+                (decay != null ? ' (Retention ' + decay.toFixed(0) + '% vs IS)' : '');
+            done.style.display = 'block';
+            const tbody = document.getElementById('wfo-windows-tbody');
+            tbody.innerHTML = '';
+            (d.windows || []).forEach(w => {
+                const isS = w.is_score, oos = w.oos_score;
+                const dec = (isS && oos) ? (oos / isS * 100).toFixed(0) + '%' : '--';
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+                tr.innerHTML = '<td style="padding:6px 4px;">W' + w.idx + ' (' +
+                    (w.test_start || '').slice(0,7) + ')</td>' +
+                    '<td style="text-align:right;padding:6px 4px;">' + (isS != null ? isS.toFixed(2) : '--') + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;font-weight:600;">' + (oos != null ? oos.toFixed(2) : '--') + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;">' + dec + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;opacity:0.7;">' + (w.oos_trades || 0) + '</td>';
+                tbody.appendChild(tr);
+            });
+            document.getElementById('wfo-aggregate-summary').innerHTML =
+                'Letzter Run: <strong>' + (d.last_run || '').slice(0, 16) + '</strong>';
+        } else if (d.state === 'error') {
+            summary.innerHTML = 'Status: <strong style="color:#f87171;">ERROR</strong>';
+            errBlock.style.display = 'block';
+            document.getElementById('wfo-error-msg').textContent = d.error || 'Unbekannter Fehler';
+        }
+    } catch (e) {
+        console.warn('WFO status load failed:', e);
+    }
+}
+
+
 async function loadWithdrawalStatus() {
     const statusEl = document.getElementById('wd-status');
     const detailsEl = document.getElementById('wd-details');

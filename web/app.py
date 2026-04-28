@@ -4012,6 +4012,27 @@ async def api_ask(req: AskRequest, user=Depends(require_auth)):
 # Aktivierung der Insider-Logik im Bot selbst weiterhin via Config-Flag
 # scanner.insider_signal_enabled (DEFAULT FALSE).
 
+# ============================================================
+# WALK-FORWARD-OPTIMIZATION (E1, vorgezogen aus Q1 Foundation)
+# ============================================================
+# Liefert Status-Snapshot fuer Dashboard-Card. Phase 1 (28.04.) liefert nur
+# Konfiguration + 'idle' State. Phase 2 (Do/Fr) fuellt Pro-Window-Resultate.
+# Erster vollstaendiger Run geplant Sa 03.05.2026.
+
+@app.get("/api/wfo/status")
+async def api_wfo_status():
+    """Walk-Forward-Optimization Status fuer Dashboard.
+
+    Schreibt KEINE IBKR-Calls (loop-safe), liest nur data/wfo_status.json.
+    """
+    try:
+        from app.walk_forward_optimizer import read_status
+        return read_status()
+    except Exception as e:
+        log.warning(f"WFO status read failed: {e}")
+        return {"state": "error", "error": str(e)}
+
+
 @app.get("/api/insider/scores")
 def api_insider_scores():
     """Insider-Score fuer alle Symbole im aktuellen Bot-Universum.

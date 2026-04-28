@@ -264,6 +264,54 @@
             </div>
         </div>
 
+        <!-- WALK-FORWARD-OPTIMIZATION (E1, vorgezogen) -->
+        <div class="card" id="wfo-card">
+            <div class="card-title">Walk-Forward-Optimization (E1)<span class="tip" data-tip="Ehrliche Sharpe-Schaetzung VOR Real-Money. Statt einmal auf 4 Jahren zu optimieren (das ueberfittet), splitten wir die Historie in 6 rolling Windows: 24 Monate Train + 6 Monate Test, jedes Mal um 6 Monate vorgeschoben. Pro Window: optimiere auf Train, evaluiere ehrlich auf nie-gesehenen Test-Daten. Aggregiere alle 6 OOS-Sharpe-Werte. Konsistent hoch -> echte Edge. Zerfallen sie -> Overfitting entdeckt VOR Cutover. Roadmap-Item E1 aus Q1 Foundation, vorgezogen weil TRADING-NULL-RISK (pure Backtester-Erweiterung).">?</span></div>
+            <div id="wfo-state-summary" class="card-sub" style="margin-bottom:10px;">Lade Status...</div>
+
+            <!-- Status-spezifische Inhalte -->
+            <div id="wfo-idle-block" style="display:none;">
+                <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5;">
+                    <strong style="color:#818cf8;">Status: Noch nicht ausgefuehrt.</strong>
+                    Erster vollstaendiger Lauf geplant <strong id="wfo-next-run">--</strong>.
+                    Phase 1 (Framework + Window-Builder) ist live, Phase 2 (Pro-Window-Backtests + Aggregation) wird Mi-Fr gebaut.
+                </div>
+                <div style="font-size:13px;line-height:1.7;">
+                    <div><strong>Approach:</strong> <span id="wfo-approach">--</span></div>
+                    <div><strong>Param-Grid:</strong> <span id="wfo-param-count">--</span> Kombinationen</div>
+                    <div><strong>Windows:</strong> <span id="wfo-window-count">--</span> rolling (24Mo Train + 6Mo Test, 6Mo Step)</div>
+                </div>
+            </div>
+
+            <div id="wfo-running-block" style="display:none;">
+                <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:10px 12px;font-size:13px;">
+                    <strong style="color:#fbbf24;">RUNNING:</strong> Window <span id="wfo-current-window">--</span> von <span id="wfo-total-windows">--</span>
+                </div>
+            </div>
+
+            <div id="wfo-done-block" style="display:none;">
+                <div id="wfo-aggregate-summary" class="card-sub" style="margin-bottom:8px;"></div>
+                <table style="width:100%;font-size:13px;border-collapse:collapse;">
+                    <thead>
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
+                            <th style="text-align:left;padding:6px 4px;">Window</th>
+                            <th style="text-align:right;padding:6px 4px;">IS Sharpe</th>
+                            <th style="text-align:right;padding:6px 4px;">OOS Sharpe</th>
+                            <th style="text-align:right;padding:6px 4px;">Decay</th>
+                            <th style="text-align:right;padding:6px 4px;">OOS Trades</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wfo-windows-tbody"></tbody>
+                </table>
+            </div>
+
+            <div id="wfo-error-block" style="display:none;">
+                <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px 12px;font-size:13px;">
+                    <strong style="color:#f87171;">FEHLER:</strong> <span id="wfo-error-msg">--</span>
+                </div>
+            </div>
+        </div>
+
         <!-- WITHDRAWAL PLANNER -->
         <div class="card" id="withdrawal-card">
             <div class="card-title">Entnahme-Planer<span class="tip" data-tip="Schrittweise Liquidation fuer groessere Ausgaben (Auto, Haus, etc.). Bot reduziert Risiko von 'alles am Tief verkauft' durch zeitliche Verteilung. MVP-Status: Plan-Persistenz aktiv, Trader-Integration folgt in W8 (heute keine automatischen Sells).">?</span></div>
