@@ -311,10 +311,30 @@
                 </div>
             </div>
 
+            <!-- HISTORY Time-Series Sparkline -->
+            <div id="wfo-history-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;">
+                    <strong>Trend</strong> &middot; <span id="wfo-hist-count">--</span> Runs &middot;
+                    naechster Auto-Run <span id="wfo-hist-next">--</span>
+                </div>
+                <table style="width:100%;font-size:12px;border-collapse:collapse;">
+                    <thead style="opacity:0.7;">
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                            <th style="text-align:left;padding:4px 4px;">Run</th>
+                            <th style="text-align:right;padding:4px 4px;">OOS-Sharpe</th>
+                            <th style="text-align:right;padding:4px 4px;">Decay</th>
+                            <th style="text-align:right;padding:4px 4px;">Stability</th>
+                            <th style="text-align:right;padding:4px 4px;">Trades</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wfo-hist-tbody"></tbody>
+                </table>
+            </div>
+
             <!-- Run-Button (Manual Trigger) -->
             <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
                 <button onclick="wfoRunNow()" id="wfo-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
-                        title="Startet einen vollstaendigen WFO-Lauf JETZT (statt zu warten auf Sa 03.05.). Runtime ca. 10-15 Min, laeuft im Hintergrund. Status-Card aktualisiert sich live.">
+                        title="Startet einen vollstaendigen WFO-Lauf JETZT. Runtime ca. 10-15 Min, laeuft im Hintergrund. Auto-Lauf erfolgt 1. Sonntag jedes Monats 12:00 UTC via GitHub Action.">
                     ▶ WFO jetzt starten (~10-15 Min)
                 </button>
                 <span id="wfo-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>

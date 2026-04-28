@@ -97,6 +97,13 @@ ML_TRAINING_OUTPUT_FILES = [
 ML_TRAINING_JOBLIB_FILE = "ml_model.joblib"
 ML_TRAINING_WEIGHTS_GIST_NAME = "ml_model_weights.json"
 
+# Walk-Forward-Optimization (E1, monatliche GH-Action). Persistiert wfo_status
+# (current state), wfo_history (time-series of all runs).
+WFO_OUTPUT_FILES = [
+    "wfo_status.json",
+    "wfo_history.json",
+]
+
 # Dateien die der Discovery-Runner (GitHub Action) modifiziert. Werden
 # isoliert gepusht damit parallele Backtest/Optimizer/ML-Laeufe sich nicht
 # ueberschreiben. Der Render-Watchdog appliziert zusaetzlich die
@@ -1500,3 +1507,118 @@ def restore_named_snapshot(filename: str) -> dict:
     except Exception as e:
         log.error(f"restore_named_snapshot Fehler: {e}", exc_info=True)
         return {"error": str(e)}
+
+
+
+# ============================================================
+# WALK-FORWARD-OPTIMIZATION (v37c, monatliche GH-Action)
+# ============================================================
+
+def backup_wfo_results():
+    """Push WFO-Output-Dateien in den Gist (analog backup_backtest_results)."""
+    token = _get_token()
+    if not token or not requests:
+        log.warning("backup_wfo_results: Kein GITHUB_TOKEN")
+        return False
+
+    files = {}
+    for filename in WFO_OUTPUT_FILES:
+        data = load_json(filename)
+        if data is not None:
+            files[filename] = {
+                "content": json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            }
+
+    if not files:
+        log.warning("backup_wfo_results: Keine WFO-Output-Dateien gefunden")
+        return False
+
+    files["_wfo_meta.json"] = {
+        "content": json.dumps({
+            "last_wfo_push": datetime.now().isoformat(),
+            "files": list(files.keys()),
+            "source": "github-action",
+        }, indent=2)
+    }
+
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            log.warning("backup_wfo_results: Kein Backup-Gist gefunden")
+            return False
+        resp = requests.patch(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            json={"files": files},
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"backup_wfo_results OK ({len(files)} Dateien)")
+            return True
+        log.warning(f"backup_wfo_results: HTTP {resp.status_code}")
+        return False
+    except Exception as e:
+        log.warning(f"backup_wfo_results Fehler: {e}")
+        return False
+
+
+WFO_LAST_APPLIED_FILE = "last_applied_wfo_push.json"
+
+
+def check_and_reload_wfo_output():
+    """Watchdog: liest wfo_status/_wfo_meta aus Gist und reloaded lokal.
+
+    Wird vom Scheduler-Loop alle 5 Minuten aufgerufen. Vergleicht den
+    last_wfo_push-Timestamp im Gist mit dem zuletzt verarbeiteten lokalen
+    Wert. Bei neuem Push: Files reloaden + Telegram-Alert pruefen.
+    """
+    token = _get_token()
+    if not token or not requests:
+        return False
+    try:
+        gist_id = _find_backup_gist(token)
+        if not gist_id:
+            return False
+        resp = requests.get(
+            f"{GITHUB_API}/gists/{gist_id}",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return False
+        files = resp.json().get("files") or {}
+        meta_file = files.get("_wfo_meta.json")
+        if not meta_file:
+            return False
+        meta = json.loads(meta_file.get("content") or "{}")
+        gist_push = meta.get("last_wfo_push")
+        if not gist_push:
+            return False
+
+        last_applied = load_json(WFO_LAST_APPLIED_FILE) or {}
+        if last_applied.get("last_wfo_push") == gist_push:
+            return False  # bereits angewendet
+
+        # Reload Files
+        for filename in WFO_OUTPUT_FILES:
+            f = files.get(filename)
+            if f and f.get("content"):
+                try:
+                    data = json.loads(f["content"])
+                    save_json(filename, data)
+                except Exception as e:
+                    log.warning(f"WFO reload {filename} failed: {e}")
+        save_json(WFO_LAST_APPLIED_FILE, {"last_wfo_push": gist_push,
+                                           "applied_at": datetime.now().isoformat()})
+        log.info(f"WFO-Reload OK (Gist push {gist_push})")
+
+        # Telegram-Alert pruefen (3 Hard-Gates)
+        try:
+            from app.alerts import check_wfo_alerts
+            check_wfo_alerts()
+        except Exception as e:
+            log.warning(f"WFO alert check failed: {e}")
+        return True
+    except Exception as e:
+        log.warning(f"check_and_reload_wfo_output Fehler: {e}")
+        return False

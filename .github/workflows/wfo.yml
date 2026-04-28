@@ -1,0 +1,88 @@
+name: Walk-Forward-Optimization (E1)
+
+# Laeuft auf:
+#   - manuellem Trigger (Dashboard /api/wfo/run via workflow_dispatch)
+#   - monatlichem Cron: 1. Sonntag jedes Monats 12:00 UTC (14:00 CEST)
+#     -> 4-6h nach Backtest (So 06:00 UTC) am 1. So
+#     -> Reihenfolge: Optimizer (03 UTC) -> Backtest (06 UTC) -> WFO (12 UTC)
+#
+# WFO ist die "Second-Opinion" ueber Optimizer. Optimizer macht 80/20-Split
+# (anfaellig fuer Lucky-Window-Bias), WFO macht Rolling-Windows (24Mo
+# Train + 6Mo Test, 6Mo Step). Bei Disagreement zwischen Optimizer-best-
+# Params und WFO-best-Params -> Telegram-Alert (Manual Review).
+#
+# Hard-Gate-Trigger fuer Telegram:
+#   - Mean OOS-Sharpe < 2.0     -> Edge erodiert
+#   - Sharpe-Decay < 50%        -> Overfitting-Verdacht
+#   - best_params changed       -> Param-Drift, Manual Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: "Trigger-Quelle (dashboard / manual / scheduled-monthly)"
+        required: false
+        default: "manual"
+      years:
+        description: "Anzahl Jahre Historie (default 5)"
+        required: false
+        default: "5"
+  schedule:
+    # 1. Sonntag jedes Monats 12:00 UTC = 14:00 CEST
+    # GH-Cron-Trick: dom 1-7 + dow 0 = "first Sunday"
+    - cron: '0 12 1-7 * 0'
+
+concurrency:
+  group: investpilot-wfo
+  cancel-in-progress: false
+
+jobs:
+  wfo:
+    name: "Run Walk-Forward-Optimization"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare data directory
+        run: |
+          mkdir -p data/logs
+          if [ ! -f data/config.json ]; then
+            echo "{}" > data/config.json
+          fi
+
+      - name: Run WFO
+        env:
+          GITHUB_TOKEN: ${{ secrets.INVESTPILOT_GIST_TOKEN }}
+          INVESTPILOT_WFO_CI: '1'
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          TB="github-action-${{ github.event.inputs.triggered_by || (github.event_name == 'schedule' && 'monthly-cron') || 'manual' }}"
+          YEARS="${{ github.event.inputs.years || '5' }}"
+          python -m app.wfo_runner "$TB" --years "$YEARS"
+
+      - name: Upload WFO artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wfo-result-${{ github.run_id }}
+          path: |
+            data/wfo_status.json
+            data/wfo_history.json
+            data/logs/
+          retention-days: 90
+          if-no-files-found: warn

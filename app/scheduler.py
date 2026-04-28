@@ -344,6 +344,14 @@ def scheduler_loop():
             except Exception as e:
                 log.warning(f"Discovery-Watchdog Fehler (non-fatal): {e}", exc_info=True)
 
+            # --- WFO-Watchdog (GH Action v37c, monatlich)
+            # Prueft ob neuer WFO-Lauf im Gist liegt -> reloaded + Hard-Gate-Alert
+            try:
+                from app.persistence import check_and_reload_wfo_output
+                check_and_reload_wfo_output()
+            except Exception as e:
+                log.warning(f"WFO-Watchdog Fehler (non-fatal): {e}", exc_info=True)
+
             # --- Daily Equity Snapshot (>= 22:30 CET, einmal pro Werktag) ---
             # Schreibt portfolio_total_value + SPY/QQQ/AGG Close in
             # equity_history.json. Daraus baut das Frontend die Monatstabelle

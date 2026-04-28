@@ -1771,6 +1771,22 @@ async function wfoRunNow() {
 }
 
 
+function _wfoNextAutoRun() {
+    // Erster Sonntag des naechsten Monats 12:00 UTC
+    const now = new Date();
+    let y = now.getUTCFullYear(), m = now.getUTCMonth();
+    const cand = (yy, mm) => {
+        const d = new Date(Date.UTC(yy, mm, 1, 12, 0, 0));
+        // erster Sonntag finden
+        while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() + 1);
+        return d;
+    };
+    let next = cand(y, m);
+    if (next < now) next = cand(y, m + 1);
+    return next.toISOString().slice(0, 10);
+}
+
+
 async function loadWfoStatus() {
     try {
         const r = await apiFetch('/api/wfo/status');
@@ -1833,8 +1849,55 @@ async function loadWfoStatus() {
             errBlock.style.display = 'block';
             document.getElementById('wfo-error-msg').textContent = d.error || 'Unbekannter Fehler';
         }
+
+        // History laden + anzeigen wenn >= 2 Runs
+        loadWfoHistory();
     } catch (e) {
         console.warn('WFO status load failed:', e);
+    }
+}
+
+
+async function loadWfoHistory() {
+    try {
+        const r = await apiFetch('/api/wfo/history');
+        if (!r.ok) return;
+        const d = await r.json();
+        const block = document.getElementById('wfo-history-block');
+        const runs = d.runs || [];
+        if (!block) return;
+        if (runs.length < 1) {
+            block.style.display = 'none';
+            return;
+        }
+        block.style.display = 'block';
+        document.getElementById('wfo-hist-count').textContent = runs.length;
+        document.getElementById('wfo-hist-next').textContent = _wfoNextAutoRun();
+        const tbody = document.getElementById('wfo-hist-tbody');
+        tbody.innerHTML = '';
+        // Letzte 6 Runs anzeigen, jüngste oben
+        runs.slice(-6).reverse().forEach(r => {
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+            const sharpeColor = (r.mean_oos_sharpe == null) ? 'inherit'
+                : (r.mean_oos_sharpe >= 2.5 ? '#34d399' : (r.mean_oos_sharpe >= 2.0 ? '#fbbf24' : '#f87171'));
+            const decayColor = (r.sharpe_decay_pct == null) ? 'inherit'
+                : (r.sharpe_decay_pct >= 70 ? '#34d399' : (r.sharpe_decay_pct >= 50 ? '#fbbf24' : '#f87171'));
+            tr.innerHTML =
+                '<td style="padding:4px 4px;">' + (r.ts || '--') +
+                ' <span style="opacity:0.6;font-size:0.85em;">(' + (r.trigger || '?') + ')</span></td>' +
+                '<td style="text-align:right;padding:4px 4px;color:' + sharpeColor + ';font-weight:600;">' +
+                    (r.mean_oos_sharpe != null ? r.mean_oos_sharpe.toFixed(2) : '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;color:' + decayColor + ';">' +
+                    (r.sharpe_decay_pct != null ? r.sharpe_decay_pct.toFixed(0) + '%' : '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;opacity:0.85;">' +
+                    (r.oos_stability_std != null ? r.oos_stability_std.toFixed(2) : '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;opacity:0.7;">' +
+                    (r.mean_oos_trades != null ? Math.round(r.mean_oos_trades) : '--') + '</td>';
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        console.warn('WFO history load failed:', e);
     }
 }
 

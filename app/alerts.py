@@ -562,3 +562,123 @@ def check_broker_health(client, config=None, max_attempts=2, retry_wait_s=5.0):
         _save_alert_state(state)
 
     return healthy
+
+
+# ============================================================
+# WFO ALERTS (v37c, Option-3 Hybrid Auto-Run + Push-Notification)
+# ============================================================
+
+# 3 Hard-Gate-Trigger fuer Telegram-Alerts:
+WFO_HARD_MIN_OOS_SHARPE = 2.0    # unter dieser Schwelle -> Edge-Erosion
+WFO_HARD_MIN_DECAY_PCT  = 50.0   # IS->OOS Retention < 50% -> Overfitting
+# Plus: best_params haben sich aenderte ggu. letztem Run -> Manual Review
+
+
+def _build_wfo_message(status: dict, history: dict, hard_gate_violations: list[str],
+                      param_changes: list[str]) -> str:
+    """Telegram-Nachricht zusammenbauen — nur kritische Infos."""
+    agg = status.get("aggregate") or {}
+    runs = (history or {}).get("runs") or []
+    last_run = runs[-1] if runs else {}
+    prev_run = runs[-2] if len(runs) >= 2 else {}
+
+    lines = []
+    if hard_gate_violations:
+        lines.append("🔴 *WFO HARD-GATE VERLETZUNG*")
+    elif param_changes:
+        lines.append("🟡 *WFO Param-Change* (Manual Review)")
+    else:
+        lines.append("✅ *WFO OK*")
+    lines.append("")
+    lines.append(f"Mean OOS-Sharpe: *{agg.get('mean_oos_sharpe', '--')}*")
+    lines.append(f"Sharpe-Decay: *{agg.get('sharpe_decay_pct', '--')}%*")
+    lines.append(f"OOS-Stability (StdDev): {agg.get('oos_stability_std', '--')}")
+    lines.append(f"Mean OOS-Trades: {agg.get('mean_oos_trades', '--')}")
+
+    if hard_gate_violations:
+        lines.append("")
+        lines.append("*Verletzungen:*")
+        for v in hard_gate_violations:
+            lines.append(f"• {v}")
+
+    if param_changes:
+        lines.append("")
+        lines.append("*Param-Changes (vs vorherigem Run):*")
+        for c in param_changes:
+            lines.append(f"• {c}")
+
+    if prev_run:
+        lines.append("")
+        lines.append(f"_Letzter Run vorher: Sharpe {prev_run.get('mean_oos_sharpe','--')}, "
+                     f"Decay {prev_run.get('sharpe_decay_pct','--')}%_")
+
+    return "\n".join(lines)
+
+
+def check_wfo_alerts(config=None):
+    """Prueft WFO-Status nach jedem reload und sendet ggf. Telegram-Alert.
+
+    Aufgerufen von persistence.check_and_reload_wfo_output() nach erfolgreichem
+    Reload. State-deduped via alert_state.json (gleiche Logik wie health-check).
+    """
+    try:
+        status = load_json("wfo_status.json") or {}
+        history = load_json("wfo_history.json") or {}
+    except Exception as e:
+        log.warning(f"check_wfo_alerts: status load failed: {e}")
+        return
+
+    if status.get("state") != "done":
+        return  # nur done-State alerten
+
+    agg = status.get("aggregate") or {}
+    last_run_iso = status.get("last_run", "")
+
+    # Dedupe: gleichen Run nicht zweimal alerten
+    state = _load_alert_state()
+    last_alerted = state.get("wfo_last_alerted_run")
+    if last_alerted == last_run_iso:
+        log.debug(f"check_wfo_alerts: Run {last_run_iso} bereits alerted, skip")
+        return
+
+    # Hard-Gates pruefen
+    violations = []
+    sharpe = agg.get("mean_oos_sharpe")
+    decay = agg.get("sharpe_decay_pct")
+    if sharpe is not None and sharpe < WFO_HARD_MIN_OOS_SHARPE:
+        violations.append(f"Mean OOS-Sharpe {sharpe} < {WFO_HARD_MIN_OOS_SHARPE} (Edge-Erosion)")
+    if decay is not None and decay < WFO_HARD_MIN_DECAY_PCT:
+        violations.append(f"Sharpe-Decay {decay}% < {WFO_HARD_MIN_DECAY_PCT}% (Overfitting-Verdacht)")
+
+    # Param-Changes vs vorigem Run (best_params Trends in history)
+    param_changes = []
+    runs = (history or {}).get("runs") or []
+    if len(runs) >= 2:
+        cur = runs[-1].get("param_summary") or {}
+        prev = runs[-2].get("param_summary") or {}
+        for key in cur:
+            cur_dominant = max(cur[key].items(), key=lambda x: x[1])[0] if cur.get(key) else None
+            prev_dominant = max(prev[key].items(), key=lambda x: x[1])[0] if prev.get(key) else None
+            if cur_dominant and prev_dominant and cur_dominant != prev_dominant:
+                param_changes.append(f"{key}: {prev_dominant} -> {cur_dominant}")
+
+    # Wenn weder Verletzung noch Change -> kein Alert (Stille = OK)
+    if not violations and not param_changes:
+        log.info("check_wfo_alerts: alle Hard-Gates OK, keine Param-Changes")
+        # Trotzdem markieren damit naechster Restart nicht erneut prueft
+        state["wfo_last_alerted_run"] = last_run_iso
+        state["wfo_last_check"] = datetime.now().isoformat()
+        _save_alert_state(state)
+        return
+
+    # Alert senden
+    msg = _build_wfo_message(status, history, violations, param_changes)
+    level = "ERROR" if violations else "WARN"
+    send_alert(msg, level=level, config=config)
+    state["wfo_last_alerted_run"] = last_run_iso
+    state["wfo_last_check"] = datetime.now().isoformat()
+    state["wfo_last_violations"] = violations
+    state["wfo_last_param_changes"] = param_changes
+    _save_alert_state(state)
+    log.info(f"check_wfo_alerts: Alert gesendet ({len(violations)} Verletzungen, "
+             f"{len(param_changes)} Param-Changes)")

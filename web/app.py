@@ -4033,6 +4033,31 @@ async def api_wfo_status():
         return {"state": "error", "error": str(e)}
 
 
+@app.get("/api/wfo/history")
+async def api_wfo_history():
+    """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart."""
+    try:
+        from app.config_manager import load_json
+        hist = load_json("wfo_history.json") or {"runs": []}
+        runs = hist.get("runs") if isinstance(hist, dict) else []
+        # Nur die wichtigsten Felder + Timestamps fuer Chart
+        compact = [{
+            "ts": r.get("timestamp", "")[:16],
+            "trigger": r.get("trigger"),
+            "mean_oos_sharpe": r.get("mean_oos_sharpe"),
+            "sharpe_decay_pct": r.get("sharpe_decay_pct"),
+            "oos_stability_std": r.get("oos_stability_std"),
+            "mean_oos_trades": r.get("mean_oos_trades"),
+        } for r in (runs or [])]
+        return {
+            "runs_total": len(compact),
+            "runs": compact,
+            "updated_at": hist.get("updated_at") if isinstance(hist, dict) else None,
+        }
+    except Exception as e:
+        return {"runs_total": 0, "runs": [], "error": str(e)}
+
+
 @app.post("/api/wfo/run")
 async def api_wfo_run(user=Depends(require_auth)):
     """Triggert einen vollstaendigen WFO-Lauf in einem Background-Thread.
