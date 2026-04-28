@@ -50,7 +50,7 @@ ASSET_UNIVERSE = {
     "MCD":   {"etoro_id": 1044,  "yf": "MCD",   "class": "stocks",  "name": "McDonald's",          "sector": "consumer"},
     # --- US Growth / Tech ---
     "PYPL":  {"etoro_id": 5765,  "yf": "PYPL",  "class": "stocks",  "name": "PayPal",       "sector": "growth"},
-    "SQ":    {"etoro_id": 7961,  "yf": "SQ",    "class": "stocks",  "name": "Block (Square)","sector": "growth"},
+    "SQ":    {"etoro_id": 7961,  "yf": "XYZ",   "class": "stocks",  "name": "Block (formerly Square)","sector": "growth"},  # v36i: SQ -> XYZ Rename Jan 2024 (Block, Inc.)
     "SHOP":  {"etoro_id": 7905,  "yf": "SHOP",  "class": "stocks",  "name": "Shopify",      "sector": "growth"},
     "UBER":  {"etoro_id": 14066, "yf": "UBER",  "class": "stocks",  "name": "Uber",         "sector": "growth"},
     "COIN":  {"etoro_id": 18001, "yf": "COIN",  "class": "stocks",  "name": "Coinbase",     "sector": "crypto_major"},
@@ -86,7 +86,11 @@ ASSET_UNIVERSE = {
     "DOT":   {"etoro_id": 100063, "yf": "DOT-USD",  "class": "crypto", "name": "Polkadot",   "sector": "crypto_alt"},
     "AVAX":  {"etoro_id": 100072, "yf": "AVAX-USD", "class": "crypto", "name": "Avalanche",  "sector": "crypto_alt"},
     "LINK":  {"etoro_id": 100010, "yf": "LINK-USD", "class": "crypto", "name": "Chainlink",  "sector": "crypto_alt"},
-    "MATIC": {"etoro_id": 100067, "yf": "MATIC-USD","class": "crypto", "name": "Polygon",    "sector": "crypto_alt"},
+    # v36i: MATIC entfernt — Polygon Token-Migration Sept 2024 (MATIC -> POL),
+    # nach Migration ist das Asset auf Yahoo Finance nicht mehr abrufbar
+    # (POL-USD / POL / POLYGON-USD alle EMPTY). Falls Polygon zurueck
+    # gewollt: alternative Datenquelle (CoinGecko/CMC API) implementieren
+    # oder ETH-Layer-2 Proxy nutzen.
     # --- Commodities (via eToro CFDs auf eToro; via ETF-Proxies auf IBKR) ---
     # v36d (28.04.2026): ibkr_override Feld ergaenzt. eToro tradet direkt CFD,
     # IBKR Paper hat keine CMDTY/NYMEX-Definition fuer diese Symbole — daher

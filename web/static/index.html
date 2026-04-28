@@ -822,19 +822,31 @@
             <button type="button" id="btn-clear-targets" class="btn-secondary" style="margin-top:12px;display:none;" onclick="clearPortfolioTargets()">Auf v15-Modus umstellen (Targets leeren)</button>
         </div>
 
-        <!-- DISABLED SYMBOLS EDITOR -->
+        <!-- UNIVERSE-FILTER (READ-ONLY, AUTO-KURATIERT) -->
+        <!-- v36i: Strategy A (Quant-Discipline) — Liste ist read-only,
+             User-Override-Path bewusst entfernt. Begruendung:
+             1) Liste wird per_symbol_v12 Backtest auto-kuratiert (Sharpe<0.5 OR PF<1.2)
+             2) Bootstrap-V12 ueberschreibt jeden manuellen Edit beim Container-Restart sowieso
+             3) Disziplin>Flexibilitaet ist die ganze Edge des Bots (siehe Renaissance-Argument)
+             Aenderungen passieren ueber git commit in app/bootstrap_v12.py V12_DISABLED_SYMBOLS. -->
         <div class="card">
-            <div class="card-title">Universe-Filter (Disabled Symbols)<span class="tip" data-tip="Symbole, die der Bot komplett ignoriert. Nuetzlich fuer Assets, die im Backtest schlecht liefen (Sharpe unter 0.5, Profit Factor unter 1.2) oder keine brauchbaren Daten mehr liefern. Ein Symbol pro Zeile. Aendert sich sofort beim naechsten Scan.">?</span></div>
+            <div class="card-title">Universe-Filter (Auto-Curated Disabled Symbols)<span class="tip" data-tip="Auto-kuratierte Liste aus dem per_symbol_v12 Backtest. Symbole landen drauf wenn Sharpe < 0.5 ODER Profit Factor < 1.2 ueber 4 Jahre. Liste ist READ-ONLY: Bootstrap-V12 ueberschreibt jeden manuellen Edit beim naechsten Container-Restart. Aenderungen erfolgen via Git-Commit (Audit-Trail) - das ist die Quant-Disziplin die den Bot vor User-Override-Verlusten schuetzt.">?</span></div>
             <div class="card-sub" style="margin-bottom:8px;">
                 Aktuell <strong id="ds-count">--</strong> Symbole blockiert (von <strong id="ds-total">--</strong> im Universum).
                 Aktiv: <strong id="ds-active">--</strong>.
             </div>
-            <div class="form-group">
-                <label>Disabled Symbols<span class="tip" data-tip="Ein Symbol pro Zeile. Grossbuchstaben sind egal. Leerzeilen werden ignoriert.">?</span></label>
-                <textarea id="ds-textarea" rows="8" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-family:monospace;font-size:13px;resize:vertical;" placeholder="z.B.&#10;DIS&#10;ROKU&#10;VNQ"></textarea>
+            <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5;">
+                <strong style="color:#818cf8;">Read-Only:</strong> Diese Liste wird automatisch aus dem Backtest kuratiert
+                (Sharpe&nbsp;&lt;&nbsp;0.5 ODER Profit&nbsp;Factor&nbsp;&lt;&nbsp;1.2).
+                Aenderungen nur ueber <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">git commit</code> in
+                <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;">app/bootstrap_v12.py</code>.
+                Das schuetzt vor User-Override-Bias (statistisch -2 bis -5% Annualized fuer Retail-Quant-Bots).
             </div>
-            <button type="button" class="btn btn-primary" onclick="saveDisabledSymbols()">Speichern</button>
-            <button type="button" class="btn btn-secondary" style="margin-left:8px;" onclick="loadDisabledSymbols()">Zuruecksetzen</button>
+            <div class="form-group">
+                <label>Disabled Symbols (read-only)</label>
+                <textarea id="ds-textarea" rows="8" readonly style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-muted);font-family:monospace;font-size:13px;resize:vertical;cursor:not-allowed;opacity:0.85;" placeholder="--"></textarea>
+            </div>
+            <button type="button" class="btn btn-secondary" onclick="loadDisabledSymbols()">Aktualisieren</button>
         </div>
 
         <!-- 2FA Setup -->
