@@ -22,6 +22,14 @@ Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub
 **Compose:** `/opt/investpilot/docker-compose.vps.yml` (investpilot + caddy)
 **IB Gateway:** `/opt/ib-gateway/docker-compose.yml` (gnzsnz/ib-gateway:stable, Port 4002 paper)
 
+**VPS-Cron-Jobs (root crontab):**
+- `13,43 * * * *` — Reconcile Bot-State vs IBKR-Server (`scripts/ibkr_reconcile.py`, alle 30 Min)
+- `0 3 * * *` — Daily ib-gateway Container-Restart (v37d, 2026-04-29). Loest die
+  taegliche IBC-Auto-Restart-Race-Condition (Re-Login fails sporadisch mit
+  "Unrecognized Username or Password"). Container-Restart erzwingt frischen
+  Login mit ENV-Vars. 2-3 Min Downtime, vor US Pre-Market. Logfile:
+  `/var/log/ibgw-restart.log` mit Timestamp + Exit-Code pro Restart.
+
 **Alter Render-Deploy (abgeschaltet):** ~~https://investpilot-2dp2.onrender.com~~
 
 ## Code-Audit-Regime (ab 2026-04-15)
