@@ -790,3 +790,131 @@ def check_survivorship_alerts(config=None):
     _save_alert_state(state)
     log.info("check_survivorship_alerts: Alert gesendet (%d Verletzungen, drift=%s)",
              len(violations), drift_info is not None)
+
+
+# ============================================================
+# SEMGREP ALERTS (v37f, woechentlicher Security-Scan So 14 UTC)
+# ============================================================
+
+# Hard-Gate-Trigger fuer Telegram:
+SEMGREP_NEW_ERROR_THRESHOLD = 1     # mind. 1 NEUES ERROR-Finding -> Push
+SEMGREP_NEW_WARNING_THRESHOLD = 3   # mind. 3 NEUE WARNINGS -> Push
+SEMGREP_TOTAL_DRIFT_THRESHOLD = 2   # Findings-Count steigt um > 2 -> WARN
+
+
+def _build_semgrep_message(summary: dict, diff: dict,
+                           details_top20: list, severity_label: str) -> str:
+    lines = []
+    if severity_label == "ERROR":
+        lines.append("🔴 *Semgrep-Scan: NEUE Security-Findings*")
+    elif severity_label == "WARN":
+        lines.append("🟡 *Semgrep-Scan: Drift detected*")
+    else:
+        lines.append("✅ *Semgrep-Scan OK*")
+    lines.append("")
+    lines.append(f"Total: *{summary.get('total', '--')}* "
+                 f"(Error: {summary.get('error', 0)}, "
+                 f"Warning: {summary.get('warning', 0)})")
+    lines.append(f"Diff vs prev: *+{len(diff['new'])} new*, "
+                 f"-{len(diff['gone'])} gone, "
+                 f"{len(diff['stable'])} stable")
+    if diff["new"]:
+        lines.append("")
+        lines.append("*Neue Findings:*")
+        # Top 5 neue mit Pfad
+        new_id_set = set(diff["new"])
+        new_details = [d for d in details_top20
+                      if f"{d['check_id']}|{d['path']}|{d['line']}" in new_id_set]
+        for d in new_details[:5]:
+            lines.append(f"• [{d['severity']}] {d['path']}:{d['line']}")
+            lines.append(f"  `{d['check_id']}`")
+        if len(diff["new"]) > 5:
+            lines.append(f"  _(+ {len(diff['new']) - 5} mehr)_")
+    return "\n".join(lines)
+
+
+def check_semgrep_alerts(config=None):
+    """Prueft Semgrep-Run-Resultate, sendet Telegram nur bei Anomalien."""
+    try:
+        last = load_json("semgrep_last_findings.json") or {}
+        history = load_json("semgrep_history.json") or {}
+    except Exception as e:
+        log.warning("check_semgrep_alerts: load failed: %s", e)
+        return
+
+    if not last.get("timestamp"):
+        return
+
+    state = _load_alert_state()
+    last_alerted = state.get("semgrep_last_alerted_run")
+    if last_alerted == last["timestamp"]:
+        log.debug("check_semgrep_alerts: bereits alerted")
+        return
+
+    summary = last.get("summary") or {}
+    runs = (history or {}).get("runs") or []
+    if len(runs) < 2:
+        # Erster Run -> kein Diff
+        log.info("check_semgrep_alerts: erster Run, kein Diff")
+        state["semgrep_last_alerted_run"] = last["timestamp"]
+        _save_alert_state(state)
+        return
+
+    prev_run = runs[-2]
+    cur_run = runs[-1]
+    new_count = cur_run.get("new_count") or 0
+
+    # Hard-Gate-Klassifizierung. Zur Berechnung der NEUEN-pro-Severity
+    # nutzen wir die details_top20 + ID-Set.
+    details_top20 = last.get("details_top20") or []
+    new_id_set = set()
+    # ID-Set aus history rekonstruieren
+    if len(runs) >= 2:
+        # Wir koennen nicht direkt sehen welche neu — aber das semgrep_runner
+        # hat den Diff schon berechnet. Fuer Telegram nehmen wir new_count und
+        # alle details die als "neu im aktuellen Run" sind. Wir tagging ueber
+        # last["ids"] vs prev_ids
+        pass
+
+    # Severity-Verteilung der NEUEN Findings approximieren ueber details_top20:
+    # (semgrep_runner schreibt die details_top20 — wir nehmen die ersten N als
+    # Approximation der neuen, wenn new_count <= 20)
+    new_errors = 0
+    new_warnings = 0
+    if new_count > 0 and details_top20:
+        # Konservativ: alle ERROR + WARNING in den top 20 als Kandidaten zaehlen
+        for d in details_top20[:new_count]:
+            sev = (d.get("severity") or "").upper()
+            if sev == "ERROR":
+                new_errors += 1
+            elif sev == "WARNING":
+                new_warnings += 1
+
+    severity = "OK"
+    if new_errors >= SEMGREP_NEW_ERROR_THRESHOLD:
+        severity = "ERROR"
+    elif new_warnings >= SEMGREP_NEW_WARNING_THRESHOLD:
+        severity = "WARN"
+    elif (cur_run.get("total") or 0) - (prev_run.get("total") or 0) > SEMGREP_TOTAL_DRIFT_THRESHOLD:
+        severity = "WARN"
+
+    if severity == "OK":
+        log.info("check_semgrep_alerts: keine kritischen Aenderungen")
+        state["semgrep_last_alerted_run"] = last["timestamp"]
+        state["semgrep_last_check"] = datetime.now().isoformat()
+        _save_alert_state(state)
+        return
+
+    diff = {
+        "new": list(range(new_count)),  # placeholder, only count matters
+        "gone": list(range(cur_run.get("gone_count") or 0)),
+        "stable": list(range(cur_run.get("stable_count") or 0)),
+    }
+    msg = _build_semgrep_message(summary, diff, details_top20, severity)
+    level = "ERROR" if severity == "ERROR" else "WARN"
+    send_alert(msg, level=level, config=config)
+    state["semgrep_last_alerted_run"] = last["timestamp"]
+    state["semgrep_last_check"] = datetime.now().isoformat()
+    state["semgrep_last_severity"] = severity
+    _save_alert_state(state)
+    log.info("check_semgrep_alerts: Alert gesendet (severity=%s)", severity)

@@ -3234,6 +3234,15 @@ async def api_admin_force_restore_brain_from_sha(
         raise HTTPException(status_code=400, detail="?confirm=YES_OVERWRITE noetig")
     if not sha:
         raise HTTPException(status_code=400, detail="?sha=<gist_version> noetig")
+    # v37f: SSRF-Hardening — Gist-Revisions sind 40-Hex-SHA1. Validierung
+    # verhindert Path-Injection (z.B. '../something') in der GitHub-API-URL.
+    # Semgrep p/python.flask.security.injection.ssrf-requests Befund 2026-04-29.
+    import re as _re
+    if not _re.match(r"^[a-f0-9]{40}$", sha):
+        raise HTTPException(
+            status_code=400,
+            detail="sha muss exakt 40 Hex-Zeichen sein (Git-SHA1-Format)"
+        )
 
     token = _get_token()
     if not token:
