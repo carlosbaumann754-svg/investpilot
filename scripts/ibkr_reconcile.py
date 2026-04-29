@@ -182,22 +182,21 @@ def reconcile(lookback_hours: int = 24) -> dict:
 
 
 def maybe_alert(report: dict) -> None:
-    """Telegram-Alert wenn alerts-Modul verfuegbar UND Drift gefunden."""
+    """Multi-Channel-Alert (Pushover/Telegram/Discord) wenn Drift gefunden.
+
+    v37k: vorher Telegram-only (send_telegram direkt), jetzt via send_alert()
+    Dispatcher → routet automatisch ueber alle aktivierten Channels (Pushover
+    + Telegram + Discord). Drift = WARNING-Level (rotes Banner in Pushover).
+    """
     if report["status"] == "OK":
         return
     try:
-        from app import alerts
-        msg = (
-            f"⚠️ IBKR Reconciliation Drift\n"
-            f"{len(report['drifts'])} Probleme:\n"
-        )
+        from app.alerts import send_alert
+        msg = f"IBKR Reconciliation Drift — {len(report['drifts'])} Probleme:"
         for d in report["drifts"][:5]:
-            msg += f"• {d['type']}: {d.get('symbol', '')} {d.get('comment', '')[:80]}\n"
-        if hasattr(alerts, "send_telegram"):
-            alerts.send_telegram(msg)
-            log.info("Telegram-Alert versendet")
-        else:
-            log.warning("alerts.send_telegram nicht verfuegbar")
+            msg += f"\n• {d['type']}: {d.get('symbol', '')} {d.get('comment', '')[:80]}"
+        send_alert(msg, level="WARNING")
+        log.info("Reconciliation-Alert versendet (Multi-Channel)")
     except Exception as e:
         log.warning("Alert-Dispatch fehlgeschlagen: %s", e)
 
