@@ -29,6 +29,11 @@ Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub
   "Unrecognized Username or Password"). Container-Restart erzwingt frischen
   Login mit ENV-Vars. 2-3 Min Downtime, vor US Pre-Market. Logfile:
   `/var/log/ibgw-restart.log` mit Timestamp + Exit-Code pro Restart.
+- `0 13 * * 0` — Wochentlicher Survivorship-Audit (v37e+, 2026-04-29).
+  Sonntag 13:00 UTC = 1h nach WFO-Slot. Cheap (~30s, 50 yfinance Calls).
+  Telegram-Alert NUR bei Anomalien: dead-Symbole >= 1 ODER suspicious >= 2
+  ODER Bias-Drift > 0.10. History-Tracking (max 60 Runs = ~14 Monate).
+  Logfile: `/var/log/survivorship-audit.log`.
 
 **Alter Render-Deploy (abgeschaltet):** ~~https://investpilot-2dp2.onrender.com~~
 
