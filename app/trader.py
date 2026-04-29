@@ -407,11 +407,38 @@ def check_stop_loss_take_profit(client, config):
     if not portfolio:
         return []
 
+    # v37i: Market-Hours-Guard pro Position
+    # Verhindert STOP_LOSS_CLOSE_FAILED-Spam-Loops wenn der Bot waehrend
+    # geschlossener Boersen versucht eine Position zu schliessen (z.B. ROKU
+    # in US-Pre-Market 03-09 EST). IBKR liefert dann keinen Live-Quote ->
+    # close_position() returned None -> trader logged FAILED -> trade_history
+    # bekommt im 5-Min-Takt einen Fehler-Eintrag, bis der Markt aufmacht.
+    # Loesung: vor jedem Close-Versuch pruefen ob Asset-Klasse jetzt
+    # tradeable ist. Wenn nicht: einmal INFO-loggen und ueberspringen.
+    try:
+        from app.asset_classes import is_asset_class_tradeable
+    except ImportError:
+        is_asset_class_tradeable = None
+    skipped_off_hours: set[str] = set()  # nur einmal pro Klasse loggen
+
     actions = []
     for pos in portfolio.get("positions", []):
         p = EtoroClient.parse_position(pos)
         if p["invested"] <= 0:
             continue
+
+        # Market-Hours Guard
+        if is_asset_class_tradeable is not None:
+            asset_class = _lookup_asset_class(p.get("instrument_id"))
+            if not is_asset_class_tradeable(asset_class):
+                if asset_class not in skipped_off_hours:
+                    log.info(
+                        f"  Markt geschlossen fuer Klasse '{asset_class}' — "
+                        f"SL/TP-Checks fuer betroffene Positionen werden uebersprungen "
+                        f"(Position bleibt offen, retry zum naechsten RTH-Open)."
+                    )
+                    skipped_off_hours.add(asset_class)
+                continue
 
         # Trailing SL: Fallback current_price aus PnL + entry_price berechnen
         if not p.get("current_price") and p.get("entry_price") and p["invested"] > 0:

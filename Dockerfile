@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# curl fuer Healthcheck installieren
-RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential && rm -rf /var/lib/apt/lists/*
+# curl fuer Healthcheck + tzdata fuer IANA-Zeitzonen (US/Eastern etc.,
+# wird von ib-insync beim Parsing der IBKR-Order-Felder gebraucht).
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential tzdata && rm -rf /var/lib/apt/lists/*
 
 # Dependencies installieren
 COPY requirements.txt .
