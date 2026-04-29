@@ -333,12 +333,47 @@ def check_and_maybe_activate(config=None):
     if precision < min_prec:
         return False
 
+    # v37q: auto_activate-Schalter (default False) damit nicht heimlich
+    # geflipped wird. User entscheidet manuell wann Live-Mode an darf.
+    auto_activate = bool(cfg.get("auto_activate", False))
+    if not auto_activate:
+        log.info(
+            "  Meta-Labeler ERREICHT Aktivierungs-Schwelle "
+            f"({len(matured)} matured / Precision {precision:.1%}) — "
+            "Auto-Activation aber deaktiviert (auto_activate=false). "
+            "Manuell aktivieren via config.meta_labeling.shadow_mode=false."
+        )
+        # Pushover-Alert: User soll mitkriegen dass das Modell ready ist
+        try:
+            from app.alerts import send_alert
+            send_alert(
+                f"Meta-Labeler ist BEREIT fuer Live-Aktivierung: "
+                f"{len(matured)} matured Trades / Precision {precision:.1%} "
+                f"(Schwelle {min_prec:.0%}). Auto-Activation ist aus — "
+                f"manuell freischalten via config.meta_labeling.shadow_mode=false.",
+                level="INFO",
+            )
+        except Exception:
+            pass
+        return False
+
     # Flip shadow_mode off in the live config
     config["meta_labeling"]["shadow_mode"] = False
     try:
         from app.config_manager import save_config
         save_config(config)
         log.info("  Meta-Labeler -> LIVE aktiviert. Shadow mode OFF.")
+        # Pushover bei Auto-Activation
+        try:
+            from app.alerts import send_alert
+            send_alert(
+                f"Meta-Labeler AUTO-AKTIVIERT (Live-Mode): "
+                f"{len(matured)} matured Trades / Precision {precision:.1%}. "
+                f"Bot blockiert ab jetzt BUYs mit p_win < threshold.",
+                level="WARNING",
+            )
+        except Exception:
+            pass
     except Exception as e:
         log.warning(f"  Meta-Labeler activation save_config failed: {e}")
     return True
