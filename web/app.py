@@ -1741,11 +1741,22 @@ async def api_trading_status(user=Depends(require_auth)):
 
 @app.post("/api/trading/start")
 async def api_trading_start(user=Depends(require_auth)):
-    """Trading aktivieren."""
+    """Trading aktivieren — Kill-Switch Re-Activation."""
     set_trading_enabled(True)
     try:
         from web.security import log_audit
         await log_audit(user, "TRADING_START", "Trading aktiviert via Dashboard")
+    except Exception:
+        pass
+    # v37l: Push-Alert ueber alle Channels (Pushover/Telegram/Discord)
+    try:
+        from app.alerts import send_alert
+        username = getattr(user, "username", None) or str(user)
+        send_alert(
+            f"Trading wieder AKTIV (gestartet via Dashboard von '{username}'). "
+            f"Naechster Cycle laeuft regulaer durch.",
+            level="INFO",
+        )
     except Exception:
         pass
     return {"status": "ok", "enabled": True}
@@ -1753,11 +1764,29 @@ async def api_trading_start(user=Depends(require_auth)):
 
 @app.post("/api/trading/stop")
 async def api_trading_stop(user=Depends(require_auth)):
-    """Trading deaktivieren."""
+    """Trading deaktivieren — Kill-Switch (Soft-Stop, Positionen bleiben offen).
+
+    Bot ueberspringt ab dem naechsten Cycle alle Trade-Aktivitaeten. Bestehende
+    offene Positionen bleiben unangetastet (KEIN emergency_close_all). Fuer
+    sofortiges Schliessen aller Positionen: separater Endpoint (post-Cutover).
+    """
     set_trading_enabled(False)
     try:
         from web.security import log_audit
         await log_audit(user, "TRADING_STOP", "Trading deaktiviert via Dashboard")
+    except Exception:
+        pass
+    # v37l: Push-Alert mit WARNING-Level (Pushover Priority 1 = rotes Banner)
+    # damit man mitkriegt wenn jemand den Bot stoppt — auch der User selbst
+    # als Bestaetigung dass die Aktion durchging.
+    try:
+        from app.alerts import send_alert
+        username = getattr(user, "username", None) or str(user)
+        send_alert(
+            f"KILL SWITCH AKTIV — Trading wurde via Dashboard von '{username}' "
+            f"deaktiviert. Bot pausiert ab naechstem Cycle. Positionen bleiben offen.",
+            level="WARNING",
+        )
     except Exception:
         pass
     return {"status": "ok", "enabled": False}
