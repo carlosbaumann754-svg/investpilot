@@ -2269,7 +2269,14 @@ async def api_performance_breakdown(days: int = 30, user=Depends(require_auth)):
 async def api_backtest(user=Depends(require_auth)):
     """Letzte Backtest-Ergebnisse. Pollt vorher den Gist-Watchdog, damit
     frische Ergebnisse eines laufenden GitHub-Action-Backtests sofort
-    sichtbar werden."""
+    sichtbar werden.
+
+    v37g (Tab-Audit-Fix BT2): Das Frontend liest seit jeher
+    `full_period.sharpe_ratio` direkt — die Werte stehen aber unter
+    `full_period.metrics.*`. Wir flachen die Struktur hier aus, sodass
+    sowohl direkter Zugriff (Card-View) als auch nested-Zugriff weiter
+    funktioniert.
+    """
     try:
         from app.persistence import check_and_reload_backtest_output
         check_and_reload_backtest_output()
@@ -2277,9 +2284,20 @@ async def api_backtest(user=Depends(require_auth)):
         log.debug(f"check_and_reload_backtest_output skipped: {e}")
 
     result = read_json_safe("backtest_results.json")
-    if result:
-        return result
-    return {"error": "Noch kein Backtest gelaufen. Starte einen ueber 'Run Backtest'."}
+    if not result:
+        return {"error": "Noch kein Backtest gelaufen. Starte einen ueber 'Run Backtest'."}
+
+    # Flatten full_period.metrics fuer Frontend-Card
+    fp = result.get("full_period") or {}
+    if isinstance(fp, dict):
+        metrics = fp.get("metrics") or {}
+        if metrics:
+            for key in ("total_return_pct", "annual_return_pct", "sharpe_ratio",
+                        "max_drawdown_pct", "win_rate_pct", "profit_factor",
+                        "avg_trade_days", "total_costs_pct"):
+                if key in metrics and fp.get(key) is None:
+                    fp[key] = metrics[key]
+    return result
 
 
 def _trigger_github_action_backtest(username: str):
