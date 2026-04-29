@@ -4369,12 +4369,17 @@ async def api_backups_status():
         from pathlib import Path as _Path
         from datetime import datetime as _dt, timezone as _tz
 
-        backup_dir = _Path("/var/backups/investpilot")
+        # /backups = read-only Volume-Mount aus /var/backups/investpilot auf Host
+        backup_dir = _Path("/backups")
+        if not backup_dir.exists():
+            # Fallback: direkter Pfad falls nicht containerized
+            backup_dir = _Path("/var/backups/investpilot")
         if not backup_dir.exists():
             return {
                 "configured": False,
-                "note": "Backup-Verzeichnis /var/backups/investpilot existiert nicht. "
-                        "Cron muss noch eingerichtet werden.",
+                "note": "Backup-Verzeichnis nicht zugaenglich. Volume-Mount "
+                        "/var/backups/investpilot:/backups:ro fehlt im "
+                        "docker-compose.yml.",
             }
 
         # Letztes Backup-Info
