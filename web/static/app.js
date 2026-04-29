@@ -1773,6 +1773,59 @@ async function surveyRunNow() {
 }
 
 
+function _survNextSundayUtc() {
+    const now = new Date();
+    // Erster Sonntag in der Zukunft, 13:00 UTC
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(),
+                                    now.getUTCDate(), 13, 0, 0));
+    while (next.getUTCDay() !== 0 || next < now) {
+        next.setUTCDate(next.getUTCDate() + 1);
+    }
+    return next.toISOString().slice(0, 10);
+}
+
+
+async function loadSurvivorshipHistory() {
+    try {
+        const r = await apiFetch('/api/survivorship/history');
+        if (!r.ok) return;
+        const d = await r.json();
+        const block = document.getElementById('surv-history-block');
+        const runs = d.runs || [];
+        if (!block) return;
+        if (runs.length < 1) {
+            block.style.display = 'none';
+            return;
+        }
+        block.style.display = 'block';
+        document.getElementById('surv-hist-count').textContent = runs.length;
+        const tbody = document.getElementById('surv-hist-tbody');
+        tbody.innerHTML = '';
+        runs.slice(-6).reverse().forEach(r => {
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+            const deadColor = (r.dead && r.dead > 0) ? '#f87171' : 'inherit';
+            const biasColor = (r.sharpe_reduction_point == null) ? 'inherit'
+                : (r.sharpe_reduction_point < 0.30 ? '#34d399'
+                : (r.sharpe_reduction_point < 0.50 ? '#fbbf24' : '#f87171'));
+            tr.innerHTML =
+                '<td style="padding:4px 4px;">' + ((r.timestamp || '').slice(0, 16)) +
+                ' <span style="opacity:0.6;font-size:0.85em;">(' + (r.trigger || '?') + ')</span></td>' +
+                '<td style="text-align:right;padding:4px 4px;">' + (r.universe_size ?? '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;color:#34d399;">' + (r.alive ?? '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;color:' + deadColor + ';font-weight:' + (r.dead && r.dead > 0 ? '600' : 'normal') + ';">' + (r.dead ?? '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;color:' + biasColor + ';">' +
+                    (r.sharpe_reduction_point != null ? r.sharpe_reduction_point.toFixed(3) : '--') + '</td>' +
+                '<td style="text-align:right;padding:4px 4px;font-weight:600;">' +
+                    (r.wfo_corrected_point != null ? r.wfo_corrected_point.toFixed(2) : '--') + '</td>';
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        console.warn('Survivorship history load failed:', e);
+    }
+}
+
+
 async function loadSurvivorship() {
     try {
         const r = await apiFetch('/api/survivorship/summary');
@@ -1806,6 +1859,11 @@ async function loadSurvivorship() {
             (d.estimated_sharpe_reduction_point ?? '--').toString();
         document.getElementById('surv-generated').textContent =
             (d.generated_at || '').slice(0, 16);
+        const nextRunEl = document.getElementById('surv-next-run');
+        if (nextRunEl) nextRunEl.textContent = _survNextSundayUtc();
+
+        // History-Tabelle nachladen
+        loadSurvivorshipHistory();
 
         if (d.wfo_correction) {
             document.getElementById('surv-wfo-block').style.display = 'block';

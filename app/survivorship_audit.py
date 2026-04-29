@@ -273,8 +273,61 @@ def historical_reference_check(asset_universe: dict) -> dict:
 # AUDIT-ORCHESTRATOR
 # ============================================================
 
-def run_audit(quick: bool = False) -> dict:
-    """Vollstaendiger Audit + Persist."""
+def _append_history(summary: dict) -> None:
+    """Append diesen Run zur Time-Series survivorship_history.json.
+
+    Wird vom --cron Modus genutzt, damit Dashboard ueber Wochen/Monate hinweg
+    den Drift sehen kann (z.B. Bias-Estimate steigt von 0.23 auf 0.40 ->
+    Universe-Curation braucht Update).
+    """
+    try:
+        from app.config_manager import load_json, save_json
+        hist = load_json("survivorship_history.json") or {"runs": []}
+        if not isinstance(hist, dict):
+            hist = {"runs": []}
+        runs = hist.get("runs", [])
+        runs.append({
+            "timestamp": summary.get("generated_at"),
+            "trigger": summary.get("_trigger") or "manual",
+            "universe_size": summary.get("universe_size"),
+            "alive": summary.get("live_alive"),
+            "dead": summary.get("live_dead"),
+            "suspicious": summary.get("live_suspicious"),
+            "exclusion_rate_pct": summary.get("exclusion_rate_pct"),
+            "sharpe_reduction_point": summary.get("estimated_sharpe_reduction_point"),
+            "sharpe_reduction_max": summary.get("estimated_sharpe_reduction_max"),
+            "wfo_corrected_point": (summary.get("wfo_correction") or {}).get("corrected_point_estimate"),
+        })
+        # Letzte 60 Runs (60 Wochen = ~14 Monate Time-Series)
+        if len(runs) > 60:
+            runs = runs[-60:]
+        hist["runs"] = runs
+        hist["updated_at"] = datetime.utcnow().isoformat()
+        save_json("survivorship_history.json", hist)
+        log.info("Survivorship-History: %d Runs total", len(runs))
+    except Exception as e:
+        log.warning("History-Append fehlgeschlagen: %s", e)
+
+
+def _maybe_telegram_alert():
+    """Triggert Telegram-Alert wenn check_survivorship_alerts Regeln verletzt sind."""
+    try:
+        from app.alerts import check_survivorship_alerts
+        check_survivorship_alerts()
+    except Exception as e:
+        log.warning("Telegram-Alert-Check fehlgeschlagen: %s", e)
+
+
+def run_audit(quick: bool = False, trigger: str = "manual",
+              with_history: bool = False, with_alerts: bool = False) -> dict:
+    """Vollstaendiger Audit + Persist.
+
+    Args:
+        quick: Live-Check ueberspringen (yfinance schonen)
+        trigger: 'manual' / 'cron-weekly' / 'gh-action' fuer Audit-Trail
+        with_history: True -> Time-Series in survivorship_history.json appenden
+        with_alerts:  True -> Telegram-Alert bei Anomalien (cron-Modus)
+    """
     from app.market_scanner import ASSET_UNIVERSE
     from app.config_manager import save_json, load_config
 
@@ -360,7 +413,14 @@ def run_audit(quick: bool = False) -> dict:
         "estimated_sharpe_reduction_point": correction["point_estimate"],
         "wfo_correction": wfo_correction,
     }
+    summary["_trigger"] = trigger
     save_json("survivorship_audit_summary.json", summary)
+
+    if with_history:
+        _append_history(summary)
+    if with_alerts:
+        _maybe_telegram_alert()
+
     return report
 
 
@@ -368,7 +428,15 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(message)s")
     quick = "--quick" in sys.argv
-    report = run_audit(quick=quick)
+    cron_mode = "--cron" in sys.argv
+    trigger = "cron-weekly" if cron_mode else "manual"
+    # --cron impliziert: nicht quick, mit history, mit telegram-alerts
+    report = run_audit(
+        quick=quick,
+        trigger=trigger,
+        with_history=cron_mode,
+        with_alerts=cron_mode,
+    )
     print("=" * 60)
     print("SURVIVORSHIP-AUDIT RESULTAT")
     print("=" * 60)

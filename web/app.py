@@ -4053,16 +4053,34 @@ async def api_survivorship_run(user=Depends(require_auth)):
 
     Runtime ca. 30-60 Sekunden (yfinance Calls fuer alle ~50 Symbole).
     Laeuft im Bot-Container (kein GH-Action noetig — Audit ist leichtgewichtig).
+    Manuelle Runs werden auch in der History-Time-Series getrackt.
     """
     import threading
     from app.survivorship_audit import run_audit
     def _bg():
         try:
-            run_audit(quick=False)
+            run_audit(quick=False, trigger="manual-dashboard",
+                      with_history=True, with_alerts=False)
         except Exception as e:
             log.exception(f"Survivorship-Audit failed: {e}")
     threading.Thread(target=_bg, daemon=True, name="survivorship-audit").start()
     return {"ok": True, "message": "Audit gestartet, ca. 30-60 Sek Runtime"}
+
+
+@app.get("/api/survivorship/history")
+async def api_survivorship_history():
+    """Time-Series der woechentlichen + manuellen Audit-Runs."""
+    try:
+        from app.config_manager import load_json
+        hist = load_json("survivorship_history.json") or {"runs": []}
+        runs = hist.get("runs") if isinstance(hist, dict) else []
+        return {
+            "runs_total": len(runs or []),
+            "runs": runs or [],
+            "updated_at": hist.get("updated_at") if isinstance(hist, dict) else None,
+        }
+    except Exception as e:
+        return {"runs_total": 0, "runs": [], "error": str(e)}
 
 
 @app.get("/api/wfo/history")

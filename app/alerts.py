@@ -682,3 +682,111 @@ def check_wfo_alerts(config=None):
     _save_alert_state(state)
     log.info(f"check_wfo_alerts: Alert gesendet ({len(violations)} Verletzungen, "
              f"{len(param_changes)} Param-Changes)")
+
+
+# ============================================================
+# SURVIVORSHIP-ALERTS (E4 Auto-Run, Wochentlich Sonntag 13 UTC)
+# ============================================================
+
+# Hard-Gate-Trigger fuer Telegram:
+SURV_ALERT_DEAD_THRESHOLD = 1            # mind. 1 totes Symbol -> Alert
+SURV_ALERT_SUSPICIOUS_THRESHOLD = 2      # mind. 2 suspicious -> Alert
+SURV_ALERT_BIAS_DRIFT_THRESHOLD = 0.10   # Bias-Estimate-Drift > 0.10 vs voriger Run
+
+
+def _build_survivorship_message(summary: dict, history_runs: list,
+                                violations: list[str], drift_info: dict | None) -> str:
+    lines = []
+    if violations:
+        lines.append("🔴 *Survivorship-Audit: ANOMALIE*")
+    elif drift_info:
+        lines.append("🟡 *Survivorship-Audit: Bias-Drift*")
+    else:
+        lines.append("✅ *Survivorship-Audit OK*")
+    lines.append("")
+    lines.append(f"Universe: *{summary.get('universe_size', '--')}* Symbole")
+    lines.append(f"Live-Check: alive={summary.get('live_alive', '--')}, "
+                 f"dead={summary.get('live_dead', '--')}, "
+                 f"suspicious={summary.get('live_suspicious', '--')}")
+    lines.append(f"Sharpe-Reduktion: *{summary.get('estimated_sharpe_reduction_point', '--')}*")
+    wfo = summary.get("wfo_correction") or {}
+    if wfo:
+        lines.append(f"WFO-Korrektur: {wfo.get('wfo_mean_oos_sharpe', '--')} -> "
+                     f"*{wfo.get('corrected_point_estimate', '--')}*")
+    if violations:
+        lines.append("")
+        lines.append("*Verletzungen:*")
+        for v in violations:
+            lines.append(f"• {v}")
+    if drift_info:
+        lines.append("")
+        lines.append("*Drift seit letztem Run:*")
+        lines.append(f"• Bias-Estimate {drift_info['prev']} -> {drift_info['cur']} "
+                     f"(Δ {drift_info['delta']:+.3f})")
+    return "\n".join(lines)
+
+
+def check_survivorship_alerts(config=None):
+    """Prueft Survivorship-Audit-Resultate, sendet Telegram nur bei Anomalien.
+
+    Trigger:
+      1. dead-Symbole >= 1 -> Universe-Update noetig (ERROR)
+      2. suspicious >= 2 -> mehrere Symbole liefern keine Daten (WARN)
+      3. Bias-Estimate-Drift > 0.10 vs voriger Run -> Universe-Quality erodiert (WARN)
+
+    State-Dedupe: gleicher generated_at-Timestamp wird nie zweimal alerted.
+    """
+    try:
+        summary = load_json("survivorship_audit_summary.json") or {}
+        history = load_json("survivorship_history.json") or {}
+    except Exception as e:
+        log.warning("check_survivorship_alerts: load failed: %s", e)
+        return
+
+    if not summary.get("generated_at"):
+        return
+
+    state = _load_alert_state()
+    last_alerted = state.get("survivorship_last_alerted_run")
+    if last_alerted == summary["generated_at"]:
+        log.debug("check_survivorship_alerts: bereits alerted")
+        return
+
+    # Hard-Gates pruefen
+    violations = []
+    dead = summary.get("live_dead") or 0
+    susp = summary.get("live_suspicious") or 0
+    if dead >= SURV_ALERT_DEAD_THRESHOLD:
+        violations.append(f"dead-Symbole: {dead} (>= {SURV_ALERT_DEAD_THRESHOLD})")
+    if susp >= SURV_ALERT_SUSPICIOUS_THRESHOLD:
+        violations.append(f"suspicious-Symbole: {susp} (>= {SURV_ALERT_SUSPICIOUS_THRESHOLD})")
+
+    # Bias-Drift vs voriger Run
+    drift_info = None
+    runs = (history or {}).get("runs") or []
+    if len(runs) >= 2:
+        cur_bias = runs[-1].get("sharpe_reduction_point")
+        prev_bias = runs[-2].get("sharpe_reduction_point")
+        if cur_bias is not None and prev_bias is not None:
+            delta = cur_bias - prev_bias
+            if abs(delta) > SURV_ALERT_BIAS_DRIFT_THRESHOLD:
+                drift_info = {"prev": prev_bias, "cur": cur_bias, "delta": delta}
+
+    if not violations and not drift_info:
+        log.info("check_survivorship_alerts: alles OK, kein Alert")
+        state["survivorship_last_alerted_run"] = summary["generated_at"]
+        state["survivorship_last_check"] = datetime.now().isoformat()
+        _save_alert_state(state)
+        return
+
+    msg = _build_survivorship_message(summary, runs, violations, drift_info)
+    level = "ERROR" if violations else "WARN"
+    send_alert(msg, level=level, config=config)
+    state["survivorship_last_alerted_run"] = summary["generated_at"]
+    state["survivorship_last_check"] = datetime.now().isoformat()
+    state["survivorship_last_violations"] = violations
+    if drift_info:
+        state["survivorship_last_drift"] = drift_info
+    _save_alert_state(state)
+    log.info("check_survivorship_alerts: Alert gesendet (%d Verletzungen, drift=%s)",
+             len(violations), drift_info is not None)

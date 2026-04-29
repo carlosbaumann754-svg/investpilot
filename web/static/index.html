@@ -299,13 +299,34 @@
                     <div style="opacity:0.7;font-size:0.9em;">vs. nicht-korrigierte WFO-Sharpe <span id="surv-wfo-raw">--</span></div>
                 </div>
                 <div style="margin-top:10px;font-size:12px;opacity:0.7;">
-                    Letzter Audit: <span id="surv-generated">--</span>
+                    Letzter Audit: <span id="surv-generated">--</span> &middot;
+                    naechster Auto-Run (Cron So 13:00 UTC): <span id="surv-next-run">--</span>
                 </div>
+            </div>
+
+            <!-- HISTORY Time-Series Tabelle -->
+            <div id="surv-history-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;">
+                    <strong>Trend</strong> &middot; <span id="surv-hist-count">--</span> Audits
+                </div>
+                <table style="width:100%;font-size:12px;border-collapse:collapse;">
+                    <thead style="opacity:0.7;">
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                            <th style="text-align:left;padding:4px 4px;">Run</th>
+                            <th style="text-align:right;padding:4px 4px;">Universe</th>
+                            <th style="text-align:right;padding:4px 4px;">Alive</th>
+                            <th style="text-align:right;padding:4px 4px;">Dead</th>
+                            <th style="text-align:right;padding:4px 4px;">Bias</th>
+                            <th style="text-align:right;padding:4px 4px;">WFO-corr</th>
+                        </tr>
+                    </thead>
+                    <tbody id="surv-hist-tbody"></tbody>
+                </table>
             </div>
 
             <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
                 <button onclick="surveyRunNow()" id="surv-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
-                        title="Voller Audit mit yfinance Live-Check (~30-60 Sek). Nicht zwingend taeglich noetig — bei Universe-Aenderungen oder vor wichtigen Decisions.">
+                        title="Voller Audit mit yfinance Live-Check (~30-60 Sek). Auto-Run laeuft jeden Sonntag 13:00 UTC via VPS-Cron, Telegram-Alert nur bei Anomalien.">
                     ▶ Audit jetzt laufen lassen
                 </button>
                 <span id="surv-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
