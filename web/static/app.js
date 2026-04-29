@@ -1725,6 +1725,7 @@ async function askQuestion() {
     loadWfoStatus();
     loadSurvivorship();
     loadCostModelStatus();
+    loadCutoverReadiness();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1735,6 +1736,7 @@ async function askQuestion() {
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
+    setInterval(loadCutoverReadiness, 300000); // Cutover-Readiness alle 5 Min
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
@@ -2609,6 +2611,84 @@ async function loadCostModelStatus() {
         calibBlock.style.display = '';
     } catch (e) {
         console.error('loadCostModelStatus failed:', e);
+    }
+}
+
+/**
+ * v37p: Cutover-Readiness Card — zentrale Health-Uebersicht.
+ * Aggregiert Hard-Gates + Submodule-Status auf einen Blick.
+ */
+async function loadCutoverReadiness() {
+    try {
+        const r = await fetch('/api/cutover/readiness');
+        if (!r.ok) return;
+        const d = await r.json();
+
+        // Headline + Overall-Badge
+        const badge = document.getElementById('cutover-overall-badge');
+        const headline = document.getElementById('cutover-headline');
+        if (!badge || !headline) return;
+
+        const colors = {
+            green:  { bg: 'rgba(16,185,129,0.18)',  fg: '#34d399', label: 'BEREIT'   },
+            yellow: { bg: 'rgba(245,158,11,0.18)', fg: '#fbbf24', label: 'IN ARBEIT'},
+            red:    { bg: 'rgba(239,68,68,0.18)',   fg: '#f87171', label: 'OFFEN'    },
+        };
+        const c = colors[d.overall_status] || colors.yellow;
+        badge.style.background = c.bg;
+        badge.style.color = c.fg;
+        badge.textContent = c.label + ' · ' + (d.summary?.green || 0) + '/' + (d.summary?.total || 0);
+
+        const days = d.days_to_cutover ?? '?';
+        headline.innerHTML =
+            `Cutover am <strong>${d.cutover_date}</strong> &middot; ` +
+            `noch <strong>${days} Tage</strong> &middot; ` +
+            `<span style="color:#34d399;">${d.summary?.green || 0} gruen</span>` +
+            (d.summary?.yellow ? ` &middot; <span style="color:#fbbf24;">${d.summary.yellow} gelb</span>` : '') +
+            (d.summary?.red    ? ` &middot; <span style="color:#f87171;">${d.summary.red} rot</span>` : '');
+
+        // Hard-Gates Liste
+        const list = document.getElementById('cutover-gates-list');
+        list.innerHTML = (d.hard_gates || []).map(g => {
+            const gc = colors[g.status] || colors.yellow;
+            const dot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${gc.fg};margin-right:8px;flex-shrink:0;"></span>`;
+            return `
+                <div style="display:flex;align-items:flex-start;gap:6px;padding:6px 8px;background:rgba(255,255,255,0.02);border-radius:4px;">
+                    ${dot}
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-weight:600;">#${g.nr} ${g.title}</div>
+                        <div style="font-size:11px;opacity:0.8;line-height:1.4;margin-top:2px;">${g.detail || ''}</div>
+                    </div>
+                </div>`;
+        }).join('');
+
+        // Sub-Modules
+        const sub = d.submodules || {};
+        const po = sub.pushover || {};
+        document.getElementById('cutover-sub-pushover').innerHTML =
+            (po.enabled && po.configured)
+                ? '<span style="color:#34d399;">aktiv</span>'
+                : '<span style="color:#fbbf24;">inaktiv</span>';
+
+        const bk = sub.backups || {};
+        document.getElementById('cutover-sub-backups').innerHTML =
+            bk.configured ? `<span style="color:#34d399;">${bk.count} Archives</span>`
+                          : '<span style="color:#fbbf24;">noch keine</span>';
+
+        const ins = sub.insider_shadow || {};
+        document.getElementById('cutover-sub-insider').innerHTML =
+            ins.active
+                ? `${ins.tracked} Candidates &middot; ${ins.would_block_pct}% wuerde-blocken`
+                : '<span style="opacity:0.7;">sammelt Daten</span>';
+
+        const cm = sub.cost_model || {};
+        const lr = cm.last_run ? new Date(cm.last_run).toLocaleDateString('de-CH') : '--';
+        document.getElementById('cutover-sub-cost-model').innerHTML =
+            cm.fills_analyzed > 0
+                ? `${cm.fills_analyzed} Fills &middot; ${cm.overrides_active}/6 Klassen kalibriert`
+                : `<span style="opacity:0.7;">Defaults aktiv (last: ${lr})</span>`;
+    } catch (e) {
+        console.error('loadCutoverReadiness failed:', e);
     }
 }
 

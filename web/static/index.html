@@ -77,6 +77,46 @@
 
     <!-- === DASHBOARD TAB === -->
     <div id="tab-dashboard" class="tab-content active">
+
+        <!-- v37p: CUTOVER-READINESS CARD (zentrale Health-Uebersicht) -->
+        <div class="card" id="cutover-readiness-card" style="border-left:4px solid #6366f1;">
+            <div class="card-title">
+                Cutover-Readiness
+                <span class="tip" data-tip="Zentraler Status fuer den Real-Money-Cutover am 28.05.2026. Zeigt alle 8 Hard-Gates (kritische Sicherheitspruefungen) plus die wichtigsten Sub-Systeme (Pushover-Alerts, Backups, Insider-Shadow-Tracker, Cost-Model-Calibrator). Gruen=bereit, Gelb=in Arbeit, Rot=offen + blockiert. Aktualisiert sich alle 5 Min automatisch.">?</span>
+                <span id="cutover-overall-badge" style="float:right;font-size:13px;padding:4px 10px;border-radius:12px;background:rgba(99,102,241,0.15);color:#a5b4fc;">--</span>
+            </div>
+            <div id="cutover-headline" class="card-sub" style="margin-bottom:12px;font-size:14px;">
+                Lade Status...
+            </div>
+
+            <!-- HARD-GATES Liste -->
+            <div style="font-size:13px;opacity:0.85;margin-bottom:6px;"><strong>Hard-Gates</strong> (8 kritische Sicherheitspruefungen)</div>
+            <div id="cutover-gates-list" style="display:flex;flex-direction:column;gap:6px;font-size:13px;"></div>
+
+            <!-- SUB-MODULES Mini-Boxen -->
+            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;"><strong>Sub-Systeme</strong></div>
+                <div class="grid-2" style="gap:8px;font-size:12px;">
+                    <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                        <div style="opacity:0.7;font-size:11px;">PUSHOVER ALERTS</div>
+                        <div id="cutover-sub-pushover" style="font-weight:600;margin-top:2px;">--</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                        <div style="opacity:0.7;font-size:11px;">BACKUPS</div>
+                        <div id="cutover-sub-backups" style="font-weight:600;margin-top:2px;">--</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                        <div style="opacity:0.7;font-size:11px;">INSIDER SHADOW (C1 A/B)</div>
+                        <div id="cutover-sub-insider" style="font-weight:600;margin-top:2px;">--</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                        <div style="opacity:0.7;font-size:11px;">COST-MODEL CALIBRATOR</div>
+                        <div id="cutover-sub-cost-model" style="font-weight:600;margin-top:2px;">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-title">Portfolio-Wert<span class="tip" data-tip="Der Gesamtwert deines Kontos: Bargeld plus aktueller Wert aller offenen Positionen.">?</span></div>
             <div class="card-value" id="total-value">--</div>
