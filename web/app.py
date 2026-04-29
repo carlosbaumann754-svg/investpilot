@@ -4355,6 +4355,69 @@ async def api_alerts_test_pushover(user=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/backups/status")
+async def api_backups_status():
+    """v37n: Status des Daily-Backup-Systems (Hard-Gate #4).
+
+    Liefert: letztes Backup-Datum, Anzahl Dateien, Gesamt-Disk-Usage,
+    Retention-Policy, Liste der letzten 10 Archives mit Groesse + Alter.
+    Pfad-Daten sind volume-mounted unter /var/backups/investpilot auf VPS,
+    daher hier ueber direkten Filesystem-Zugriff (read-only).
+    """
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        from datetime import datetime as _dt, timezone as _tz
+
+        backup_dir = _Path("/var/backups/investpilot")
+        if not backup_dir.exists():
+            return {
+                "configured": False,
+                "note": "Backup-Verzeichnis /var/backups/investpilot existiert nicht. "
+                        "Cron muss noch eingerichtet werden.",
+            }
+
+        # Letztes Backup-Info
+        info_file = backup_dir / "last_backup.json"
+        last_info = {}
+        if info_file.exists():
+            try:
+                last_info = _json.loads(info_file.read_text())
+            except Exception:
+                pass
+
+        # Liste alle Archives
+        archives = sorted(
+            backup_dir.glob("state_*.tar.gz"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        total_size = sum(a.stat().st_size for a in archives)
+        recent = []
+        now_ts = _dt.now(_tz.utc).timestamp()
+        for a in archives[:10]:
+            mtime = a.stat().st_mtime
+            recent.append({
+                "filename": a.name,
+                "size_bytes": a.stat().st_size,
+                "age_hours": round((now_ts - mtime) / 3600, 1),
+                "modified_at": _dt.fromtimestamp(mtime, _tz.utc).isoformat(),
+            })
+
+        return {
+            "configured": True,
+            "backup_count": len(archives),
+            "total_size_bytes": total_size,
+            "total_size_mb": round(total_size / 1024 / 1024, 2),
+            "last_backup": last_info,
+            "recent_archives": recent,
+            "retention_days": 30,
+            "cron_schedule": "0 4 * * * (taeglich 04:00 UTC = 06:00 CEST)",
+        }
+    except Exception as e:
+        return {"error": str(e), "configured": False}
+
+
 @app.get("/api/insider/shadow")
 async def api_insider_shadow(days: int = 14):
     """v37m: Insider Shadow-Tracker (Forward-A/B).
