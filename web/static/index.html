@@ -636,8 +636,8 @@
                 <button class="btn btn-secondary" style="width:100%;margin-top:8px" onclick="downloadReportPdf()">PDF herunterladen</button>
             </div>
             <div class="card">
-                <div class="card-title">Asset Discovery<span class="tip" data-tip="Der Bot sucht auf eToro nach neuen interessanten Aktien, ETFs oder Kryptos, die er noch nicht kennt, und bewertet ob sie zur Strategie passen. Laeuft automatisch jeden Freitag 19:00 CEST.">?</span></div>
-                <div class="card-sub">eToro nach neuen Assets durchsuchen</div>
+                <div class="card-title">Asset Discovery<span class="tip" data-tip="Der Bot sucht im US-Aktienmarkt + Crypto-Universe nach neuen interessanten Symbolen die er noch nicht kennt und bewertet ob sie zur Strategie passen. Universe-Filter (Strategy-A) sortiert anschliessend Schwache aus. Laeuft automatisch jeden Freitag 19:00 CEST via GitHub Action.">?</span></div>
+                <div class="card-sub">Universe nach neuen Assets durchsuchen</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="runDiscovery()">Discovery starten</button>
                 <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-discovery-lastrun">--</div>
             </div>
@@ -706,7 +706,7 @@
         <!-- Actions -->
         <div class="grid-3">
             <div class="card" style="text-align:center">
-                <div class="card-title">Backtest starten<span class="tip" data-tip="Simuliert die Strategie auf 5 Jahren echter Vergangenheits-Kurse, ohne echtes Geld zu riskieren. Zeigt dir wie der Bot in der Vergangenheit performt haette. Dauert ein paar Minuten. Laeuft automatisch jeden Sonntag 08:00 CEST nach dem Optimizer.">?</span></div>
+                <div class="card-title">Backtest starten<span class="tip" data-tip="Simuliert die Strategie auf 5 Jahren echter Vergangenheits-Kurse, ohne echtes Geld zu riskieren. WICHTIG: Bei Config-Aenderungen (z.B. Stop-Loss) sollte ein neuer Run gestartet werden, sonst sind die Backtest-Resultate veraltet. Dauert ein paar Minuten. Laeuft automatisch jeden Sonntag 08:00 CEST nach dem Optimizer.">?</span></div>
                 <div class="card-sub">5 Jahre Historie, Walk-Forward Validation</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-run-backtest" onclick="runBacktest()">Run Backtest</button>
                 <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-backtest-lastrun">--</div>
@@ -942,7 +942,7 @@
                         <input type="number" id="cfg-rebalance" step="0.5" min="1" max="20">
                     </div>
                     <div class="form-group">
-                        <label>Default Leverage</label><span class="tip" data-tip="Hebel: Vergroessert Gewinn UND Verlust. 1x = normal (100 USD bewegen 100 USD), 5x = 100 USD bewegen 500 USD. Hoeherer Hebel = hoeheres Risiko. Fuer Einsteiger 1x oder 2x empfohlen.">?</span>
+                        <label>Default Leverage</label><span class="tip" data-tip="Hebel-Wert wird nur bei eToro-CFD-Trading angewendet. Bei IBKR (aktuell aktiv) wird das Feld IGNORIERT — IBKR steuert Margin/Leverage ueber das Account-Setup (Reg-T-Margin) selbst. Eintrag hier bleibt fuer eToro-Klone-Bots oder Migration zurueck zu eToro vorhanden.">?</span>
                         <select id="cfg-leverage">
                             <option value="1">1x</option>
                             <option value="2">2x</option>

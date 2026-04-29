@@ -1354,19 +1354,65 @@ async def api_trades(limit: int = 50, offset: int = 0, user=Depends(require_auth
 
 @app.get("/api/brain")
 async def api_brain(user=Depends(require_auth)):
-    """Brain State: Scores, Regime, Regeln."""
+    """Brain State: Scores, Regime, Regeln.
+
+    v37g (Tab-Audit-Fix B5): best/worst_performers + instrument_scores werden
+    mit Symbol-Lookup angereichert (statt nur conIds zu zeigen).
+    Plus B4: 'days_held' wird in 'cycles_observed' umbenannt fuer Klarheit
+    (es sind Bot-Cycles, nicht Tage).
+    """
     brain = read_json_safe("brain_state.json")
     if not brain:
         return {"error": "Brain State nicht verfuegbar"}
+
+    # B5: Symbol-Reverse-Lookup fuer instrument_scores + best/worst
+    # nutzt enrich_with_asset_meta + ibkr_contract_cache (gleicher Pfad
+    # wie /api/portfolio v36e)
+    raw_scores = brain.get("instrument_scores", {}) or {}
+    enriched_scores: dict = {}
+    enriched_best: list = []
+    enriched_worst: list = []
+    if raw_scores:
+        # Bauen wir eine Liste von Items mit instrument_id, lassen sie
+        # anreichern, mappen zurueck auf das Score-Dict.
+        items = [{"instrument_id": int(iid), "score_data": data}
+                 for iid, data in raw_scores.items() if str(iid).isdigit()]
+        enrich_with_asset_meta(items)
+        for it in items:
+            sym = it.get("symbol") or f"#{it['instrument_id']}"
+            sd = dict(it["score_data"])
+            # B4: days_held -> cycles_observed (klarer Name)
+            if "days_held" in sd:
+                sd["cycles_observed"] = sd.pop("days_held")
+            sd["symbol"] = sym
+            enriched_scores[str(it["instrument_id"])] = sd
+
+    def _resolve_symbol(iid):
+        items = [{"instrument_id": int(iid)}] if str(iid).isdigit() else []
+        if items:
+            enrich_with_asset_meta(items)
+            return items[0].get("symbol") or f"#{iid}"
+        return f"#{iid}"
+
+    enriched_best = [
+        {"instrument_id": iid, "symbol": _resolve_symbol(iid)}
+        for iid in (brain.get("best_performers") or [])
+    ]
+    enriched_worst = [
+        {"instrument_id": iid, "symbol": _resolve_symbol(iid)}
+        for iid in (brain.get("worst_performers") or [])
+    ]
+
     return {
         "total_runs": brain.get("total_runs", 0),
         "market_regime": brain.get("market_regime", "unknown"),
-        "win_rate": brain.get("win_rate", 0),
-        "sharpe_estimate": brain.get("sharpe_estimate", 0),
-        "instrument_scores": brain.get("instrument_scores", {}),
+        "win_rate": brain.get("win_rate"),         # None nach Tab-Audit-Reset bis Bot frische Daten gesammelt hat
+        "sharpe_estimate": brain.get("sharpe_estimate"),  # None nach Reset
+        "avg_return_pct": brain.get("avg_return_pct"),    # None nach Reset
+        "instrument_scores": enriched_scores,
         "learned_rules": brain.get("learned_rules", [])[-10:],
-        "best_performers": brain.get("best_performers", []),
-        "worst_performers": brain.get("worst_performers", []),
+        "best_performers": enriched_best,
+        "worst_performers": enriched_worst,
         "optimization_log": brain.get("optimization_log", [])[-10:],
         "last_snapshot": brain.get("performance_snapshots", [{}])[-1] if brain.get("performance_snapshots") else None,
     }

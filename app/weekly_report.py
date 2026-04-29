@@ -207,13 +207,38 @@ def _generate_improvement_suggestions(brain, trade_stats, tech_checks, tech_warn
     # Brain-basierte Vorschlaege
     scores = brain.get("instrument_scores", {})
     if scores:
+        # v37g (Tab-Audit-Fix R-suggest): Symbol-Lookup statt conId in Suggestion-Text
+        # — analog /api/brain Enrichment.
+        try:
+            from app.market_scanner import ASSET_UNIVERSE
+            from app.config_manager import load_json as _lj
+            cache = _lj("ibkr_contract_cache.json") or {}
+            conid_to_etoro = {int(e["conId"]): int(eid)
+                              for eid, e in cache.items()
+                              if isinstance(e, dict) and e.get("conId")}
+            etoro_to_sym = {int(m.get("etoro_id", -1)): s
+                            for s, m in ASSET_UNIVERSE.items()}
+            def _sym(iid_str):
+                try:
+                    iid = int(iid_str)
+                    if iid in etoro_to_sym:
+                        return etoro_to_sym[iid]
+                    et = conid_to_etoro.get(iid)
+                    if et is not None and et in etoro_to_sym:
+                        return etoro_to_sym[et]
+                except Exception:
+                    pass
+                return f"#{iid_str}"
+        except Exception:
+            _sym = lambda iid: f"#{iid}"
+
         worst = sorted(scores.items(), key=lambda x: x[1].get("score", 0))[:3]
         for iid, data in worst:
             if data.get("score", 0) < -10:
                 suggestions.append({
                     "bereich": "Portfolio",
                     "prioritaet": "MITTEL",
-                    "vorschlag": f"Instrument {iid} hat Score {data['score']:.1f} - dauerhaft schwach.",
+                    "vorschlag": f"Symbol {_sym(iid)} hat Score {data['score']:.1f} - dauerhaft schwach.",
                     "aktion": "Aus Portfolio-Targets entfernen oder Allokation reduzieren",
                 })
 
