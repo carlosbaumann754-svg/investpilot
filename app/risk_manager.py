@@ -802,45 +802,100 @@ def check_weekend_fee_impact(positions, config=None):
 # ============================================================
 
 def emergency_close_all(client, reason="Emergency Kill Switch"):
-    """Schliesse ALLE offenen Positionen sofort."""
-    from app.etoro_client import EtoroClient
+    """Schliesse ALLE offenen Positionen sofort + deaktiviere Trading.
 
+    v37l (Drill-Bug-Fix): Robuste Implementierung in 3 Phasen mit jeweils
+    eigener Exception-Behandlung. Die kritische Eigenschaft eines Kill-
+    Switches ist DASS ER HAELT. Auch wenn die Position-Schliessung
+    fehlschlaegt (Broker-Disconnect, Quote-Errors, etc.) MUSS das
+    Trading-Flag auf false gehen, damit der Bot keine NEUEN Trades mehr
+    aufmacht.
+
+    Vorher: bei get_portfolio() == None lief die Funktion mit early-return
+    raus, das Flag wurde nie gesetzt — Bot tradete weiter. Drill am
+    29.04.2026 hat das aufgedeckt (IBKR-readonly-Client lieferte leeres
+    Portfolio).
+
+    Phasen:
+      1. Trading-Flag IMMER auf false (vor allem anderen).
+      2. Risk-Pause 24h (Best-Effort).
+      3. Positionen schliessen (Best-Effort, broker-agnostisch via
+         EtoroClient.parse_position das auch IBKR-Format versteht).
+    """
     log.warning(f"!!! EMERGENCY CLOSE ALL: {reason} !!!")
 
-    portfolio = client.get_portfolio()
-    if not portfolio:
-        log.error("Portfolio nicht verfuegbar fuer Emergency Close")
-        return {"closed": 0, "failed": 0, "error": "Portfolio nicht verfuegbar"}
+    # ---- PHASE 1: Trading-Flag IMMER deaktivieren ----
+    flag_set = False
+    try:
+        from app.config_manager import get_data_path
+        flag_path = get_data_path("trading_enabled.flag")
+        flag_path.write_text("false")
+        flag_set = True
+        log.warning("  [1/3] Trading-Flag gesetzt -> false (Bot tradet ab naechstem Cycle nicht mehr)")
+    except Exception as e:
+        log.error(f"  [1/3] KRITISCH: Trading-Flag konnte nicht gesetzt werden: {e}", exc_info=True)
 
-    positions = portfolio.get("positions", [])
+    # ---- PHASE 2: Risk-Pause 24h ----
+    pause_set = False
+    try:
+        state = _load_risk_state()
+        state["paused_until"] = (datetime.now() + timedelta(hours=24)).isoformat()
+        state["pause_reason"] = reason
+        _save_risk_state(state)
+        pause_set = True
+        log.warning("  [2/3] Risk-Pause 24h gesetzt")
+    except Exception as e:
+        log.error(f"  [2/3] Risk-Pause konnte nicht gesetzt werden: {e}", exc_info=True)
+
+    # ---- PHASE 3: Offene Positionen schliessen (Best-Effort) ----
     closed = 0
     failed = 0
+    portfolio_error = None
+    try:
+        portfolio = client.get_portfolio()
+        if not portfolio:
+            portfolio_error = "get_portfolio() returned None/empty"
+            log.error(f"  [3/3] Position-Fetch fehlgeschlagen: {portfolio_error}")
+        else:
+            from app.etoro_client import EtoroClient  # parse_position arbeitet auch mit IBKR-Format
+            positions = portfolio.get("positions", []) or []
+            log.warning(f"  [3/3] Schliesse {len(positions)} offene Positionen...")
+            for pos in positions:
+                try:
+                    p = EtoroClient.parse_position(pos)
+                    if p.get("invested", 0) > 0:
+                        result = client.close_position(
+                            p["position_id"], p.get("instrument_id")
+                        )
+                        if result:
+                            closed += 1
+                            log.info(f"    Geschlossen: {p['position_id']} "
+                                     f"(Instrument {p.get('instrument_id')}, "
+                                     f"P/L: {p.get('pnl_pct', 0):+.1f}%)")
+                        else:
+                            failed += 1
+                            log.error(f"    FEHLER: Position {p['position_id']} nicht geschlossen")
+                except Exception as e:
+                    failed += 1
+                    log.error(f"    Position-Close Exception: {e}", exc_info=True)
+    except Exception as e:
+        portfolio_error = str(e)
+        log.error(f"  [3/3] Portfolio-Fetch Exception: {e}", exc_info=True)
 
-    for pos in positions:
-        p = EtoroClient.parse_position(pos)
-        if p["invested"] > 0:
-            result = client.close_position(p["position_id"])
-            if result:
-                closed += 1
-                log.info(f"  Geschlossen: Position {p['position_id']} "
-                         f"(Instrument {p['instrument_id']}, P/L: {p['pnl_pct']:+.1f}%)")
-            else:
-                failed += 1
-                log.error(f"  FEHLER: Position {p['position_id']} konnte nicht geschlossen werden")
+    log.warning(
+        f"  Emergency-Close-Resultat: {closed} geschlossen, {failed} fehlgeschlagen, "
+        f"trading_flag_set={flag_set}, pause_set={pause_set}"
+        + (f", portfolio_error='{portfolio_error}'" if portfolio_error else "")
+    )
 
-    # Trading deaktivieren
-    from app.config_manager import get_data_path
-    flag_path = get_data_path("trading_enabled.flag")
-    flag_path.write_text("false")
-
-    # Pause setzen
-    state = _load_risk_state()
-    state["paused_until"] = (datetime.now() + timedelta(hours=24)).isoformat()
-    state["pause_reason"] = reason
-    _save_risk_state(state)
-
-    log.warning(f"  Emergency Close: {closed} geschlossen, {failed} fehlgeschlagen, Trading deaktiviert")
-    return {"closed": closed, "failed": failed, "reason": reason}
+    return {
+        "closed": closed,
+        "failed": failed,
+        "trading_flag_set": flag_set,
+        "pause_set": pause_set,
+        "portfolio_error": portfolio_error,
+        "reason": reason,
+    }
 
 
 # ============================================================

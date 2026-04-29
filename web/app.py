@@ -2101,15 +2101,23 @@ async def api_weekly_report_pdf(user=Depends(require_auth)):
 
 @app.post("/api/trading/killswitch")
 async def api_killswitch(user=Depends(require_auth)):
-    """EMERGENCY: Alle Positionen sofort schliessen, Trading deaktivieren."""
+    """EMERGENCY: Alle Positionen sofort schliessen, Trading deaktivieren.
+
+    v37l-Fix: Vorher readonly=True -> bei IBKR random clientId mit leerem
+    Portfolio-Cache, get_portfolio() liefert None, emergency_close_all()
+    macht early-return ohne Flag-Setting. Jetzt readonly=False (wir wollen
+    schliesslich schreiben). Plus emergency_close_all selbst ist robust:
+    Trading-Flag wird in Phase 1 gesetzt BEVOR Portfolio-Fetch stattfindet.
+    """
     try:
         from app.risk_manager import emergency_close_all
-        from app.etoro_client import EtoroClient
         from app.config_manager import load_config
 
         config = load_config()
-        client = get_broker(config, readonly=True)
-        result = emergency_close_all(client, f"Dashboard Kill Switch von {user}")
+        # readonly=False: wir wollen Positionen wirklich schliessen
+        client = get_broker(config, readonly=False)
+        username = getattr(user, "username", None) or str(user)
+        result = emergency_close_all(client, f"Dashboard Kill Switch von {username}")
 
         try:
             from web.security import log_audit
@@ -2117,9 +2125,13 @@ async def api_killswitch(user=Depends(require_auth)):
         except Exception:
             pass
 
+        # Pushover/Multi-Channel Alert (CRITICAL = Priority 2 = Emergency-Repeat)
         try:
             from app.alerts import alert_emergency
-            alert_emergency(f"Dashboard Kill Switch von {user}", result.get("closed", 0))
+            alert_emergency(
+                f"Dashboard Kill Switch von '{username}'",
+                result.get("closed", 0),
+            )
         except Exception:
             pass
 
