@@ -141,3 +141,111 @@ def test_result_has_complete_schema(temp_data_dir):
                      "portfolio_error", "reason"}
     assert expected_keys.issubset(res.keys())
     assert res["reason"] == "UnitTest"
+
+
+# ============================================================
+# IBKR-Fallback (v37o): wenn get_portfolio leer aber ib.positions() Daten hat
+# ============================================================
+
+class _FakeIb:
+    """Mock fuer ib_insync.IB mit positions() + reqPositions() + sleep()."""
+    def __init__(self, positions_list):
+        self._positions = positions_list
+        self.req_positions_called = False
+
+    def positions(self):
+        return list(self._positions)
+
+    def reqPositions(self):
+        self.req_positions_called = True
+
+    def sleep(self, seconds):
+        pass
+
+
+class _FakeContract:
+    def __init__(self, conId, symbol):
+        self.conId = conId
+        self.symbol = symbol
+
+
+class _FakePosition:
+    def __init__(self, conId, symbol, qty, avg_cost):
+        self.contract = _FakeContract(conId, symbol)
+        self.position = qty
+        self.avgCost = avg_cost
+
+
+class _FakeIbkrBroker:
+    """Mock IbkrBroker mit get_portfolio() + _get_ib() + close_position."""
+    def __init__(self, portfolio_response, ib_positions):
+        self._pf = portfolio_response
+        self._ib = _FakeIb(ib_positions)
+        self.close_calls = []
+
+    def get_portfolio(self):
+        return self._pf
+
+    def _get_ib(self):
+        return self._ib
+
+    def close_position(self, position_id, instrument_id=None):
+        self.close_calls.append((position_id, instrument_id))
+        return {"orderForOpen": {"orderID": "X1", "avgFillPrice": 100.0}}
+
+
+def test_ibkr_direct_fallback_when_get_portfolio_empty(temp_data_dir):
+    """v37o: get_portfolio leer -> ib.positions() liefert Backup-Daten."""
+    # Standard-Pfad leer (Cache nicht populated), aber ib.positions() voll
+    portfolio_empty = {"positions": []}
+    ib_positions = [
+        _FakePosition(290651477, "ROKU", qty=100, avg_cost=115.0),
+        _FakePosition(365207014, "UBER", qty=50, avg_cost=76.0),
+    ]
+    broker = _FakeIbkrBroker(portfolio_empty, ib_positions)
+    res = emergency_close_all(broker, reason="Test IBKR-Fallback")
+
+    assert res["trading_flag_set"] is True
+    assert res["closed"] == 2
+    assert res["failed"] == 0
+    assert len(broker.close_calls) == 2
+    # Symbole-Identitaet check: position_ids sind conIds als string
+    pids = {c[0] for c in broker.close_calls}
+    assert pids == {"290651477", "365207014"}
+
+
+def test_force_sync_when_initial_positions_empty(temp_data_dir):
+    """v37o: ib.positions() initial leer -> reqPositions() + Retry."""
+    portfolio_empty = {"positions": []}
+    ib_initially_empty = []  # Stage 1+2: leer
+    broker = _FakeIbkrBroker(portfolio_empty, ib_initially_empty)
+
+    # Stage 3: ib.positions() liefert nach reqPositions Daten — wir patchen das
+    original_positions = broker._ib.positions
+    call_count = {"n": 0}
+    def positions_after_sync():
+        call_count["n"] += 1
+        if call_count["n"] >= 2:  # nach reqPositions
+            return [_FakePosition(290651477, "ROKU", qty=100, avg_cost=115.0)]
+        return []
+    broker._ib.positions = positions_after_sync
+
+    res = emergency_close_all(broker, reason="Test Force-Sync")
+
+    assert res["trading_flag_set"] is True
+    assert broker._ib.req_positions_called is True
+    assert res["closed"] == 1
+
+
+def test_all_three_stages_empty_still_sets_flag(temp_data_dir):
+    """Wenn ALLE 3 Fallback-Stufen leer: Flag trotzdem auf false."""
+    portfolio_empty = {"positions": []}
+    ib_empty: list = []
+    broker = _FakeIbkrBroker(portfolio_empty, ib_empty)
+
+    res = emergency_close_all(broker, reason="Test all empty")
+
+    assert res["trading_flag_set"] is True
+    assert res["closed"] == 0
+    assert res["failed"] == 0
+    assert res["portfolio_error"] is not None

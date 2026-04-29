@@ -848,19 +848,90 @@ def emergency_close_all(client, reason="Emergency Kill Switch"):
         log.error(f"  [2/3] Risk-Pause konnte nicht gesetzt werden: {e}", exc_info=True)
 
     # ---- PHASE 3: Offene Positionen schliessen (Best-Effort) ----
+    # v37o: Robustes Position-Fetching mit 3-Stage-Fallback:
+    #   1. client.get_portfolio() — Standard-Pfad (eToro + IBKR)
+    #   2. IBKR-Direct: client._get_ib().positions() falls portfolio leer
+    #      (ib_insync Cache war noch nicht populated)
+    #   3. Force-Sync via reqPositions + retry — letzte Hoffnung
+    # Drill am 29.04. zeigte: bei frisch instanziiertem IBKR-Broker ist der
+    # Portfolio-Cache 2-3 Sek leer. Statt Phase 3 komplett zu skippen,
+    # versuchen wir aktiv zu syncen.
     closed = 0
     failed = 0
     portfolio_error = None
+    positions_to_close: list = []
+
     try:
+        # Versuch 1: Standard get_portfolio()
         portfolio = client.get_portfolio()
-        if not portfolio:
-            portfolio_error = "get_portfolio() returned None/empty"
-            log.error(f"  [3/3] Position-Fetch fehlgeschlagen: {portfolio_error}")
+        if portfolio and portfolio.get("positions"):
+            positions_to_close = portfolio.get("positions") or []
+            log.warning(f"  [3/3] Standard-Fetch: {len(positions_to_close)} Positionen")
         else:
-            from app.etoro_client import EtoroClient  # parse_position arbeitet auch mit IBKR-Format
-            positions = portfolio.get("positions", []) or []
-            log.warning(f"  [3/3] Schliesse {len(positions)} offene Positionen...")
-            for pos in positions:
+            # Versuch 2: IBKR-direkt via ib.positions()
+            try:
+                if hasattr(client, "_get_ib"):
+                    log.warning("  [3/3] Standard-Fetch leer, versuche IBKR-direkt...")
+                    ib = client._get_ib()
+                    raw_positions = list(ib.positions() or [])
+                    if raw_positions:
+                        # IBKR-Native-Format -> eToro-kompatibles dict
+                        for p in raw_positions:
+                            contract = getattr(p, "contract", None)
+                            qty = float(getattr(p, "position", 0))
+                            avg_cost = float(getattr(p, "avgCost", 0) or 0)
+                            cost_basis = qty * avg_cost
+                            if cost_basis > 0:
+                                positions_to_close.append({
+                                    "instrumentID": getattr(contract, "conId", None),
+                                    "symbol": getattr(contract, "symbol", None),
+                                    "amount": cost_basis,
+                                    "positionID": str(getattr(contract, "conId", "")),
+                                    "leverage": 1,
+                                    "openRate": avg_cost,
+                                    "currentRate": avg_cost,  # ohne marketPrice unbekannt
+                                    "isBuy": qty > 0,
+                                    "unrealizedPnL": {"pnL": 0},
+                                })
+                        log.warning(f"  [3/3] IBKR-direkt: {len(positions_to_close)} Positionen")
+                    else:
+                        # Versuch 3: Force-Sync + retry
+                        log.warning("  [3/3] IBKR.positions() leer, force-sync + retry...")
+                        try:
+                            ib.reqPositions()
+                            ib.sleep(2.0)
+                            raw_positions = list(ib.positions() or [])
+                            for p in raw_positions:
+                                contract = getattr(p, "contract", None)
+                                qty = float(getattr(p, "position", 0))
+                                avg_cost = float(getattr(p, "avgCost", 0) or 0)
+                                cost_basis = qty * avg_cost
+                                if cost_basis > 0:
+                                    positions_to_close.append({
+                                        "instrumentID": getattr(contract, "conId", None),
+                                        "symbol": getattr(contract, "symbol", None),
+                                        "amount": cost_basis,
+                                        "positionID": str(getattr(contract, "conId", "")),
+                                        "leverage": 1,
+                                        "openRate": avg_cost,
+                                        "currentRate": avg_cost,
+                                        "isBuy": qty > 0,
+                                        "unrealizedPnL": {"pnL": 0},
+                                    })
+                            log.warning(f"  [3/3] Force-Sync: {len(positions_to_close)} Positionen")
+                        except Exception as e:
+                            log.error(f"  [3/3] Force-Sync fehlgeschlagen: {e}")
+            except Exception as e:
+                log.error(f"  [3/3] IBKR-direkt-Fallback fehlgeschlagen: {e}")
+
+            if not positions_to_close:
+                portfolio_error = "Alle 3 Fetch-Versuche lieferten keine Positionen"
+                log.error(f"  [3/3] {portfolio_error}")
+
+        # Tatsaechliches Schliessen
+        if positions_to_close:
+            from app.etoro_client import EtoroClient
+            for pos in positions_to_close:
                 try:
                     p = EtoroClient.parse_position(pos)
                     if p.get("invested", 0) > 0:
