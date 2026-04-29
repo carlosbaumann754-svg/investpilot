@@ -113,11 +113,111 @@ def send_discord(message, config=None):
 
 
 # ============================================================
+# PUSHOVER (v37k)
+# ============================================================
+# Drop-in-Replacement / Parallel-Channel zu Telegram. Pushover liefert
+# native Push-Benachrichtigungen via APNS/FCM auf iOS/Android, sieht am
+# Lock-Screen wie eine SMS aus, mit Sound + optional Emergency-Repeat.
+#
+# Setup: User-Key auf https://pushover.net/, Application-API-Token via
+# https://pushover.net/apps/build (eigene 'App' anlegen). Beides landet
+# in config.alerts.pushover.{user_key, api_token}.
+#
+# Priority-Levels (Pushover-API):
+#  -2 = kein Sound, kein Banner (silent log)
+#  -1 = kein Sound, nur Banner
+#   0 = normal (default)
+#  +1 = high priority (rotes Banner, ueberbrueckt Quiet-Hours)
+#  +2 = emergency (wiederholt alle 30s bis User bestaetigt)
+
+PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json"
+
+
+def send_pushover(message, config=None, *, title="InvestPilot",
+                  priority=0, sound=None, html=False):
+    """Sende Push-Notification via Pushover.
+
+    Args:
+        message: Body-Text (max 1024 Zeichen, wird sonst von Pushover gekuerzt).
+        config: bot config dict; lazy-loaded wenn None.
+        title: Notification-Titel (max 250 Zeichen).
+        priority: -2..+2 (siehe Doku oben). Default 0 = normal.
+        sound: optionaler Sound-Name ('siren', 'cashregister', 'incoming', ...).
+               Wenn None: User-default aus Pushover-App.
+        html: True falls message HTML-Tags enthaelt (<b>, <i>, <u>).
+
+    Returns:
+        True bei Status 200 + status==1 in Response, sonst False.
+    """
+    if not requests:
+        return False
+    if config is None:
+        config = load_config()
+
+    po_cfg = config.get("alerts", {}).get("pushover", {})
+    user_key = po_cfg.get("user_key") or os.environ.get("PUSHOVER_USER_KEY", "")
+    api_token = po_cfg.get("api_token") or os.environ.get("PUSHOVER_API_TOKEN", "")
+
+    if not user_key or not api_token:
+        return False
+
+    payload = {
+        "token": api_token,
+        "user": user_key,
+        "title": title[:250],
+        "message": message[:1024],
+        "priority": int(priority),
+    }
+    if html:
+        payload["html"] = "1"
+    if sound:
+        payload["sound"] = sound
+    # Emergency-Mode benoetigt retry+expire (sonst rejected die API)
+    if int(priority) == 2:
+        payload["retry"] = po_cfg.get("emergency_retry_sec", 60)   # min 30
+        payload["expire"] = po_cfg.get("emergency_expire_sec", 600)  # max 10800
+
+    try:
+        resp = requests.post(PUSHOVER_API_URL, data=payload, timeout=10)
+        if resp.status_code != 200:
+            log.warning(f"Pushover HTTP {resp.status_code}: {resp.text[:200]}")
+            return False
+        body = resp.json() if resp.content else {}
+        if body.get("status") != 1:
+            log.warning(f"Pushover non-OK: {body}")
+            return False
+        return True
+    except Exception as e:
+        log.warning(f"Pushover Fehler: {e}", exc_info=True)
+        return False
+
+
+def _pushover_priority_for_level(level: str, config: dict) -> int:
+    """Mappe Alert-Level auf Pushover-Priority (User-konfigurierbar)."""
+    po_cfg = config.get("alerts", {}).get("pushover", {})
+    level_map = po_cfg.get("priority_map", {}) or {}
+    defaults = {
+        "INFO": 0,
+        "WARNING": 0,
+        "TRADE": 0,
+        "PROFIT": 0,
+        "LOSS": 0,
+        "ERROR": 1,        # rotes Banner
+        "CRITICAL": 2,     # emergency mit Repeat
+    }
+    return int(level_map.get(level, defaults.get(level, 0)))
+
+
+# ============================================================
 # UNIFIED ALERT
 # ============================================================
 
 def send_alert(message, level="INFO", config=None):
-    """Sende Alert ueber alle konfigurierten Kanaele."""
+    """Sende Alert ueber alle konfigurierten Kanaele.
+
+    Pruefen jeden Channel unabhaengig \u2014 wenn 2 aktiv sind, gehen 2 Nachrichten
+    raus. send_alert returnt True wenn MINDESTENS EIN Channel erfolgreich war.
+    """
     if config is None:
         config = load_config()
     alert_cfg = config.get("alerts", {})
@@ -139,6 +239,14 @@ def send_alert(message, level="INFO", config=None):
         sent = send_telegram(formatted, config) or sent
     if alert_cfg.get("discord", {}).get("enabled", False):
         sent = send_discord(f"{prefix} **InvestPilot**\n{message}\n*{datetime.now():%d.%m.%Y %H:%M}*", config) or sent
+    if alert_cfg.get("pushover", {}).get("enabled", False):
+        # Pushover: Title separat (kommt fett ueber dem Body), Body ohne Prefix-Emoji
+        # (Pushover zeigt Emoji im Body sauber an, aber Title liest sich besser ohne)
+        po_title = f"{prefix} InvestPilot"
+        po_body = f"{message}\n{datetime.now():%d.%m.%Y %H:%M}"
+        po_priority = _pushover_priority_for_level(level, config)
+        sent = send_pushover(po_body, config, title=po_title,
+                             priority=po_priority) or sent
 
     if sent:
         state = _load_alert_state()

@@ -4258,6 +4258,62 @@ async def api_cost_model_calibrate(user=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/alerts/status")
+async def api_alerts_status():
+    """v37k: Welche Alert-Kanaele sind aktiv? (User-Key-Maskierung fuer Display.)"""
+    try:
+        from app.config_manager import load_config
+        cfg = load_config().get("alerts", {})
+        def _mask(v: str) -> str:
+            if not v or len(v) < 8:
+                return ""
+            return f"{v[:4]}...{v[-4:]}"
+        return {
+            "telegram": {
+                "enabled": cfg.get("telegram", {}).get("enabled", False),
+                "configured": bool(cfg.get("telegram", {}).get("bot_token")
+                                   and cfg.get("telegram", {}).get("chat_id")),
+            },
+            "discord": {
+                "enabled": cfg.get("discord", {}).get("enabled", False),
+                "configured": bool(cfg.get("discord", {}).get("webhook_url")),
+            },
+            "pushover": {
+                "enabled": cfg.get("pushover", {}).get("enabled", False),
+                "configured": bool(cfg.get("pushover", {}).get("user_key")
+                                   and cfg.get("pushover", {}).get("api_token")),
+                "user_key_masked": _mask(cfg.get("pushover", {}).get("user_key", "")),
+            },
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/alerts/test/pushover")
+async def api_alerts_test_pushover(user=Depends(require_auth)):
+    """v37k: Schickt eine Test-Push-Nachricht an Pushover.
+
+    Falls user_key + api_token in config.alerts.pushover gesetzt sind, kommt
+    binnen 1-3 Sek eine Push-Notification aufs Handy. Nutzt Priority 0
+    (normaler Banner mit Sound), damit der Test nicht laermt aber sichtbar ist.
+    """
+    try:
+        from app.alerts import send_pushover
+        from datetime import datetime as _dt
+        msg = (f"Test-Push vom Dashboard\n"
+               f"Wenn du das siehst, ist Pushover korrekt eingerichtet ✅\n"
+               f"Zeit: {_dt.now():%d.%m.%Y %H:%M:%S}")
+        ok = send_pushover(msg, title="InvestPilot Test", priority=0)
+        if ok:
+            return {"ok": True, "message": "Test-Nachricht erfolgreich an Pushover gesendet."}
+        return {"ok": False, "error": ("Senden fehlgeschlagen — pruefe ob "
+                                        "user_key + api_token korrekt in "
+                                        "config.alerts.pushover gesetzt sind "
+                                        "und enabled=true ist.")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/wfo/history")
 async def api_wfo_history():
     """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart."""
