@@ -706,9 +706,33 @@ class IbkrBroker(BrokerBase):
         try:
             ib = self._get_ib()
             target_con_id = None
+
+            # v37s-Fix: instrument_id kann SOWOHL eToro-ID (klein, 1-5-stellig)
+            # ALS AUCH IBKR-conId (gross, 7-10-stellig) sein. IbkrBroker.get_portfolio
+            # mapped beide auf die conId (siehe positionID/instrumentID-Felder).
+            # Heuristik: wenn die ID schon zu einer offenen Position als conId
+            # passt -> direkt nutzen, sonst via resolve_contract als eToro-ID auflösen.
             if instrument_id is not None:
-                from app.ibkr_contract_resolver import resolve_contract
-                target_con_id = resolve_contract(ib, instrument_id).conId
+                try:
+                    iid = int(instrument_id)
+                except (ValueError, TypeError):
+                    iid = None
+
+                if iid is not None and any(
+                    getattr(p.contract, "conId", None) == iid for p in ib.positions()
+                ):
+                    # Direct-Match: instrument_id ist bereits eine conId einer offenen Position
+                    target_con_id = iid
+                else:
+                    # Fallback: als eToro-ID via ASSET_UNIVERSE aufloesen
+                    try:
+                        from app.ibkr_contract_resolver import resolve_contract
+                        target_con_id = resolve_contract(ib, instrument_id).conId
+                    except Exception as e:
+                        log.error("close_position resolve_contract failed fuer "
+                                  "instrument_id=%s (weder offene conId noch eToro-ID): %s",
+                                  instrument_id, e)
+                        return None
             else:
                 try:
                     target_con_id = int(position_id)
