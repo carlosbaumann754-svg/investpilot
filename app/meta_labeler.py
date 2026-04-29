@@ -119,8 +119,19 @@ def train_meta_labeler(trade_history=None, min_scanner_score=20):
     if trade_history is None:
         trade_history = load_json("trade_history.json") or []
 
-    # Only BUY entries with a scanner_score >= primary threshold that reached
-    # an outcome (pnl_pct or pnl_net_pct recorded at closing).
+    # v37q: Schema-Update — Bot-Schema schreibt pnl_pct erst auf CLOSE-Events.
+    # BUY-Eintraege haben scanner_score+features, CLOSE-Eintraege haben pnl_pct.
+    # Verbinde via position_id und joine BUY-Features + CLOSE-Outcome.
+    closes_by_pid: dict[str, dict] = {}
+    for t in trade_history:
+        a = (t.get("action") or "").upper()
+        if "CLOSE" in a:
+            pid = str(t.get("position_id") or "")
+            if pid:
+                pnl = t.get("pnl_net_pct", t.get("pnl_pct", None))
+                if pnl is not None:
+                    closes_by_pid[pid] = pnl
+
     usable = []
     for t in trade_history:
         action = (t.get("action") or "").upper()
@@ -129,7 +140,15 @@ def train_meta_labeler(trade_history=None, min_scanner_score=20):
         score = t.get("scanner_score", 0) or 0
         if score < min_scanner_score:
             continue
+        # Outcome: entweder direkt am BUY (legacy-Schema) oder via position_id-Join
         pnl = t.get("pnl_net_pct", t.get("pnl_pct", None))
+        if pnl is None:
+            pid = str(t.get("position_id") or "")
+            if pid and pid in closes_by_pid:
+                pnl = closes_by_pid[pid]
+                # Annotate fuer downstream
+                t = dict(t)
+                t["pnl_pct"] = pnl
         if pnl is None:
             continue
         usable.append(t)
