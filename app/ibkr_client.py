@@ -563,11 +563,14 @@ class IbkrBroker(BrokerBase):
             if eff_order_type == "MARKET":
                 order = MarketOrder(action, qty)
                 limit_price_log = "MKT"
+                # Bei MARKET-Orders ist intended_price der zur Order-Zeit gesehene Quote
+                intended_price = float(price) if price else 0.0
             else:
                 slippage_sign = 1 if action == "BUY" else -1
                 limit_price = round(price * (1 + slippage_sign * eff_slippage / 100.0), 2)
                 order = LimitOrder(action, qty, limit_price)
                 limit_price_log = f"limit ${limit_price:.2f} (slip {eff_slippage}%)"
+                intended_price = float(limit_price)
 
             log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f)",
                      action, qty, contract.symbol, limit_price_log, amount_usd, price)
@@ -635,6 +638,9 @@ class IbkrBroker(BrokerBase):
                     "statusID": status,
                     "filledQuantity": int(fill_qty),
                     "avgFillPrice": float(avg_fill_price or 0),
+                    # E2-Calibrator: was wollten wir vs. was kriegten wir
+                    "intendedPrice": float(intended_price or 0),
+                    "refQuote": float(price or 0),
                 },
                 "_broker": "ibkr",
                 "_contract": {
@@ -748,6 +754,9 @@ class IbkrBroker(BrokerBase):
                     "statusID": trade.orderStatus.status,
                     "filledQuantity": int(trade.orderStatus.filled),
                     "avgFillPrice": float(trade.orderStatus.avgFillPrice or 0),
+                    # E2-Calibrator: intended vs. realisiert beim Close
+                    "intendedPrice": float(limit_price or 0),
+                    "refQuote": float(quote or 0),
                 },
                 "_broker": "ibkr",
                 "_action": "close",

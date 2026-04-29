@@ -23,6 +23,41 @@ def save_trade(trade_entry):
     save_json("trade_history.json", history)
 
 
+def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
+    """v37j: Reichert ein trade_entry um avg_fill_price + intended_price an.
+
+    Diese Felder werden vom Cost-Model-Calibrator (E2) konsumiert, um
+    die realisierte IBKR-Slippage pro Asset-Klasse zu schaetzen und
+    nach 20+ Fills die hardcodierten Defaults aus app/cost_model.py
+    zu ueberschreiben.
+
+    Args:
+        trade_entry: bestehender dict (wird in-place erweitert + zurueckgegeben).
+        broker_result: das von client.buy/sell/close_position zurueckgegebene
+                       dict. Sucht orderForOpen.avgFillPrice/intendedPrice.
+
+    Werte=0 oder None werden NICHT geschrieben (Calibrator filtert sowieso).
+    """
+    if not isinstance(broker_result, dict):
+        return trade_entry
+    order = broker_result.get("orderForOpen") or {}
+    if not isinstance(order, dict):
+        return trade_entry
+    avg = order.get("avgFillPrice")
+    intended = order.get("intendedPrice")
+    ref_quote = order.get("refQuote")
+    try:
+        if avg and float(avg) > 0:
+            trade_entry["avg_fill_price"] = float(avg)
+        if intended and float(intended) > 0:
+            trade_entry["intended_price"] = float(intended)
+        if ref_quote and float(ref_quote) > 0:
+            trade_entry["ref_quote"] = float(ref_quote)
+    except (TypeError, ValueError):
+        pass
+    return trade_entry
+
+
 def _log_close_failure(action_name: str, p: dict, alerts_mod=None, extra: dict | None = None):
     """Protokolliere + persistiere eine fehlgeschlagene close_position()-Antwort.
 
@@ -363,7 +398,7 @@ def build_initial_portfolio(client, config):
                 if lm:
                     trade_entry = lm.log_leverage_trade(trade_entry, total_portfolio)
 
-                save_trade(trade_entry)
+                save_trade(_attach_fill_prices(trade_entry, result))
                 trades_executed.append(trade_entry)
                 credit -= amount
                 log.info(f"    -> GEKAUFT: ${amount:,.2f} {leverage}x (Order: {order.get('orderID')})")
@@ -474,7 +509,7 @@ def check_stop_loss_take_profit(client, config):
                         "trailing_sl_level": triggered[0]["sl_level"],
                         "status": "executed",
                     }
-                    save_trade(trade_entry)
+                    save_trade(_attach_fill_prices(trade_entry, result))
                     actions.append("TRAILING_SL_CLOSE")
                     if al:
                         al.alert_trade_executed(trade_entry)
@@ -507,7 +542,7 @@ def check_stop_loss_take_profit(client, config):
                         "age_days": round(age_days, 2),
                         "status": "executed",
                     }
-                    save_trade(trade_entry)
+                    save_trade(_attach_fill_prices(trade_entry, result))
                     actions.append("TIME_STOP_CLOSE")
                     if al:
                         al.alert_trade_executed(trade_entry)
@@ -585,7 +620,7 @@ def check_stop_loss_take_profit(client, config):
                             "total_closed_pct": new_total,
                             "status": trade_status,
                         }
-                        save_trade(trade_entry)
+                        save_trade(_attach_fill_prices(trade_entry, result))
                         actions.append(trade_entry["action"])
 
                         # Bei voller Schliessung: Rest der Tranchen-Pruefung ueberspringen
@@ -611,7 +646,7 @@ def check_stop_loss_take_profit(client, config):
                     "leverage": p["leverage"],
                     "status": "executed",
                 }
-                save_trade(trade_entry)
+                save_trade(_attach_fill_prices(trade_entry, result))
                 actions.append("STOP_LOSS_CLOSE")
                 if al:
                     al.alert_trade_executed(trade_entry)
@@ -638,7 +673,7 @@ def check_stop_loss_take_profit(client, config):
                     "leverage": p["leverage"],
                     "status": "executed",
                 }
-                save_trade(trade_entry)
+                save_trade(_attach_fill_prices(trade_entry, result))
                 actions.append("TAKE_PROFIT_CLOSE")
                 if al:
                     al.alert_trade_executed(trade_entry)
@@ -898,7 +933,7 @@ def execute_scanner_trades(client, config, scan_results):
                         "signal": candidate["signal"],
                         "status": "executed",
                     }
-                    save_trade(trade_entry)
+                    save_trade(_attach_fill_prices(trade_entry, result))
                     trades_executed.append(trade_entry)
                     if al:
                         al.alert_trade_executed(trade_entry)
@@ -1330,7 +1365,7 @@ def execute_scanner_trades(client, config, scan_results):
                     if lm:
                         trade_entry = lm.log_leverage_trade(trade_entry, total_value)
 
-                    save_trade(trade_entry)
+                    save_trade(_attach_fill_prices(trade_entry, result))
                     trades_executed.append(trade_entry)
                     credit -= amount
                     effective_cash -= amount
@@ -1482,7 +1517,7 @@ def check_overnight_positions(client, config):
                 "reason": pos.get("reason", "Overnight-Risiko"),
                 "status": "executed",
             }
-            save_trade(trade_entry)
+            save_trade(_attach_fill_prices(trade_entry, result))
             closed.append(trade_entry)
             log.info(f"  Overnight Close: #{pos['instrument_id']} ({pos.get('reason', '')})")
         else:

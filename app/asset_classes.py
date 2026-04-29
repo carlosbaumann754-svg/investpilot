@@ -45,11 +45,16 @@ class TradingSession:
 
     weekdays: Mo=0 .. So=6, welche Wochentage die Session AKTIV starten kann.
               Wenn end < start (z.B. Forex), interpretiert end als naechster Tag.
+    holiday_region: Optionaler Region-Code ("US", "EU", ...) fuer den
+                    Holiday-Calendar (siehe app.market_calendar). Wenn gesetzt
+                    und das aktuelle Datum in der lokalen TZ ein Holiday ist,
+                    wird die Session als inaktiv betrachtet (NYSE-Closures).
     """
     timezone: str                 # IANA-TZ, z.B. "America/New_York"
     start: time                   # lokale Open-Time
     end: time                     # lokale Close-Time
     weekdays: tuple[int, ...] = (0, 1, 2, 3, 4)  # Default Mo-Fr
+    holiday_region: Optional[str] = None  # v37j: NYSE-Holidays etc.
 
     def is_active(self, now_utc: Optional[datetime] = None) -> bool:
         """Block-Semantik: weekdays definiert eine Menge "aktiver Tage". Die Session
@@ -67,6 +72,17 @@ class TradingSession:
         local = (now_utc or datetime.now(tz=ZoneInfo("UTC"))).astimezone(tz)
         wd = local.weekday()
         cur = local.time().replace(microsecond=0)
+
+        # v37j: Holiday-Check VOR Wochentag/Zeit. Wenn die Region einen Holiday
+        # an diesem lokalen Datum hat, ist die Session geschlossen — egal ob
+        # sonst Mo-Fr 09:30-16:00 RTH waere (z.B. Memorial Day Mo 25.05.2026).
+        if self.holiday_region:
+            try:
+                from app.market_calendar import is_market_holiday
+                if is_market_holiday(local.date(), region=self.holiday_region):
+                    return False
+            except Exception:
+                pass  # market_calendar-Fehler nicht eskalieren
 
         # Modus A: start < end -> klassische tagesbeschraenkte Session pro Weekday
         if self.start < self.end:
@@ -155,9 +171,10 @@ def _ibkr_crypto_maintenance(now_utc: Optional[datetime] = None) -> bool:
 # ----------------------------------------------------------------------
 
 # US Equities: RTH (NYSE/Nasdaq), Pre-Market 04:00-09:30, After 16:00-20:00 NY
-_US_RTH = TradingSession("America/New_York", time(9, 30), time(16, 0))
-_US_PRE = TradingSession("America/New_York", time(4, 0), time(9, 30))
-_US_AFTER = TradingSession("America/New_York", time(16, 0), time(20, 0))
+# Alle US-Sessions: holiday_region="US" -> NYSE-Closures werden geblockt
+_US_RTH = TradingSession("America/New_York", time(9, 30), time(16, 0), holiday_region="US")
+_US_PRE = TradingSession("America/New_York", time(4, 0), time(9, 30), holiday_region="US")
+_US_AFTER = TradingSession("America/New_York", time(16, 0), time(20, 0), holiday_region="US")
 
 # EU Equities
 _FRANKFURT = TradingSession("Europe/Berlin", time(9, 0), time(17, 30))
@@ -173,20 +190,24 @@ _HKEX_PM = TradingSession("Asia/Hong_Kong", time(13, 0), time(16, 0))
 _ASX = TradingSession("Australia/Sydney", time(10, 0), time(16, 0))
 
 # Forex: Sonntag 17:00 NY -> Freitag 17:00 NY (durchgehend)
+# Forex hat KEINE NYSE-Holidays (interbank market is global), daher kein
+# holiday_region. Die Liquiditaet sinkt zwar an US-Holidays merklich, aber
+# der Markt ist nicht geschlossen.
 _FOREX = TradingSession(
     "America/New_York", time(17, 0), time(17, 0),
-    weekdays=(6, 0, 1, 2, 3, 4),  # Sun-Fri-Open
-)
-
-# CME Futures (Equity-Index, Commodities, Bonds): So 18:00 - Fr 17:00 NY
-# mit taeglicher 60-Min-Pause 17:00-18:00 (akzeptieren wir als blockiert)
-_CME_FUT = TradingSession(
-    "America/New_York", time(18, 0), time(17, 0),
     weekdays=(6, 0, 1, 2, 3, 4),
 )
 
-# US Bonds (TRACE / cash bond market): Mo-Fr 08:00-17:00 NY
-_US_BOND = TradingSession("America/New_York", time(8, 0), time(17, 0))
+# CME Futures (Equity-Index, Commodities, Bonds): So 18:00 - Fr 17:00 NY
+# CME folgt NYSE-Holidays (full closures), daher holiday_region="US".
+_CME_FUT = TradingSession(
+    "America/New_York", time(18, 0), time(17, 0),
+    weekdays=(6, 0, 1, 2, 3, 4),
+    holiday_region="US",
+)
+
+# US Bonds (TRACE / cash bond market): Mo-Fr 08:00-17:00 NY (folgt NYSE-Holidays)
+_US_BOND = TradingSession("America/New_York", time(8, 0), time(17, 0), holiday_region="US")
 
 
 REGISTRY: dict[str, AssetClassSpec] = {
