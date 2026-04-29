@@ -177,10 +177,27 @@ def load_config():
 
 
 def save_config(config):
-    """Speichere Config OHNE Secrets. Brain-Optimierung schreibt nur Strategie-Params (thread-safe)."""
+    """Speichere Config OHNE Secrets. Brain-Optimierung schreibt nur Strategie-Params (thread-safe).
+
+    v37r: WFO-Lock-Hook — vor jedem Persist werden die WFO-empfohlenen
+    Parameter (stop_loss_pct, min_scanner_score) erzwungen. Damit kann
+    KEIN Auto-Apply-Pfad (Optimizer, ML-Training, Backtest, Watchdog,
+    Brain-Save, Cloud-Restore) die WFO-Werte mehr ueberschreiben.
+    Source-of-Truth: data/wfo_status.json.
+    """
     lock = _get_file_lock("config.json")
     with lock:
         config_path = get_data_path("config.json")
+
+        # v37r: WFO-Locks erzwingen BEVOR Secrets-Strip + Persist
+        # Wir modifizieren das Original-Dict damit Caller die Korrektur sehen
+        try:
+            from app.wfo_lock import enforce_locks
+            enforce_locks(config)  # in-place, idempotent
+        except Exception as e:
+            # WFO-Lock-Fehler darf save_config NIE blocken
+            import logging as _log
+            _log.getLogger("ConfigManager").debug(f"WFO-Lock-Hook Fehler: {e}")
 
         # Kopie erstellen, Secrets entfernen
         safe_config = json.loads(json.dumps(config))

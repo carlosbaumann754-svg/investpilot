@@ -217,6 +217,22 @@ def scheduler_loop():
     except ImportError:
         log.info("Watchdog nicht verfuegbar (alerts Modul fehlt)")
 
+    # v37r: WFO-Drift-Check beim Bot-Start
+    # Pruefe ob Live-Config mit WFO-Empfehlungen aus wfo_status.json matcht.
+    # Bei Drift: Pushover-WARNING + Auto-Restore via save_config-Hook.
+    try:
+        from app.wfo_lock import boot_drift_check
+        result = boot_drift_check(send_alert=True, auto_restore=True)
+        if result.get("drifts_detected", 0) > 0:
+            log.warning(
+                f"WFO-Drift-Check: {result['drifts_detected']} Drift(s) erkannt, "
+                f"{len(result['restored'])} korrigiert, alert_sent={result['alert_sent']}"
+            )
+        else:
+            log.info("WFO-Drift-Check: Config matcht WFO-Locks (alles gruen)")
+    except Exception as e:
+        log.warning(f"WFO-Drift-Check fehlgeschlagen: {e}")
+
     # Market Context initial laden
     try:
         from app.market_context import update_full_context
