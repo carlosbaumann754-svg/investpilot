@@ -381,12 +381,18 @@ def build_initial_portfolio(client, config):
 
             if result:
                 order = result.get("orderForOpen", {})
+                # v37q: position_id mitschreiben fuer Meta-Labeler-Training-Match.
+                # IBKR: conId aus result._contract. eToro: order_id ist gleichzeitig
+                # die position_id (UUID).
+                contract_info = result.get("_contract") or {}
+                pid = contract_info.get("conId") or order.get("orderID")
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "action": "BUY",
                     "symbol": symbol,
                     "name": target["name"],
                     "instrument_id": iid,
+                    "position_id": str(pid) if pid is not None else None,
                     "asset_class": asset_class,
                     "amount_usd": round(amount, 2),
                     "leverage": leverage,
@@ -1376,12 +1382,16 @@ def execute_scanner_trades(client, config, scan_results):
 
                 if result:
                     order = result.get("orderForOpen", {})
+                    # v37q: position_id fuer Meta-Labeler-Match (IBKR conId / eToro orderID)
+                    contract_info = result.get("_contract") or {}
+                    pid = contract_info.get("conId") or order.get("orderID")
                     trade_entry = {
                         "timestamp": datetime.now().isoformat(),
                         "action": "SCANNER_BUY",
                         "symbol": symbol,
                         "name": candidate["name"],
                         "instrument_id": candidate["etoro_id"],
+                        "position_id": str(pid) if pid is not None else None,
                         "asset_class": asset_class,
                         "amount_usd": amount,
                         "leverage": leverage,
