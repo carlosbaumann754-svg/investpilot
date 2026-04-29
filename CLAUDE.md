@@ -34,6 +34,14 @@ Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub
   Telegram-Alert NUR bei Anomalien: dead-Symbole >= 1 ODER suspicious >= 2
   ODER Bias-Drift > 0.10. History-Tracking (max 60 Runs = ~14 Monate).
   Logfile: `/var/log/survivorship-audit.log`.
+- `0 14 * * 0` — Wochentlicher Semgrep Security-Scan (v37f, 2026-04-29).
+  Sonntag 14:00 UTC = 1h nach Survivorship. Wrapper-Skript
+  `scripts/semgrep_weekly.sh` ruft `docker run returntocorp/semgrep:latest`
+  mit Rules `p/python + p/secrets + p/owasp-top-ten`. Postprozessor
+  `app/semgrep_runner.py` macht Diff vs vorigem Run + Telegram-Alert
+  bei NEUEN Findings (>=1 ERROR ODER >=3 WARNING). Suppression via
+  `# nosemgrep: <rule_id>` als trailing comment.
+  Logfile: `/var/log/semgrep-scan.log`.
 
 **Alter Render-Deploy (abgeschaltet):** ~~https://investpilot-2dp2.onrender.com~~
 
