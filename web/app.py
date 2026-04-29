@@ -4355,6 +4355,52 @@ async def api_alerts_test_pushover(user=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/insider/shadow")
+async def api_insider_shadow(days: int = 14):
+    """v37m: Insider Shadow-Tracker (Forward-A/B).
+
+    Liefert Statistik der letzten N Tage:
+    - Wieviele Candidates wurden getrackt (Live-Bot mit insider_filter=off)
+    - Wieviele HAETTEN geblockt werden sollen
+    - Avg Scanner-Score 'geblockt' vs 'durchgelassen' (sind die geblockten
+      strukturell schwaechere Candidates? Dann waere Filter ueberfluessig.
+      Sind sie staerker? Dann hilft der Filter wirklich Risiko zu vermeiden.)
+    - Histogram nach Insider-Score (-2..+5)
+
+    Plan: nach 2-4 Wochen Paper-Daten + die SEC-EDGAR-Backtest-Daten (E5b)
+    gibt's eine fundierte Aktivierungs-Entscheidung fuer E5.
+    """
+    try:
+        from app.insider_shadow import summary_stats, joined_with_trade_outcomes
+        stats = summary_stats(days=days)
+        joined = joined_with_trade_outcomes(days=days)
+
+        # Vereinfachte Outcome-Aggregation
+        executed = [j for j in joined if j.get("buy_executed")]
+        not_executed = [j for j in joined if not j.get("buy_executed")]
+
+        return {
+            "stats": stats,
+            "trade_outcomes": {
+                "shadow_decisions_with_buy": len(executed),
+                "shadow_decisions_without_buy": len(not_executed),
+                "explanation": (
+                    "shadow_decisions_with_buy = Candidates die im Shadow-Log "
+                    "auftauchten UND fuer die innerhalb 10 Min ein realer BUY "
+                    "ausgefuehrt wurde. Performance-Auswertung erfolgt nachtraeglich "
+                    "wenn die Trades wieder geschlossen sind (Stop-Loss/TP/Trailing)."
+                ),
+            },
+            "interpretation_guide": {
+                "good_filter_signal": "would_block_pct stabil >5% UND avg_scanner_score_blocked > avg_scanner_score_passed",
+                "bad_filter_signal": "would_block_pct < 2% (Filter greift nie) ODER avg_scanner_score_blocked < avg_scanner_score_passed (filtert die guten raus)",
+                "note": "Mind. 2-4 Wochen Paper-Daten + nach E5b SEC-EDGAR-Backtest entscheiden.",
+            },
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/wfo/history")
 async def api_wfo_history():
     """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart."""

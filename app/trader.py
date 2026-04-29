@@ -1026,14 +1026,23 @@ def execute_scanner_trades(client, config, scan_results):
     # Blockt Buys wenn Insider verkaufen (-2 Score). Filter ist via
     # config.scanner.insider_signal_enabled aktiviert. Fix fuer ROKU
     # (Insider-Score -2) das am 27.04. 67x gekauft werden sollte.
+    #
+    # v37m — Shadow-Mode (Forward-A/B): wenn Filter DEAKTIVIERT ist, wird
+    # der Insider-Score trotzdem fuer jedes Candidate berechnet und in
+    # data/insider_shadow_log.jsonl persistiert. Ueber 2-4 Wochen Paper-
+    # Trading laesst sich so vergleichen ob die "geblockten" Candidates
+    # schlechter performt haetten als die durchgelassenen — echtes A/B
+    # mit Live-Daten ohne Backtest-Datenbedarf (siehe E5b in Roadmap).
     try:
         from app import insider_signals
-        if insider_signals.is_enabled(config):
-            scanner_cfg = config.get("scanner", {}) or {}
-            insider_min_score = scanner_cfg.get("insider_min_score", -1)
-            quality_filter = scanner_cfg.get("insider_quality_filter", True)
-            detect_novelty = scanner_cfg.get("insider_detect_novelty", True)
+        scanner_cfg = config.get("scanner", {}) or {}
+        insider_min_score = scanner_cfg.get("insider_min_score", -1)
+        quality_filter = scanner_cfg.get("insider_quality_filter", True)
+        detect_novelty = scanner_cfg.get("insider_detect_novelty", True)
+        shadow_enabled = scanner_cfg.get("insider_shadow_tracking", True)
 
+        if insider_signals.is_enabled(config):
+            # AKTIV: filtern + Score-Bonus
             insider_filtered = []
             blocked_by_insider = []
             for c in buy_candidates:
@@ -1063,10 +1072,36 @@ def execute_scanner_trades(client, config, scan_results):
                          f"(min={insider_min_score})")
             buy_candidates = [c for c in insider_filtered if c["score"] >= min_score]
             buy_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+        elif shadow_enabled and buy_candidates:
+            # SHADOW: passiv tracken was geblockt WUERDE — kein Eingriff
+            from app.insider_shadow import log_shadow_decision
+            shadow_count = 0
+            for c in buy_candidates:
+                try:
+                    iscore = insider_signals.compute_insider_score(
+                        c["symbol"],
+                        quality_filter=quality_filter,
+                        detect_novelty=detect_novelty,
+                    )
+                    would_block = iscore < insider_min_score
+                    log_shadow_decision(
+                        symbol=c["symbol"],
+                        scanner_score=c.get("score", 0),
+                        insider_score=iscore,
+                        would_block=would_block,
+                        insider_min_score=insider_min_score,
+                    )
+                    shadow_count += 1
+                except Exception as ie:
+                    log.debug(f"Shadow-Insider {c['symbol']} fehlgeschlagen: {ie}")
+            if shadow_count > 0:
+                log.info(f"  INSIDER-SHADOW: {shadow_count} Candidates getrackt "
+                         f"(Filter inaktiv — Forward-A/B)")
     except ImportError:
         pass
     except Exception as e:
-        log.warning(f"Insider-Filter Fehler (non-fatal): {e}", exc_info=True)
+        log.warning(f"Insider-Filter/Shadow Fehler (non-fatal): {e}", exc_info=True)
 
     # ML Confidence: multiply scanner score by ML probability if enabled
     use_ml = dt_config.get("use_ml_scoring", False)
