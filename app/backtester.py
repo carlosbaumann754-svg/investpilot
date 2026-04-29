@@ -34,11 +34,27 @@ from app.market_scanner import (
 )
 
 # ============================================================
-# TRANSACTION COST MODEL (eToro realistic)
+# TRANSACTION COST MODEL (E2 - Corwin-Schultz + Almgren-Chriss)
 # ============================================================
-SPREAD_PCT = 0.0015          # 0.15% per trade (spread)
+# Legacy-Defaults bleiben als Fallback erhalten. Der Hauptpfad
+# delegiert an app.cost_model.total_cost_pct(), das Per-Asset-Klasse
+# Spread + Volume-Impact + Slippage-Buffer + Overnight modelliert
+# und bei Bedarf empirisch kalibrierte Overrides aus
+# data/cost_model_calibration.json beruecksichtigt.
+SPREAD_PCT = 0.0015          # 0.15% per trade (spread) - LEGACY-FALLBACK
 OVERNIGHT_FEE_PCT = 0.0001   # 0.01% per night (leveraged)
-SLIPPAGE_PCT = 0.0005        # 0.05% estimated slippage
+SLIPPAGE_PCT = 0.0005        # 0.05% estimated slippage - LEGACY-FALLBACK
+
+try:
+    from app import cost_model as _cost_model  # type: ignore
+    _COST_MODEL_AVAILABLE = True
+except Exception:
+    _cost_model = None  # type: ignore
+    _COST_MODEL_AVAILABLE = False
+
+# Empirische Overrides werden lazy beim ersten _calc_costs-Aufruf gecached.
+_EMPIRICAL_OVERRIDES_CACHE: dict = {}
+_EMPIRICAL_OVERRIDES_LOADED = False
 
 
 # ============================================================
@@ -655,7 +671,7 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
 
             if sym in trailing_sl and current_price <= trailing_sl[sym]:
                 days_held = (current_date - pos["entry_date"]).days
-                cost = _calc_costs(entry_price, days_held)
+                cost = _calc_costs(entry_price, days_held, symbol=sym)
                 trades.append({
                     "symbol": sym,
                     "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -682,7 +698,7 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
                         continue
                     if pnl_pct * 100 >= t_cfg.get("profit_target_pct", 0):
                         days_held = (current_date - pos["entry_date"]).days
-                        cost = _calc_costs(entry_price, days_held)
+                        cost = _calc_costs(entry_price, days_held, symbol=sym)
                         trades.append({
                             "symbol": sym,
                             "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -702,7 +718,7 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
 
             if pnl_pct <= sl_pct:
                 days_held = (current_date - pos["entry_date"]).days
-                cost = _calc_costs(entry_price, days_held)
+                cost = _calc_costs(entry_price, days_held, symbol=sym)
                 trades.append({
                     "symbol": sym,
                     "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -725,7 +741,7 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
 
             if pnl_pct >= tp_pct:
                 days_held = (current_date - pos["entry_date"]).days
-                cost = _calc_costs(entry_price, days_held)
+                cost = _calc_costs(entry_price, days_held, symbol=sym)
                 trades.append({
                     "symbol": sym,
                     "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -751,7 +767,7 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
                 days_held = (current_date - pos["entry_date"]).days
                 if days_held >= ts_max_days and days_held >= ts_min_days \
                         and abs(pnl_pct) < ts_pnl_thresh:
-                    cost = _calc_costs(entry_price, days_held)
+                    cost = _calc_costs(entry_price, days_held, symbol=sym)
                     trades.append({
                         "symbol": sym,
                         "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -876,7 +892,7 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
         last_date = sd["dates"][-1]
         pnl_pct = (last_price - pos["entry_price"]) / pos["entry_price"]
         days_held = (last_date - pos["entry_date"]).days if hasattr(last_date, "__sub__") else 0
-        cost = _calc_costs(pos["entry_price"], max(days_held, 0))
+        cost = _calc_costs(pos["entry_price"], max(days_held, 0), symbol=sym)
         trades.append({
             "symbol": sym,
             "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -1114,7 +1130,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
 
             if sym in trailing_sl and current_price <= trailing_sl[sym]:
                 days_held = (current_date - pos["entry_date"]).days
-                cost = _calc_costs(entry_price, days_held)
+                cost = _calc_costs(entry_price, days_held, symbol=sym)
                 trades.append({
                     "symbol": sym,
                     "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -1143,7 +1159,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
                     if pnl_pct * 100 >= t_cfg.get("profit_target_pct", 0):
                         close_pct_of_pos = t_cfg.get("pct_of_position", 0) / 100
                         days_held = (current_date - pos["entry_date"]).days
-                        cost = _calc_costs(entry_price, days_held)
+                        cost = _calc_costs(entry_price, days_held, symbol=sym)
                         trades.append({
                             "symbol": sym,
                             "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -1164,7 +1180,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
             # Stop Loss
             if pnl_pct <= sl_pct:
                 days_held = (current_date - pos["entry_date"]).days
-                cost = _calc_costs(entry_price, days_held)
+                cost = _calc_costs(entry_price, days_held, symbol=sym)
                 trades.append({
                     "symbol": sym,
                     "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -1188,7 +1204,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
             # Take Profit
             if pnl_pct >= tp_pct:
                 days_held = (current_date - pos["entry_date"]).days
-                cost = _calc_costs(entry_price, days_held)
+                cost = _calc_costs(entry_price, days_held, symbol=sym)
                 trades.append({
                     "symbol": sym,
                     "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -1284,7 +1300,7 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
         last_date = sd["dates"][-1]
         pnl_pct = (last_price - pos["entry_price"]) / pos["entry_price"]
         days_held = (last_date - pos["entry_date"]).days if hasattr(last_date, "__sub__") else 0
-        cost = _calc_costs(pos["entry_price"], max(days_held, 0))
+        cost = _calc_costs(pos["entry_price"], max(days_held, 0), symbol=sym)
         trades.append({
             "symbol": sym,
             "entry_date": pos["entry_date"].strftime("%Y-%m-%d") if hasattr(pos["entry_date"], "strftime") else str(pos["entry_date"])[:10],
@@ -1310,9 +1326,73 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
     return trades
 
 
-def _calc_costs(entry_price, days_held):
-    """Calculate total transaction cost as fraction of entry price."""
-    spread = SPREAD_PCT * 2  # entry + exit
+def _calc_costs(entry_price, days_held, symbol=None, amount_usd=None):
+    """E2: Per-Asset-Klasse-Kostenmodell via app.cost_model.
+
+    Round-Trip-Kosten (entry + exit) als Fraktion des Entry-Preises.
+
+    - Wenn ``symbol`` bekannt + ``cost_model`` importierbar: Corwin-Schultz
+      Spread (oder Per-Class-Default), Almgren-Chriss Volume-Impact (sofern
+      Volumen bekannt), Per-Klasse Slippage-Buffer, plus Overnight-Fee.
+    - Empirische Overrides aus ``data/cost_model_calibration.json``
+      (geschrieben von ``cost_model_calibrator.py``) werden -- sofern
+      vorhanden -- beim Slippage-Buffer beruecksichtigt.
+    - Fallback auf Legacy-Konstanten wenn cost_model nicht verfuegbar
+      oder ASSET_UNIVERSE keine Klasse liefert.
+    """
+    global _EMPIRICAL_OVERRIDES_CACHE, _EMPIRICAL_OVERRIDES_LOADED
+
+    if _COST_MODEL_AVAILABLE and symbol:
+        info = ASSET_UNIVERSE.get(symbol) or {}
+        asset_class = (info.get("class") or "stocks").lower()
+
+        # Empirische Overrides einmalig laden
+        if not _EMPIRICAL_OVERRIDES_LOADED:
+            try:
+                _EMPIRICAL_OVERRIDES_CACHE = _cost_model.load_empirical_overrides() or {}
+            except Exception:
+                _EMPIRICAL_OVERRIDES_CACHE = {}
+            _EMPIRICAL_OVERRIDES_LOADED = True
+
+        # Override fuer Slippage-Buffer dieser Klasse anwenden, falls reliable.
+        overrides = _EMPIRICAL_OVERRIDES_CACHE.get("slippage_buffer_pct_overrides", {}) \
+            if isinstance(_EMPIRICAL_OVERRIDES_CACHE, dict) else {}
+        empirical_override_pct = overrides.get(asset_class)
+
+        # Notional fuer Almgren-Chriss; wenn unbekannt -> 0 (=> kein Impact-Term).
+        try:
+            notional = float(amount_usd) if amount_usd is not None else 0.0
+        except (TypeError, ValueError):
+            notional = 0.0
+
+        try:
+            breakdown = _cost_model.total_cost_pct(
+                asset_class=asset_class,
+                amount_usd=notional,
+                days_held=max(days_held, 0),
+                ohlc_history=None,                  # OHLC-Pfad: spaeter anschliessbar
+                daily_volume_usd=None,              # ditto
+                daily_volatility_pct=None,
+                overnight_fee_pct_per_day=OVERNIGHT_FEE_PCT,
+            )
+            # cost_model.total_cost_pct gibt trotz Namen FRAKTION zurueck
+            # (siehe cost_model.py L315: spread+slip+impact+overnight bereits in 0..1).
+            total_fraction = breakdown.total_pct
+            # Empirisches Override (one-side, in %) ersetzt den Klassen-Default-Buffer.
+            if empirical_override_pct is not None:
+                default_buf_pct = _cost_model.PER_CLASS_SLIPPAGE_BUFFER_PCT.get(
+                    asset_class, _cost_model.DEFAULT_SLIPPAGE_BUFFER_PCT)
+                default_buf_fraction = default_buf_pct / 100.0
+                override_fraction = float(empirical_override_pct) / 100.0
+                total_fraction = (total_fraction
+                                  - default_buf_fraction * 2
+                                  + override_fraction * 2)
+            return max(0.0, total_fraction)
+        except Exception:
+            pass  # Fallback unten
+
+    # Legacy-Fallback (unbekanntes Symbol oder cost_model nicht ladbar)
+    spread = SPREAD_PCT * 2
     overnight = OVERNIGHT_FEE_PCT * max(days_held, 0)
     slippage = SLIPPAGE_PCT * 2
     return spread + overnight + slippage
