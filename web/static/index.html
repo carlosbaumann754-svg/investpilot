@@ -961,6 +961,47 @@
             </form>
         </div>
 
+        <!-- COST-MODEL (E2) -->
+        <div class="card" id="cost-model-card">
+            <div class="card-title">Realistic Cost-Model (E2)<span class="tip" data-tip="Pro Asset-Klasse berechnet der Backtester realistische Handelskosten: Spread (Differenz Kauf/Verkauf-Preis) + Volume-Impact (groessere Order = schlechterer Preis) + Slippage-Buffer (zufaellige Abweichung) + Overnight-Fee (Hebel-Zinsen). Akademische Modelle: Corwin-Schultz fuer Spread, Almgren-Chriss fuer Impact. Wenn der Bot 20+ echte Trades pro Asset-Klasse gemacht hat, lernt der Calibrator die wirklichen IBKR-Slippage-Werte und ueberschreibt die Defaults automatisch.">?</span></div>
+            <div id="cost-model-summary" class="card-sub" style="margin-bottom:10px;">Lade Cost-Model...</div>
+
+            <div id="cost-model-defaults-block" style="display:none;">
+                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;"><strong>Defaults pro Asset-Klasse</strong> (Round-Trip-Kosten fuer 5000 USD, 5 Tage)</div>
+                <table style="width:100%;font-size:12px;border-collapse:collapse;">
+                    <thead style="opacity:0.7;">
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                            <th style="text-align:left;padding:4px 4px;">Klasse</th>
+                            <th style="text-align:right;padding:4px 4px;">Spread</th>
+                            <th style="text-align:right;padding:4px 4px;">Slippage</th>
+                            <th style="text-align:right;padding:4px 4px;">Overnight 5d</th>
+                            <th style="text-align:right;padding:4px 4px;">Total RT</th>
+                            <th style="text-align:center;padding:4px 4px;">Empirik</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cost-model-defaults-tbody"></tbody>
+                </table>
+            </div>
+
+            <div id="cost-model-calibration-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;">
+                    <strong>Calibrator-Status</strong> &middot;
+                    <span id="cost-model-fills">--</span> IBKR-Fills analysiert (Window <span id="cost-model-window">--</span>d) &middot;
+                    Mindest-Stichprobe <strong>20</strong>/Klasse &middot;
+                    letzter Run <span id="cost-model-last-run">--</span>
+                </div>
+                <div id="cost-model-notes" style="font-size:12px;opacity:0.75;margin-top:8px;line-height:1.5;"></div>
+            </div>
+
+            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <button onclick="costModelCalibrate()" id="cost-model-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
+                        title="Liest die letzten 90 Tage trade_history.json, berechnet realisierte Slippage pro Asset-Klasse, schreibt cost_model_calibration.json. Runtime <1 Sek. Erstmal sinnvoll wenn 20+ Fills pro Klasse vorliegen — sonst graceful Fallback auf Defaults.">
+                    ▶ Calibrator jetzt starten
+                </button>
+                <span id="cost-model-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-title">Portfolio-Allokation<span class="tip" data-tip="Feste Ziel-Gewichte pro Symbol fuer Kaltstart und Rebalancing. Im v15-Modus (empfohlen) ist dies leer — der Bot steuert dann autonom ueber Scanner/Kelly/Momentum. Fixe Targets greifen nur als Override fuer sehr spezifische Setups.">?</span></div>
             <div id="allocation-status" class="card-sub" style="margin-bottom:10px;">--</div>

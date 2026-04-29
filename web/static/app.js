@@ -1724,6 +1724,7 @@ async function askQuestion() {
     loadWithdrawalStatus();
     loadWfoStatus();
     loadSurvivorship();
+    loadCostModelStatus();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1733,6 +1734,7 @@ async function askQuestion() {
     setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
+    setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
@@ -2527,5 +2529,107 @@ async function loadNewsSources() {
         badgesEl.innerHTML = items.map(([label, on]) =>
             `<span class="badge ${on ? 'badge-green' : 'badge-blue'}" style="opacity:${on ? 1 : 0.5};">${label}${on ? '' : ' · off'}</span>`
         ).join('');
+    }
+}
+
+/**
+ * E2 Cost-Model: Status-Card laden.
+ * Zeigt Per-Asset-Klasse Default-Kosten + Calibrator-Status.
+ */
+async function loadCostModelStatus() {
+    try {
+        const r = await fetch('/api/cost_model/status');
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data.error) {
+            const sEl = document.getElementById('cost-model-summary');
+            if (sEl) sEl.textContent = 'Fehler: ' + data.error;
+            return;
+        }
+
+        const summaryEl = document.getElementById('cost-model-summary');
+        const defaultsBlock = document.getElementById('cost-model-defaults-block');
+        const calibBlock = document.getElementById('cost-model-calibration-block');
+        const tbody = document.getElementById('cost-model-defaults-tbody');
+        if (!summaryEl || !tbody) return;
+
+        const cal = data.calibration || {};
+        const overridesCount = cal.overrides_active_count || 0;
+        const fills = cal.total_fills_analyzed || 0;
+        summaryEl.innerHTML = `<strong>${data.model_version || 'E2'}</strong> &middot; ` +
+            (overridesCount > 0
+                ? `<span style="color:#10b981;">${overridesCount}/6 Klassen empirisch kalibriert</span>`
+                : `<span style="opacity:0.85;">Defaults aktiv</span> (Calibrator sammelt noch Daten)`);
+
+        // Defaults-Tabelle
+        const diagByClass = {};
+        for (const d of cal.diagnostics_per_class || []) diagByClass[d.asset_class] = d;
+        tbody.innerHTML = (data.defaults_per_class || []).map(row => {
+            const diag = diagByClass[row.asset_class] || {};
+            let badge = '<span style="opacity:0.5;">--</span>';
+            if (diag.override_active) {
+                badge = `<span style="color:#10b981;">✓ ${diag.sample_count} Fills</span>`;
+            } else if (diag.sample_count > 0) {
+                badge = `<span style="color:#fbbf24;">${diag.sample_count}/20</span>`;
+            }
+            return `
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                    <td style="padding:5px 4px;text-transform:capitalize;">${row.asset_class}</td>
+                    <td style="text-align:right;padding:5px 4px;">${row.spread_pct.toFixed(3)}%</td>
+                    <td style="text-align:right;padding:5px 4px;">${row.slippage_buffer_pct.toFixed(3)}%</td>
+                    <td style="text-align:right;padding:5px 4px;opacity:0.75;">${row.overnight_5d_pct.toFixed(3)}%</td>
+                    <td style="text-align:right;padding:5px 4px;font-weight:600;">${row.total_round_trip_pct.toFixed(3)}%</td>
+                    <td style="text-align:center;padding:5px 4px;font-size:11px;">${badge}</td>
+                </tr>`;
+        }).join('');
+        defaultsBlock.style.display = '';
+
+        // Calibrator-Status
+        document.getElementById('cost-model-fills').textContent = fills;
+        document.getElementById('cost-model-window').textContent = cal.age_window_days || 90;
+        const lastRunEl = document.getElementById('cost-model-last-run');
+        if (cal.generated_at) {
+            try {
+                lastRunEl.textContent = new Date(cal.generated_at).toLocaleString('de-CH', {
+                    day: '2-digit', month: '2-digit', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit',
+                });
+            } catch (e) {
+                lastRunEl.textContent = cal.generated_at;
+            }
+        } else {
+            lastRunEl.textContent = 'noch nie';
+        }
+        const notesEl = document.getElementById('cost-model-notes');
+        if (cal.notes && cal.notes.length > 0) {
+            notesEl.innerHTML = cal.notes.map(n => `&middot; ${n}`).join('<br>');
+        } else {
+            notesEl.innerHTML = '';
+        }
+        calibBlock.style.display = '';
+    } catch (e) {
+        console.error('loadCostModelStatus failed:', e);
+    }
+}
+
+async function costModelCalibrate() {
+    const btn = document.getElementById('cost-model-btn');
+    const msg = document.getElementById('cost-model-msg');
+    if (btn) btn.disabled = true;
+    if (msg) msg.textContent = 'Calibrator laeuft...';
+    try {
+        const r = await fetch('/api/cost_model/calibrate', { method: 'POST' });
+        const data = await r.json();
+        if (data.ok) {
+            msg.innerHTML = `<span style="color:#10b981;">✓ ${data.fills_analyzed} Fills analysiert, ${data.overrides_active} Override(s) aktiv</span>`;
+            setTimeout(loadCostModelStatus, 500);
+        } else {
+            msg.innerHTML = `<span style="color:#f87171;">Fehler: ${data.error || 'unbekannt'}</span>`;
+        }
+    } catch (e) {
+        msg.innerHTML = `<span style="color:#f87171;">Fehler: ${e.message}</span>`;
+    } finally {
+        if (btn) btn.disabled = false;
+        setTimeout(() => { if (msg) msg.textContent = ''; }, 8000);
     }
 }

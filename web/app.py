@@ -4164,6 +4164,100 @@ async def api_survivorship_history():
         return {"runs_total": 0, "runs": [], "error": str(e)}
 
 
+@app.get("/api/cost_model/status")
+async def api_cost_model_status():
+    """E2: Cost-Model Status fuer Dashboard-Card.
+
+    Zeigt: Per-Asset-Klasse Default-Kosten + Calibrator-Status (Anzahl
+    analysierter IBKR-Fills, welche Klassen empirisch kalibriert sind).
+    """
+    try:
+        from app import cost_model
+        from app.config_manager import load_json
+
+        # Default-Kosten pro Asset-Klasse berechnen (5000 USD Notional, 5 Tage Halte-Dauer)
+        classes = ("stocks", "etf", "crypto", "forex", "commodities", "indices")
+        defaults_per_class = []
+        for cls in classes:
+            br = cost_model.total_cost_pct(
+                asset_class=cls, amount_usd=5000, days_held=5,
+            )
+            defaults_per_class.append({
+                "asset_class": cls,
+                "spread_pct": round(br.spread_pct * 100, 4),
+                "slippage_buffer_pct": round(br.slippage_buffer_pct * 100, 4),
+                "volume_impact_pct": round(br.volume_impact_pct * 100, 4),
+                "overnight_5d_pct": round(br.overnight_fee_pct * 100, 4),
+                "total_round_trip_pct": round(br.total_pct * 100, 4),
+            })
+
+        # Calibrator-Status laden
+        calibration = load_json("cost_model_calibration.json") or {}
+        overrides = calibration.get("slippage_buffer_pct_overrides", {}) \
+            if isinstance(calibration, dict) else {}
+        per_class_diag = calibration.get("per_class", {}) \
+            if isinstance(calibration, dict) else {}
+
+        # Diagnose-Liste pro Klasse mit Override-Status
+        diagnostics = []
+        for cls in classes:
+            d = per_class_diag.get(cls, {}) if isinstance(per_class_diag, dict) else {}
+            sample_count = d.get("sample_count", 0) if isinstance(d, dict) else 0
+            override_pct = overrides.get(cls)
+            diagnostics.append({
+                "asset_class": cls,
+                "sample_count": sample_count,
+                "median_slippage_pct": d.get("median_slippage_pct") if isinstance(d, dict) else None,
+                "p95_slippage_pct": d.get("p95_slippage_pct") if isinstance(d, dict) else None,
+                "is_reliable": d.get("is_reliable", False) if isinstance(d, dict) else False,
+                "override_active": override_pct is not None,
+                "override_pct": override_pct,
+            })
+
+        # Akademische Quellen (fuer Tooltip / Frontend)
+        return {
+            "model_version": "E2 (v37h)",
+            "model_components": [
+                "Corwin-Schultz Spread-Estimator (JF 2012)",
+                "Almgren-Chriss Volume-Impact (2001)",
+                "Per-Asset-Klasse Slippage-Buffer",
+                "Overnight-Fee linear",
+            ],
+            "defaults_per_class": defaults_per_class,
+            "calibration": {
+                "generated_at": calibration.get("generated_at") if isinstance(calibration, dict) else None,
+                "total_fills_analyzed": calibration.get("total_fills_analyzed", 0) if isinstance(calibration, dict) else 0,
+                "age_window_days": calibration.get("age_window_days", 90) if isinstance(calibration, dict) else 90,
+                "min_samples_required": 20,
+                "overrides_active_count": len(overrides),
+                "diagnostics_per_class": diagnostics,
+                "notes": calibration.get("notes", []) if isinstance(calibration, dict) else [],
+            },
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/cost_model/calibrate")
+async def api_cost_model_calibrate(user=Depends(require_auth)):
+    """Triggert manuell den Cost-Model-Calibrator.
+
+    Liest trade_history.json, berechnet Per-Asset-Klasse-Slippage,
+    schreibt data/cost_model_calibration.json. Runtime <1 Sek.
+    """
+    try:
+        from app.cost_model_calibrator import calibrate
+        report = calibrate(persist=True)
+        return {
+            "ok": True,
+            "fills_analyzed": report.total_fills_analyzed,
+            "overrides_active": len(report.slippage_buffer_pct_overrides),
+            "notes": report.notes,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/wfo/history")
 async def api_wfo_history():
     """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart."""
