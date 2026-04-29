@@ -3251,7 +3251,6 @@ async def api_admin_force_restore_brain_from_sha(
     if not gist_id:
         raise HTTPException(status_code=404, detail="Kein Backup-Gist")
 
-    # nosemgrep: python.flask.security.injection.ssrf-requests.ssrf-requests
     # SSRF-Suppression-Begruendung (v37f, 2026-04-29):
     # - Base-URL GITHUB_API ist hardcoded "https://api.github.com" — kein
     #   Host-Override moeglich
@@ -3260,7 +3259,7 @@ async def api_admin_force_restore_brain_from_sha(
     # - gist_id kommt aus eigenem _find_backup_gist (Server-side, vertrauenswuerdig)
     # - Endpoint ist auth-required (Depends(require_auth))
     # Damit ist der scheinbare SSRF-Vektor in der Praxis nicht ausnutzbar.
-    resp = requests.get(f"{GITHUB_API}/gists/{gist_id}/{sha}", headers=_headers(token), timeout=20)
+    resp = requests.get(f"{GITHUB_API}/gists/{gist_id}/{sha}", headers=_headers(token), timeout=20)  # nosemgrep: python.flask.security.injection.ssrf-requests.ssrf-requests
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Revision-Fetch {resp.status_code}")
 
