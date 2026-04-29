@@ -1723,6 +1723,7 @@ async function askQuestion() {
     loadBrokerStatus();
     loadWithdrawalStatus();
     loadWfoStatus();
+    loadSurvivorship();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1731,6 +1732,7 @@ async function askQuestion() {
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
     setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
+    setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
@@ -1741,6 +1743,87 @@ async function askQuestion() {
 /**
  * Withdrawal Planner — Status laden + Form-Handling.
  */
+// =====================================================================
+// SURVIVORSHIP-BIAS-AUDIT (E4)
+// =====================================================================
+async function surveyRunNow() {
+    const btn = document.getElementById('surv-run-btn');
+    const msg = document.getElementById('surv-run-msg');
+    if (!confirm('Survivorship-Audit JETZT starten?\n\n' +
+                 '• ~50 yfinance-Calls fuer alle Universe-Symbole\n' +
+                 '• Runtime ca. 30-60 Sek\n' +
+                 '• Aktualisiert die Bias-Schaetzung in der Card')) return;
+    btn.disabled = true;
+    msg.textContent = 'Starte...';
+    try {
+        const r = await apiFetch('/api/survivorship/run', {method: 'POST'});
+        const d = await r.json();
+        if (d.ok) {
+            msg.textContent = '✓ ' + d.message;
+            setTimeout(loadSurvivorship, 60000);
+            setTimeout(loadSurvivorship, 90000);
+        } else {
+            msg.textContent = '✗ ' + (d.error || 'Fehler');
+        }
+    } catch (e) {
+        msg.textContent = '✗ ' + e.message;
+    } finally {
+        setTimeout(() => { btn.disabled = false; }, 2000);
+    }
+}
+
+
+async function loadSurvivorship() {
+    try {
+        const r = await apiFetch('/api/survivorship/summary');
+        if (!r.ok) return;
+        const d = await r.json();
+        const summary = document.getElementById('surv-state-summary');
+        const content = document.getElementById('surv-content');
+
+        if (d.state === 'not_run_yet' || !d.generated_at) {
+            summary.innerHTML = 'Noch nicht ausgefuehrt — klicke "Audit jetzt laufen lassen"';
+            content.style.display = 'none';
+            return;
+        }
+
+        summary.innerHTML = 'Letzter Audit: <strong>' +
+            (d.generated_at || '').slice(0, 16) + '</strong>';
+        content.style.display = 'block';
+
+        document.getElementById('surv-alive').textContent = d.live_alive ?? '--';
+        document.getElementById('surv-dead').textContent = d.live_dead ?? '--';
+        document.getElementById('surv-suspicious').textContent = d.live_suspicious ?? '--';
+        document.getElementById('surv-excluded').textContent = d.historical_excluded ?? '--';
+        document.getElementById('surv-known').textContent =
+            (d.historical_excluded || 0) + (d.historical_in_universe || 0);
+        document.getElementById('surv-rate').textContent = d.exclusion_rate_pct ?? '--';
+        document.getElementById('surv-corr-min').textContent =
+            (d.estimated_sharpe_reduction_min ?? '--').toString();
+        document.getElementById('surv-corr-max').textContent =
+            (d.estimated_sharpe_reduction_max ?? '--').toString();
+        document.getElementById('surv-corr-point').textContent =
+            (d.estimated_sharpe_reduction_point ?? '--').toString();
+        document.getElementById('surv-generated').textContent =
+            (d.generated_at || '').slice(0, 16);
+
+        if (d.wfo_correction) {
+            document.getElementById('surv-wfo-block').style.display = 'block';
+            document.getElementById('surv-wfo-raw').textContent =
+                d.wfo_correction.wfo_mean_oos_sharpe;
+            document.getElementById('surv-wfo-corrected').textContent =
+                d.wfo_correction.corrected_point_estimate;
+            document.getElementById('surv-wfo-min').textContent =
+                d.wfo_correction.corrected_min;
+            document.getElementById('surv-wfo-max').textContent =
+                d.wfo_correction.corrected_max;
+        }
+    } catch (e) {
+        console.warn('Survivorship load failed:', e);
+    }
+}
+
+
 // =====================================================================
 // WALK-FORWARD-OPTIMIZATION (E1)
 // =====================================================================

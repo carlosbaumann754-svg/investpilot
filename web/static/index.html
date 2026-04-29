@@ -264,6 +264,54 @@
             </div>
         </div>
 
+        <!-- SURVIVORSHIP-BIAS-AUDIT (E4, Q1 Foundation) -->
+        <div class="card" id="survivorship-card">
+            <div class="card-title">Survivorship-Bias-Audit (E4)<span class="tip" data-tip="Quantifiziert wie stark unsere WFO/Backtest-Sharpe durch Survivorship-Bias verzerrt ist. Yfinance liefert nur Daten von HEUTE existierenden Tickern — alle 2021-2026 insolvent gegangenen Stocks fehlen dem Backtest, was Performance positiv verfaelscht. 3-Schicht-Audit: (1) Live-Check ob alle Universe-Symbole noch yfinance-Daten haben, (2) Cross-Check gegen 19 bekannte 2021-2026 Insolvenzen/Delistings, (3) Asset-Mix-basierte Sharpe-Reduktion-Schaetzung aus Quant-Literatur. Output: ehrlicher Sharpe-Bereich nach Bias-Korrektur.">?</span></div>
+            <div id="surv-state-summary" class="card-sub" style="margin-bottom:10px;">Lade...</div>
+
+            <div id="surv-content" style="display:none;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;">
+                    <div>
+                        <div style="opacity:0.7;">Live-Check</div>
+                        <div><strong id="surv-alive">--</strong> alive,
+                             <span id="surv-dead">--</span> dead,
+                             <span id="surv-suspicious">--</span> suspicious</div>
+                    </div>
+                    <div>
+                        <div style="opacity:0.7;">Historical-Reference</div>
+                        <div><strong id="surv-excluded">--</strong>/<span id="surv-known">--</span> korrekt excluded
+                             (<span id="surv-rate">--</span>%)</div>
+                    </div>
+                </div>
+                <div style="margin-top:12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:8px;padding:10px 12px;font-size:13px;">
+                    <div style="opacity:0.85;">Geschaetzte Sharpe-Reduktion (Asset-Mix-basiert):</div>
+                    <div style="font-size:1.5em;font-weight:600;color:#818cf8;margin:4px 0;">
+                        <span id="surv-corr-min">--</span> bis <span id="surv-corr-max">--</span>
+                        <span style="font-size:0.7em;opacity:0.7;">(Punkt: <span id="surv-corr-point">--</span>)</span>
+                    </div>
+                </div>
+                <div id="surv-wfo-block" style="display:none;margin-top:10px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.25);border-radius:8px;padding:10px 12px;font-size:13px;">
+                    <div style="opacity:0.85;">WFO-Sharpe nach Bias-Korrektur:</div>
+                    <div style="font-size:1.5em;font-weight:600;color:#34d399;margin:4px 0;">
+                        <span id="surv-wfo-corrected">--</span>
+                        <span style="font-size:0.7em;opacity:0.7;">(Range <span id="surv-wfo-min">--</span> - <span id="surv-wfo-max">--</span>)</span>
+                    </div>
+                    <div style="opacity:0.7;font-size:0.9em;">vs. nicht-korrigierte WFO-Sharpe <span id="surv-wfo-raw">--</span></div>
+                </div>
+                <div style="margin-top:10px;font-size:12px;opacity:0.7;">
+                    Letzter Audit: <span id="surv-generated">--</span>
+                </div>
+            </div>
+
+            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <button onclick="surveyRunNow()" id="surv-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
+                        title="Voller Audit mit yfinance Live-Check (~30-60 Sek). Nicht zwingend taeglich noetig — bei Universe-Aenderungen oder vor wichtigen Decisions.">
+                    ▶ Audit jetzt laufen lassen
+                </button>
+                <span id="surv-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
+            </div>
+        </div>
+
         <!-- WALK-FORWARD-OPTIMIZATION (E1, vorgezogen) -->
         <div class="card" id="wfo-card">
             <div class="card-title">Walk-Forward-Optimization (E1)<span class="tip" data-tip="Ehrliche Sharpe-Schaetzung VOR Real-Money. Statt einmal auf 4 Jahren zu optimieren (das ueberfittet), splitten wir die Historie in 6 rolling Windows: 24 Monate Train + 6 Monate Test, jedes Mal um 6 Monate vorgeschoben. Pro Window: optimiere auf Train, evaluiere ehrlich auf nie-gesehenen Test-Daten. Aggregiere alle 6 OOS-Sharpe-Werte. Konsistent hoch -> echte Edge. Zerfallen sie -> Overfitting entdeckt VOR Cutover. Roadmap-Item E1 aus Q1 Foundation, vorgezogen weil TRADING-NULL-RISK (pure Backtester-Erweiterung).">?</span></div>

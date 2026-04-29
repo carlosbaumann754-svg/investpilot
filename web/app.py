@@ -4033,6 +4033,38 @@ async def api_wfo_status():
         return {"state": "error", "error": str(e)}
 
 
+# ============================================================
+# SURVIVORSHIP-AUDIT (E4, Q1 Foundation)
+# ============================================================
+
+@app.get("/api/survivorship/summary")
+async def api_survivorship_summary():
+    """Survivorship-Audit Summary fuer Dashboard-Card."""
+    try:
+        from app.config_manager import load_json
+        return load_json("survivorship_audit_summary.json") or {"state": "not_run_yet"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/survivorship/run")
+async def api_survivorship_run(user=Depends(require_auth)):
+    """Triggert vollstaendigen Survivorship-Audit (mit yfinance Live-Check).
+
+    Runtime ca. 30-60 Sekunden (yfinance Calls fuer alle ~50 Symbole).
+    Laeuft im Bot-Container (kein GH-Action noetig — Audit ist leichtgewichtig).
+    """
+    import threading
+    from app.survivorship_audit import run_audit
+    def _bg():
+        try:
+            run_audit(quick=False)
+        except Exception as e:
+            log.exception(f"Survivorship-Audit failed: {e}")
+    threading.Thread(target=_bg, daemon=True, name="survivorship-audit").start()
+    return {"ok": True, "message": "Audit gestartet, ca. 30-60 Sek Runtime"}
+
+
 @app.get("/api/wfo/history")
 async def api_wfo_history():
     """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart."""
