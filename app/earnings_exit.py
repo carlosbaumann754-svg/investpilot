@@ -101,7 +101,11 @@ def load_exemptions() -> set[str]:
 
     User kann bewusst Position halten (z.B. wenn er auf positive Earnings spielt).
     Persistiert in data/earnings_exit_exemptions.json mit Audit-Trail.
+
+    v37y: vor jedem Read laeuft Auto-Cleanup — entfernt Symbols mit
+    Earnings in der Vergangenheit (One-shot-Exemption-Pattern).
     """
+    cleanup_expired_exemptions()  # v37y: stille Auto-Cleanup
     try:
         from app.config_manager import load_json
         data = load_json(EXEMPTIONS_FILE) or {}
@@ -111,19 +115,60 @@ def load_exemptions() -> set[str]:
         return set()
 
 
-def add_exemption(symbol: str, reason: str = "manual") -> None:
-    """Fuegt ein Symbol zur Exemption-Liste hinzu (idempotent)."""
+def add_exemption(
+    symbol: str,
+    reason: str = "manual",
+    auto_cleanup_after_earnings: bool = True,
+    earnings_date: Optional[datetime] = None,
+) -> None:
+    """Fuegt ein Symbol zur Exemption-Liste hinzu (idempotent).
+
+    v37y: One-shot-Pattern (Default):
+        auto_cleanup_after_earnings=True (default) -> Exemption gilt nur fuer
+        DAS naechste Earnings. Sobald earnings_date in der Vergangenheit ist,
+        wird Symbol automatisch entfernt + Pushover-Alert.
+
+        auto_cleanup_after_earnings=False -> Exemption ist persistent (legacy).
+        User muss selber via remove_exemption() entfernen.
+
+    Args:
+        symbol: Ticker (case-insensitive)
+        reason: Audit-Trail-Begruendung
+        auto_cleanup_after_earnings: One-shot-Default (empfohlen).
+        earnings_date: Wenn None, wird via _fetch_earnings_date geholt.
+                       Notwendig fuer auto_cleanup zum Auto-Remove-Trigger.
+    """
     from app.config_manager import load_json, save_json
     data = load_json(EXEMPTIONS_FILE) or {}
     exempt = set(data.get("exempt_symbols", []) or [])
     exempt.add(symbol.upper())
     data["exempt_symbols"] = sorted(exempt)
+
+    # v37y: Auto-Cleanup-Metadata
+    if auto_cleanup_after_earnings:
+        if earnings_date is None:
+            try:
+                from app.events_calendar import _fetch_earnings_date
+                earnings_date = _fetch_earnings_date(symbol)
+            except Exception:
+                pass
+        if earnings_date is not None:
+            auto_cleanup = data.setdefault("auto_cleanup", {})
+            auto_cleanup[symbol.upper()] = {
+                "earnings_date": earnings_date.strftime("%Y-%m-%d"),
+                "set_at": datetime.now(timezone.utc).isoformat(),
+                "reason": reason,
+            }
+
     audit = data.setdefault("audit", [])
     audit.append({
         "symbol": symbol.upper(),
         "added_at": datetime.now(timezone.utc).isoformat(),
         "reason": reason,
         "action": "ADD",
+        "auto_cleanup": auto_cleanup_after_earnings,
+        "earnings_date": (earnings_date.strftime("%Y-%m-%d")
+                          if earnings_date else None),
     })
     save_json(EXEMPTIONS_FILE, data)
 
@@ -135,6 +180,13 @@ def remove_exemption(symbol: str, reason: str = "manual") -> None:
     exempt = set(data.get("exempt_symbols", []) or [])
     exempt.discard(symbol.upper())
     data["exempt_symbols"] = sorted(exempt)
+
+    # v37y: auch aus auto_cleanup-Map entfernen
+    auto_cleanup = data.get("auto_cleanup", {}) or {}
+    if symbol.upper() in auto_cleanup:
+        del auto_cleanup[symbol.upper()]
+        data["auto_cleanup"] = auto_cleanup
+
     audit = data.setdefault("audit", [])
     audit.append({
         "symbol": symbol.upper(),
@@ -143,6 +195,82 @@ def remove_exemption(symbol: str, reason: str = "manual") -> None:
         "action": "REMOVE",
     })
     save_json(EXEMPTIONS_FILE, data)
+
+
+def cleanup_expired_exemptions() -> list[str]:
+    """v37y: One-shot-Cleanup — entfernt Exemptions deren Earnings vorbei sind.
+
+    Wird automatisch beim load_exemptions() aufgerufen (vor jedem Filter-Check).
+    Returns: Liste der entfernten Symbols.
+    """
+    try:
+        from app.config_manager import load_json, save_json
+    except Exception:
+        return []
+
+    try:
+        data = load_json(EXEMPTIONS_FILE) or {}
+    except Exception:
+        return []
+
+    auto_cleanup = data.get("auto_cleanup", {}) or {}
+    if not auto_cleanup:
+        return []
+
+    today = datetime.now(timezone.utc).date()
+    removed = []
+
+    for symbol, meta in list(auto_cleanup.items()):
+        ed_str = meta.get("earnings_date")
+        if not ed_str:
+            continue
+        try:
+            earnings_date = datetime.fromisoformat(ed_str).date()
+        except Exception:
+            continue
+
+        # Earnings vorbei? -> auto-remove
+        # +1 Tag Puffer damit Earnings-Tag selbst noch exempt bleibt
+        # (Earnings-AfterClose = Bot kann erst naechsten Tag reagieren)
+        if earnings_date < today:
+            removed.append(symbol)
+            # Symbol aus exempt_symbols entfernen
+            exempt = set(data.get("exempt_symbols", []) or [])
+            exempt.discard(symbol)
+            data["exempt_symbols"] = sorted(exempt)
+            # Aus auto_cleanup entfernen
+            del auto_cleanup[symbol]
+            # Audit-Trail
+            audit = data.setdefault("audit", [])
+            audit.append({
+                "symbol": symbol,
+                "added_at": datetime.now(timezone.utc).isoformat(),
+                "reason": f"auto-cleanup-after-earnings-{ed_str}",
+                "action": "AUTO_REMOVE",
+            })
+
+    if removed:
+        data["auto_cleanup"] = auto_cleanup
+        try:
+            save_json(EXEMPTIONS_FILE, data)
+        except Exception as e:
+            logger.warning(f"Auto-Cleanup save fehlgeschlagen: {e}")
+
+        # Pushover-Alert
+        try:
+            from app.alerts import send_alert
+            sym_list = ", ".join(removed)
+            send_alert(
+                f"Earnings-Exemption automatisch entfernt: {sym_list}. "
+                f"Earnings vorbei -> Filter ist wieder aktiv fuer naechstes Quartal.",
+                level="INFO",
+            )
+        except Exception as e:
+            logger.debug(f"Auto-Cleanup-Pushover fehlgeschlagen: {e}")
+
+        logger.info(f"Auto-Cleanup: {len(removed)} Exemption(s) entfernt: {sym_list}")
+
+    return removed
 
 
 def check_earnings_exit(

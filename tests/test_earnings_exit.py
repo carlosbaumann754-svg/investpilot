@@ -214,6 +214,80 @@ def test_exempt_audit_trail(temp_data_dir):
     assert audit[2]["reason"] == "changed-mind"
 
 
+# ============================================================
+# v37y: One-shot Auto-Cleanup
+# ============================================================
+
+def test_auto_cleanup_removes_expired_exemption(temp_data_dir):
+    """Earnings vorbei (gestern) -> Symbol wird auto-entfernt."""
+    from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
+    from app.config_manager import load_json
+    yesterday = datetime.now() - timedelta(days=1)
+    add_exemption("ROKU", reason="hold-thru-earnings",
+                  auto_cleanup_after_earnings=True, earnings_date=yesterday)
+    # Pre-cleanup state direkt aus File lesen (load_exemptions triggert cleanup)
+    pre_state = load_json("earnings_exit_exemptions.json") or {}
+    assert "ROKU" in pre_state.get("exempt_symbols", [])
+    # Direct cleanup-call
+    removed = cleanup_expired_exemptions()
+    assert "ROKU" in removed
+    assert "ROKU" not in load_exemptions()
+
+
+def test_auto_cleanup_keeps_future_exemption(temp_data_dir):
+    """Earnings noch in der Zukunft -> Symbol bleibt exempt."""
+    from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
+    tomorrow = datetime.now() + timedelta(days=1)
+    add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=tomorrow)
+    removed = cleanup_expired_exemptions()
+    assert removed == []
+    assert "ROKU" in load_exemptions()
+
+
+def test_auto_cleanup_keeps_today_exemption(temp_data_dir):
+    """Earnings heute -> Symbol bleibt exempt (erst NACH Earnings clean-up)."""
+    from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
+    today = datetime.now()
+    add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=today)
+    removed = cleanup_expired_exemptions()
+    assert removed == []
+    assert "ROKU" in load_exemptions()
+
+
+def test_persistent_exemption_no_auto_cleanup(temp_data_dir):
+    """auto_cleanup_after_earnings=False -> persistent (legacy)."""
+    from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
+    yesterday = datetime.now() - timedelta(days=1)
+    add_exemption("ROKU", auto_cleanup_after_earnings=False, earnings_date=yesterday)
+    removed = cleanup_expired_exemptions()
+    # Symbol bleibt weil nicht in auto_cleanup-Map
+    assert "ROKU" in load_exemptions()
+    assert removed == []
+
+
+def test_audit_trail_includes_auto_remove(temp_data_dir):
+    from app.earnings_exit import add_exemption, cleanup_expired_exemptions
+    from app.config_manager import load_json
+    yesterday = datetime.now() - timedelta(days=1)
+    add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=yesterday)
+    cleanup_expired_exemptions()
+    data = load_json("earnings_exit_exemptions.json") or {}
+    actions = [a["action"] for a in data.get("audit", [])]
+    assert "ADD" in actions
+    assert "AUTO_REMOVE" in actions
+
+
+def test_load_exemptions_triggers_auto_cleanup(temp_data_dir):
+    """load_exemptions() ruft cleanup_expired_exemptions() implicit auf."""
+    from app.earnings_exit import add_exemption, load_exemptions
+    yesterday = datetime.now() - timedelta(days=1)
+    add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=yesterday)
+    # Direkter load_exemptions() Aufruf (ohne expliziten cleanup_call)
+    result = load_exemptions()
+    # Cleanup wurde von load_exemptions() ausgeloest
+    assert "ROKU" not in result
+
+
 def test_pending_earnings_watchlist():
     from app.earnings_exit import get_pending_earnings_for_positions
     tomorrow = datetime.now() + timedelta(days=1)
