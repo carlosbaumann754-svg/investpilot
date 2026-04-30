@@ -4826,9 +4826,14 @@ async def api_earnings_watchlist():
 
         positions_raw = portfolio.get("positions", []) or []
 
-        # Equity fuer position_pct-Berechnung
-        equity = float(portfolio.get("creditByRealizedEquity")
-                       or portfolio.get("_equity") or 0)
+        # Equity fuer position_pct-Berechnung — multi-key fuer brain-cache + Live
+        equity = float(
+            portfolio.get("_total_value")
+            or portfolio.get("creditByRealizedEquity")
+            or portfolio.get("_equity")
+            or portfolio.get("portfolio_value")
+            or 0
+        )
 
         # Pending-Earnings-Lookup
         watchlist = get_pending_earnings_for_positions(
