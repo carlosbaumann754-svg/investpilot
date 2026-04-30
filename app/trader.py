@@ -88,6 +88,15 @@ def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
     return trade_entry
 
 
+def _is_already_closed(result) -> bool:
+    """v37ce: True wenn close_position Sentinel {_already_closed: True} zurueckgab.
+    Heisst: Position war bei IBKR schon geschlossen (stale ib.portfolio()-Eintrag).
+    -> KEIN FAILED loggen, KEIN erneuter Versuch im naechsten Cycle."""
+    if isinstance(result, dict) and result.get("_already_closed"):
+        return True
+    return False
+
+
 def _log_close_failure(action_name: str, p: dict, alerts_mod=None, extra: dict | None = None):
     """Protokolliere + persistiere eine fehlgeschlagene close_position()-Antwort.
 
@@ -737,7 +746,10 @@ def check_stop_loss_take_profit(client, config):
             log.warning(f"  STOP-LOSS: Position {p['position_id']} "
                         f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
             result = client.close_position(p["position_id"], p["instrument_id"])
-            if result:
+            if _is_already_closed(result):
+                log.info(f"  STOP-LOSS skip {p['instrument_id']}: bei IBKR bereits "
+                         f"geschlossen (stale Bot-Cache)")
+            elif result:
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "action": "STOP_LOSS_CLOSE",
@@ -764,7 +776,10 @@ def check_stop_loss_take_profit(client, config):
             log.info(f"  TAKE-PROFIT: Position {p['position_id']} "
                      f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%{remaining_label}")
             result = client.close_position(p["position_id"], p["instrument_id"])
-            if result:
+            if _is_already_closed(result):
+                log.info(f"  TAKE-PROFIT skip {p['instrument_id']}: bei IBKR bereits "
+                         f"geschlossen (stale Bot-Cache)")
+            elif result:
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "action": "TAKE_PROFIT_CLOSE",

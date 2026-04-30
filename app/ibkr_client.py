@@ -429,10 +429,37 @@ class IbkrBroker(BrokerBase):
                 # Fallback: positions() hat zumindest Contract+Qty+AvgCost
                 items = ib.positions()
 
+            # v37ce: Stale-Portfolio-Filter (META-Loop Hotfix 30.04. 16:25 CEST).
+            # ib_insync ib.portfolio() kann nach Close-Fills veraltete Items mit
+            # qty>0 zurueckliefern, weil IBKR nicht immer einen updatePortfolio-
+            # Event nach SELL-Fill sendet — nur ein position()-Event. Daher:
+            # (1) qty=0 explizit rausfiltern, (2) Cross-Check gegen ib.positions()
+            # (das schneller updated wird) — nur Items die in BEIDEN Datenquellen
+            # sind ueberleben. Verhindert META-style Loop-Bugs (11x SL_FAILED
+            # Spam in 50min nach erfolgreichem 15:31 Close).
+            try:
+                live_con_ids = {getattr(p.contract, "conId", None)
+                                for p in (ib.positions() or [])
+                                if abs(float(getattr(p, "position", 0) or 0)) > 0}
+            except Exception:
+                live_con_ids = None  # Fallback: kein Filter wenn positions() fehlt
+
             mapped_positions = []
             for p in items:
                 contract = getattr(p, "contract", None)
                 qty = float(getattr(p, "position", 0))
+                # v37ce-Filter
+                if qty == 0:
+                    continue
+                con_id = getattr(contract, "conId", None)
+                if live_con_ids is not None and con_id not in live_con_ids:
+                    log.warning(
+                        "Stale ib.portfolio()-Eintrag uebersprungen: %s conId=%s "
+                        "qty=%s (nicht in ib.positions(), wahrscheinlich nach "
+                        "Close-Fill ohne updatePortfolio-Event)",
+                        getattr(contract, "symbol", "?"), con_id, qty,
+                    )
+                    continue
                 avg_cost = float(getattr(p, "averageCost", 0) or getattr(p, "avgCost", 0) or 0)
                 # PortfolioItem hat marketPrice, marketValue, unrealizedPNL
                 mkt_price = getattr(p, "marketPrice", None)
@@ -734,11 +761,27 @@ class IbkrBroker(BrokerBase):
                 except (ValueError, TypeError):
                     iid = None
 
+                # v37ce: Drei-Stufen-Match (war zwei in v37s):
+                # 1. Direct-Match: iid passt zu offener Position (qty>0)
+                # 2. Already-Closed-Detection: iid sieht aus wie conId (>=8 Stellen),
+                #    ist aber NICHT in ib.positions() -> Position bereits geschlossen,
+                #    kein FAIL sondern "already_closed"-Sentinel zurueckgeben.
+                # 3. Fallback: als kleine eToro-ID via resolve_contract aufloesen.
+                # Verhindert META-style Loop-Bugs (geschlossene Position in stale
+                # ib.portfolio() -> close_position wird erneut getriggert).
                 if iid is not None and any(
                     getattr(p.contract, "conId", None) == iid for p in ib.positions()
                 ):
-                    # Direct-Match: instrument_id ist bereits eine conId einer offenen Position
                     target_con_id = iid
+                elif iid is not None and iid >= 10000000:
+                    # >=8 Stellen sieht nach IBKR-conId aus, aber nicht offen
+                    # -> bereits geschlossen
+                    log.warning(
+                        "close_position: conId=%s nicht (mehr) in ib.positions() "
+                        "-> Position bereits geschlossen. Skip ohne Error.",
+                        iid,
+                    )
+                    return {"_already_closed": True, "_conId": iid}
                 else:
                     # Fallback: als eToro-ID via ASSET_UNIVERSE aufloesen
                     try:
