@@ -101,19 +101,30 @@ def get_ibkr_state(timeout: int = 15) -> dict:
 
 
 def reconcile(lookback_hours: int = 24,
-              cash_tolerance_pct: float = CASH_TOLERANCE_PCT_DEFAULT) -> dict:
+              cash_tolerance_pct: float = CASH_TOLERANCE_PCT_DEFAULT,
+              missed_fill_lookback_hours: int = 24) -> dict:
     """Hauptlogik. Returns Dict mit Diffs/Status.
 
-    v37t: lookback_hours default 24 (CRON setzt 720=30d).
+    v37t/t+: zwei separate Lookback-Fenster:
+    - lookback_hours: fuer Phantom-Detection (Default 24h, Cron 720h=30d)
+      -> "kennt Bot diese Position ueberhaupt?"
+    - missed_fill_lookback_hours: fuer Missed-Fill-Detection (Default 24h)
+      -> "Bot loggte gerade einen Trade, hat IBKR die Execution?"
+    Vorher waren beide gleich -> bei 720h-Lookback wurden ALLE 30-Tage-
+    Trades als MISSED_FILL gemeldet weil IBKR-Session nur Session-Executions
+    kennt.
+
     cash_tolerance_pct default 0.5%, mit FLOOR 50$ Mindestschwelle.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    cutoff_pos = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    cutoff_fill = datetime.now(timezone.utc) - timedelta(hours=missed_fill_lookback_hours)
 
     bot_history, bot_cash = load_bot_state()
     ibkr = get_ibkr_state()
 
-    # Filter Bot-trades auf lookback Window
-    recent_bot = []
+    # Filter Bot-trades — zwei getrennte Listen fuer die zwei Checks
+    recent_bot = []           # fuer Phantom-Detection (langes Fenster)
+    recent_for_fill = []      # fuer MISSED_FILL (kurzes Fenster)
     for t in bot_history:
         ts = t.get("timestamp")
         if not ts:
@@ -122,8 +133,10 @@ def reconcile(lookback_hours: int = 24,
             dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.astimezone(timezone.utc)
-            if dt >= cutoff:
+            if dt >= cutoff_pos:
                 recent_bot.append(t)
+            if dt >= cutoff_fill:
+                recent_for_fill.append(t)
         except Exception:
             continue
 
@@ -171,8 +184,11 @@ def reconcile(lookback_hours: int = 24,
             })
 
     # 3. Missed Fills (Bot loggte BUY/SELL, aber IBKR hat keine matching Execution)
+    # v37t+: nur recent_for_fill (24h) statt recent_bot (30d), sonst werden
+    # alle historischen Trades als MISSED_FILL gemeldet (IBKR-Session zeigt
+    # nur kurze Execution-Historie).
     ibkr_exec_symbols = {(e["symbol"], e["side"]) for e in ibkr["executions"]}
-    for t in recent_bot:
+    for t in recent_for_fill:
         action = t.get("action", "").upper()
         # v37t-Fix: SCANNER_BUY/SELL und Compound-Actions wie STOP_LOSS_CLOSE matchen
         if action in ("BUY", "OPEN", "SCANNER_BUY"):
@@ -198,11 +214,13 @@ def reconcile(lookback_hours: int = 24,
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "lookback_hours": lookback_hours,
+        "missed_fill_lookback_hours": missed_fill_lookback_hours,
         "bot_cash": round(bot_cash, 2),
         "ibkr_cash": round(ibkr["cash"], 2),
         "ibkr_equity": round(ibkr["equity"], 2),
         "ibkr_positions_count": len(ibkr["positions"]),
-        "bot_recent_trades_count": len(recent_bot),
+        "bot_position_lookback_trades_count": len(recent_bot),
+        "bot_fill_lookback_trades_count": len(recent_for_fill),
         "ibkr_recent_executions_count": len(ibkr["executions"]),
         "drifts": drifts,
         "status": "OK" if not drifts else "DRIFT_DETECTED",
@@ -239,6 +257,10 @@ def main():
                         default=CASH_TOLERANCE_PCT_DEFAULT,
                         help="Prozentualer Cash-Drift-Threshold. Default 0.5%% "
                              "(bei $880k Konto = $4400 Schwelle). Floor: $50.")
+    parser.add_argument("--missed-fill-lookback-hours", type=int, default=24,
+                        help="Lookback fuer MISSED_FILL-Detection. Default 24h. "
+                             "Sollte kurz bleiben weil IBKR-Session-Executions "
+                             "nur kurze Historie haben.")
     parser.add_argument("--alert", action="store_true",
                         help="Bei Drift Multi-Channel-Alert ausloesen")
     parser.add_argument("--json", action="store_true",
@@ -252,6 +274,7 @@ def main():
         report = reconcile(
             lookback_hours=args.lookback_hours,
             cash_tolerance_pct=args.cash_tolerance_pct,
+            missed_fill_lookback_hours=args.missed_fill_lookback_hours,
         )
     except Exception as e:
         log.error("Reconciliation failed: %s", e)
