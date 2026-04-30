@@ -101,6 +101,11 @@ def detect_cash_deposit(current_cash, config):
     DCA-Plan aktiviert: der neue Cash wird ueber N Scheduler-Zyklen
     verteilt deployed.
 
+    v37cd: Trade-Settlement-aware. Cash-Increase nach SELL/CLOSE ist KEINE
+    Einzahlung. Subtrahiere Sell-Erloese der letzten N Stunden vom Delta.
+    Loest Audit-Finding F2: nach F1-Fix (credit=TotalCashValue) sprang
+    Cash nach jedem SELL um Verkaufserlös und triggerte falschen DCA-Plan.
+
     Returns: dict mit
       - `dca_active` (bool)
       - `remaining_budget_usd` (float) — verfuegbar im aktuellen Zyklus
@@ -119,8 +124,53 @@ def detect_cash_deposit(current_cash, config):
     prev_cash = float(state.get("last_seen_cash_usd", current_cash))
     active_plan = state.get("active_plan")
 
+    # v37cd: Trade-Settlement-Adjustment.
+    # Schaue letzten Cycle (~6h Worst-Case Cron-Drift) und summiere SELL/
+    # CLOSE-Notional. Diese Cash-Increases sind keine Einzahlungen.
+    sell_proceeds_recent = 0.0
+    try:
+        trade_hist = load_json("trade_history.json") or []
+        last_seen_at = state.get("last_seen_at")
+        from datetime import datetime as _dt, timedelta as _td
+        cutoff = _dt.now() - _td(hours=6)
+        if last_seen_at:
+            try:
+                cutoff = _dt.fromisoformat(last_seen_at)
+            except Exception:
+                pass
+        for t in trade_hist[-50:]:  # letzte 50 reicht
+            try:
+                ts = _dt.fromisoformat(t.get("timestamp", ""))
+            except Exception:
+                continue
+            if ts < cutoff:
+                continue
+            action = t.get("action", "")
+            if action == "BUY" or action == "SCANNER_BUY":
+                continue  # BUYs reduzieren Cash, nicht relevant
+            # CLOSE/SELL/STOP_LOSS_CLOSE/TAKE_PROFIT_CLOSE/EARNINGS_BLACKOUT_CLOSE/
+            # MANUAL_SELL/TIME_STOP_CLOSE etc. erhoehen Cash
+            if "CLOSE" in action or action == "SELL" or action == "MANUAL_SELL":
+                # Erloes ~ avg_fill_price * qty. Fallback invested+pnl wenn fill fehlt.
+                fill = float(t.get("avg_fill_price", 0) or 0)
+                qty = float(t.get("qty", 0) or 0)
+                proceeds = fill * qty if (fill and qty) else 0
+                if proceeds <= 0:
+                    invested = float(t.get("invested", 0) or 0)
+                    pnl = float(t.get("pnl_usd", 0) or 0)
+                    proceeds = invested + pnl
+                sell_proceeds_recent += max(proceeds, 0)
+    except Exception as e:
+        log.debug(f"detect_cash_deposit: Trade-Settlement-Adjustment fehlgeschlagen: {e}")
+
+    # Delta = Cash-Aenderung MINUS bekannte Sell-Erloese
+    raw_delta = current_cash - prev_cash
+    delta = raw_delta - sell_proceeds_recent
+    if sell_proceeds_recent > 0:
+        log.debug(f"  DCA-Delta-Adjust: raw=${raw_delta:,.2f} - "
+                  f"sells=${sell_proceeds_recent:,.2f} = ${delta:,.2f}")
+
     # Neuer Cash-Anstieg erkannt?
-    delta = current_cash - prev_cash
     if delta >= min_trigger and (not active_plan or active_plan.get("consumed_usd", 0) >= active_plan.get("total_deposit_usd", 0)):
         # Frischer DCA-Plan
         active_plan = {
@@ -136,6 +186,7 @@ def detect_cash_deposit(current_cash, config):
         )
 
     state["last_seen_cash_usd"] = current_cash
+    state["last_seen_at"] = datetime.now().isoformat()
     state["active_plan"] = active_plan
     try:
         save_json(CASH_DCA_STATE_FILE, state)

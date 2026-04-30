@@ -629,12 +629,24 @@ def _portfolio_from_brain_cache():
     total = float(last.get("total_value") or last.get("portfolio_value") or 0)
     invested = float(last.get("invested") or 0)
     positions = last.get("positions", []) or []
+    # v37cd: _equity-Konsistenz mit client.get_portfolio() (Audit F5).
+    # _age_seconds fuer Frontend-Frische-Warnung (Audit F13).
+    age_seconds = None
+    try:
+        from datetime import datetime as _dt2
+        ts = last.get("ts")
+        if ts:
+            age_seconds = (_dt2.now() - _dt2.fromisoformat(ts)).total_seconds()
+    except Exception:
+        pass
     return {
         "credit": cash,
         "unrealizedPnL": float(last.get("unrealized_pnl") or 0),
         "positions": positions,
         "_total_value": total,
+        "_equity": total,  # Konsistenz mit IbkrBroker.get_portfolio()
         "_invested": invested,
+        "_age_seconds": age_seconds,
         "_source": f"brain_cache (snapshot {last.get('ts','?')})",
     }
 

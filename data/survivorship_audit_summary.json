@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-04-29T06:39:37.130534",
+  "universe_size": 49,
+  "live_alive": null,
+  "live_dead": null,
+  "live_suspicious": null,
+  "historical_in_universe": 0,
+  "historical_excluded": 19,
+  "exclusion_rate_pct": 100.0,
+  "estimated_sharpe_reduction_min": 0.15,
+  "estimated_sharpe_reduction_max": 0.316,
+  "estimated_sharpe_reduction_point": 0.233,
+  "wfo_correction": null
+}

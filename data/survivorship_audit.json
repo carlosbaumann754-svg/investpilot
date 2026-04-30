@@ -1,0 +1,167 @@
+{
+  "generated_at": "2026-04-29T06:39:37.130534",
+  "active_universe_size": 49,
+  "live_check": {
+    "skipped": true
+  },
+  "historical_reference": {
+    "known_delisted_count": 19,
+    "in_universe": [],
+    "correctly_excluded": [
+      {
+        "ticker": "GME",
+        "year": 2021,
+        "reason": "saved by short-squeeze, alive — listed for reference"
+      },
+      {
+        "ticker": "FB",
+        "year": 2022,
+        "reason": "renamed to META, ticker change Jun 2022"
+      },
+      {
+        "ticker": "TWTR",
+        "year": 2022,
+        "reason": "Acquired by Elon Musk Oct 2022, delisted from NYSE"
+      },
+      {
+        "ticker": "FRC",
+        "year": 2023,
+        "reason": "First Republic Bank — JPM acquired May 2023"
+      },
+      {
+        "ticker": "SIVB",
+        "year": 2023,
+        "reason": "SVB Financial — bankrupt March 2023, FDIC takeover"
+      },
+      {
+        "ticker": "SBNY",
+        "year": 2023,
+        "reason": "Signature Bank — closed by FDIC March 2023"
+      },
+      {
+        "ticker": "BBBY",
+        "year": 2023,
+        "reason": "Bed Bath & Beyond — Chapter 11 April 2023"
+      },
+      {
+        "ticker": "WE",
+        "year": 2023,
+        "reason": "WeWork — Chapter 11 November 2023"
+      },
+      {
+        "ticker": "RIDE",
+        "year": 2023,
+        "reason": "Lordstown Motors — Chapter 11 June 2023"
+      },
+      {
+        "ticker": "YELL",
+        "year": 2023,
+        "reason": "Yellow Corp — Chapter 11 August 2023"
+      },
+      {
+        "ticker": "VLDR",
+        "year": 2023,
+        "reason": "Velodyne LiDAR — merged with Ouster"
+      },
+      {
+        "ticker": "PRTY",
+        "year": 2023,
+        "reason": "Party City — Chapter 11 January 2023"
+      },
+      {
+        "ticker": "GOEV",
+        "year": 2023,
+        "reason": "Canoo — Chapter 11 January 2024 (announced 2023)"
+      },
+      {
+        "ticker": "EXPR",
+        "year": 2024,
+        "reason": "Express Inc — Chapter 11 April 2024"
+      },
+      {
+        "ticker": "RUE",
+        "year": 2024,
+        "reason": "Rue21 — Chapter 11 May 2024"
+      },
+      {
+        "ticker": "RAD",
+        "year": 2024,
+        "reason": "Rite Aid — Chapter 11 October 2023, delisted 2024"
+      },
+      {
+        "ticker": "FSR",
+        "year": 2024,
+        "reason": "Fisker — Chapter 11 June 2024"
+      },
+      {
+        "ticker": "REDF",
+        "year": 2024,
+        "reason": "Redfin — acquired by Rocket"
+      },
+      {
+        "ticker": "SPRT",
+        "year": 2025,
+        "reason": "Greenidge Generation Holdings — Chapter 11"
+      }
+    ],
+    "exclusion_rate_pct": 100.0
+  },
+  "asset_mix": {
+    "stocks": 19,
+    "etf": 7,
+    "crypto": 9,
+    "commodities": 5,
+    "forex": 5,
+    "indices": 4
+  },
+  "sharpe_correction": {
+    "weighted_min_reduction": 0.15,
+    "weighted_max_reduction": 0.316,
+    "point_estimate": 0.233,
+    "breakdown": [
+      {
+        "class": "stocks",
+        "count": 19,
+        "weight_pct": 38.8,
+        "bias_min": 0.2,
+        "bias_max": 0.4
+      },
+      {
+        "class": "etf",
+        "count": 7,
+        "weight_pct": 14.3,
+        "bias_min": 0.05,
+        "bias_max": 0.15
+      },
+      {
+        "class": "crypto",
+        "count": 9,
+        "weight_pct": 18.4,
+        "bias_min": 0.3,
+        "bias_max": 0.6
+      },
+      {
+        "class": "commodities",
+        "count": 5,
+        "weight_pct": 10.2,
+        "bias_min": 0.1,
+        "bias_max": 0.2
+      },
+      {
+        "class": "forex",
+        "count": 5,
+        "weight_pct": 10.2,
+        "bias_min": 0.0,
+        "bias_max": 0.05
+      },
+      {
+        "class": "indices",
+        "count": 4,
+        "weight_pct": 8.2,
+        "bias_min": 0.0,
+        "bias_max": 0.05
+      }
+    ]
+  },
+  "wfo_correction": null
+}

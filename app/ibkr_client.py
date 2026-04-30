@@ -455,13 +455,20 @@ class IbkrBroker(BrokerBase):
                 })
 
             equity = self._get_account_value("NetLiquidation") or 0.0
-            cash = self._get_account_value("AvailableFunds") or 0.0
+            # v37cd FIX: TotalCashValue = echter Settled-Cash (Cash-Balance).
+            # AvailableFunds ist NetLiq-InitialMargin (Buying-Power-Reserve)
+            # und war fuer Cash-Konten gleich, fuer Margin-Konten (DUP108015)
+            # ~30-50%% groesser als echter Cash. Folge auf eToro-Standard
+            # `credit`: DCA-Detection, Margin-Safety, Daily-Summary, Display
+            # rechneten alle mit Phantom-Cash. Audit Findings F1-F4.
+            cash = self._get_account_value("TotalCashValue") or 0.0
+            buying_power = self._get_account_value("AvailableFunds") or 0.0
             unrealized = self._get_account_value("UnrealizedPnL") or 0.0
             realized = self._get_account_value("RealizedPnL") or 0.0
             gross_pos_value = self._get_account_value("GrossPositionValue") or 0.0
 
             # eToro-kompatible Top-Level-Keys (Bot-Konsumenten lesen diese!):
-            #   credit         = Cash-Balance (eToro Standard)
+            #   credit         = Cash-Balance (eToro Standard, jetzt TotalCashValue)
             #   unrealizedPnL  = offene P/L
             #   positions      = Liste offener Positionen
             # Plus IBKR-spezifische Erweiterungen mit '_'-Prefix
@@ -471,9 +478,10 @@ class IbkrBroker(BrokerBase):
                 "positions": mapped_positions,    # ETORO STANDARD
                 "aggregatedPositions": [],        # eToro-Kompatibilitaet
                 "creditByRealizedEquity": equity, # Legacy-Alias
-                "availableCash": cash,            # Legacy-Alias
+                "availableCash": cash,            # Legacy-Alias (TotalCashValue)
                 "_broker": "ibkr",
                 "_equity": equity,
+                "_buying_power": buying_power,    # v37cd: AvailableFunds separat
                 "_realized_pnl": realized,
                 "_gross_position_value": gross_pos_value,
             }
@@ -485,6 +493,14 @@ class IbkrBroker(BrokerBase):
         return self._get_account_value("NetLiquidation")
 
     def get_available_cash(self) -> Optional[float]:
+        """v37cd: TotalCashValue (echter Settled-Cash) statt AvailableFunds.
+        AvailableFunds = Buying-Power-Reserve via get_buying_power().
+        """
+        return self._get_account_value("TotalCashValue")
+
+    def get_buying_power(self) -> Optional[float]:
+        """v37cd: NEU — AvailableFunds = Buying-Power (Cash + Margin-Capacity).
+        Nutzt fuer Order-Sizing-Pruefungen, NICHT fuer Cash-Anzeige."""
         return self._get_account_value("AvailableFunds")
 
     def get_total_invested(self) -> Optional[float]:

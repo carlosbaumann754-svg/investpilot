@@ -1,0 +1,209 @@
+{
+  "generated_at": "2026-04-09T13:32:53.391871",
+  "total_requested": 50,
+  "ok_count": 49,
+  "error_count": 1,
+  "report": {
+    "AAPL": {
+      "status": "ok",
+      "days": 1001
+    },
+    "MSFT": {
+      "status": "ok",
+      "days": 1001
+    },
+    "AMZN": {
+      "status": "ok",
+      "days": 1001
+    },
+    "TSLA": {
+      "status": "ok",
+      "days": 1001
+    },
+    "NVDA": {
+      "status": "ok",
+      "days": 1001
+    },
+    "META": {
+      "status": "ok",
+      "days": 1001
+    },
+    "NFLX": {
+      "status": "ok",
+      "days": 1001
+    },
+    "AMD": {
+      "status": "ok",
+      "days": 1001
+    },
+    "INTC": {
+      "status": "ok",
+      "days": 1001
+    },
+    "JPM": {
+      "status": "ok",
+      "days": 1001
+    },
+    "JNJ": {
+      "status": "ok",
+      "days": 1001
+    },
+    "KO": {
+      "status": "ok",
+      "days": 1001
+    },
+    "BA": {
+      "status": "ok",
+      "days": 1001
+    },
+    "SQ": {
+      "status": "insufficient_data",
+      "days": 0,
+      "yf_symbol": "SQ"
+    },
+    "UBER": {
+      "status": "ok",
+      "days": 1001
+    },
+    "COIN": {
+      "status": "ok",
+      "days": 1001
+    },
+    "SAP": {
+      "status": "ok",
+      "days": 1001
+    },
+    "ASML": {
+      "status": "ok",
+      "days": 1001
+    },
+    "LVMH": {
+      "status": "ok",
+      "days": 1021
+    },
+    "SPY": {
+      "status": "ok",
+      "days": 1001
+    },
+    "IWM": {
+      "status": "ok",
+      "days": 1001
+    },
+    "XLF": {
+      "status": "ok",
+      "days": 1001
+    },
+    "XLE": {
+      "status": "ok",
+      "days": 1001
+    },
+    "GLD": {
+      "status": "ok",
+      "days": 1001
+    },
+    "SLV": {
+      "status": "ok",
+      "days": 1001
+    },
+    "EEM": {
+      "status": "ok",
+      "days": 1001
+    },
+    "BTC": {
+      "status": "ok",
+      "days": 1462
+    },
+    "ETH": {
+      "status": "ok",
+      "days": 1462
+    },
+    "XRP": {
+      "status": "ok",
+      "days": 1462
+    },
+    "ADA": {
+      "status": "ok",
+      "days": 1462
+    },
+    "SOL": {
+      "status": "ok",
+      "days": 1462
+    },
+    "DOGE": {
+      "status": "ok",
+      "days": 1462
+    },
+    "DOT": {
+      "status": "ok",
+      "days": 1462
+    },
+    "AVAX": {
+      "status": "ok",
+      "days": 1462
+    },
+    "LINK": {
+      "status": "ok",
+      "days": 1462
+    },
+    "MATIC": {
+      "status": "ok",
+      "days": 1081
+    },
+    "GOLD": {
+      "status": "ok",
+      "days": 1004
+    },
+    "SILVER": {
+      "status": "ok",
+      "days": 1004
+    },
+    "OIL": {
+      "status": "ok",
+      "days": 1004
+    },
+    "NGAS": {
+      "status": "ok",
+      "days": 1005
+    },
+    "COPPER": {
+      "status": "ok",
+      "days": 1005
+    },
+    "EURUSD": {
+      "status": "ok",
+      "days": 1039
+    },
+    "GBPUSD": {
+      "status": "ok",
+      "days": 1039
+    },
+    "USDJPY": {
+      "status": "ok",
+      "days": 1039
+    },
+    "USDCHF": {
+      "status": "ok",
+      "days": 1039
+    },
+    "AUDUSD": {
+      "status": "ok",
+      "days": 1039
+    },
+    "SPX500": {
+      "status": "ok",
+      "days": 1001
+    },
+    "NSDQ100": {
+      "status": "ok",
+      "days": 1001
+    },
+    "DJ30": {
+      "status": "ok",
+      "days": 1001
+    },
+    "DAX": {
+      "status": "ok",
+      "days": 1017
+    }
+  }
+}

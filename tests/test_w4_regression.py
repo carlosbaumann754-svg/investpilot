@@ -161,9 +161,13 @@ def test_v21_hotfix_get_portfolio_returns_etoro_compatible_keys():
     ib_mock.positions.return_value = []
 
     # Mock account values (IBKR liefert das so)
+    # v37cd: TotalCashValue ergaenzt; credit liest jetzt diesen statt
+    # AvailableFunds (siehe Audit F1 — AvailableFunds = Margin-Buying-
+    # Power-Reserve, nicht echter Cash).
     av_mocks = []
     for tag, value, currency in [
         ("NetLiquidation", "1062145.27", "USD"),
+        ("TotalCashValue", "1000000.00", "USD"),
         ("AvailableFunds", "1062052.36", "USD"),
         ("UnrealizedPnL", "0.00", "USD"),
         ("RealizedPnL", "0.00", "USD"),
@@ -181,7 +185,10 @@ def test_v21_hotfix_get_portfolio_returns_etoro_compatible_keys():
     assert "positions" in portfolio, "FEHLT 'positions' (eToro-Standard)"
 
     # Werte muessen plausibel sein
-    assert portfolio["credit"] == 1062052.36
+    # v37cd: credit ist jetzt TotalCashValue (echter Settled-Cash)
+    assert portfolio["credit"] == 1000000.00
+    # v37cd: _buying_power ist AvailableFunds (separat fuer Order-Sizing)
+    assert portfolio["_buying_power"] == 1062052.36
     assert portfolio["unrealizedPnL"] == 0.0
     assert portfolio["positions"] == []
 

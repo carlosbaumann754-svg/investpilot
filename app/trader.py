@@ -834,7 +834,11 @@ def rebalance_portfolio(client, config):
         pos_by_instrument[iid] = pos_by_instrument.get(iid, 0) + current_val
         total_invested += current_val
 
-    total = total_invested + credit
+    # v37cd: NetLiq als Total-Quelle (analog brain.py:71). Bei IBKR-Margin-
+    # Konten gilt NICHT total = credit + invested + pnl (siehe ibkr_client.py
+    # v37cd Cash-Mapping-Fix). NetLiq ist die ehrliche Portfolio-Summe.
+    equity = portfolio.get("_equity")
+    total = equity if equity else (total_invested + credit)
     if total <= 0:
         log.info("  Portfolio leer - kein Rebalancing noetig")
         return
@@ -1844,7 +1848,13 @@ def run_trading_cycle():
         portfolio = client.get_portfolio()
         if portfolio:
             parsed = [EtoroClient.parse_position(pos) for pos in portfolio.get("positions", [])]
-            total = portfolio.get("credit", 0) + sum(p["invested"] for p in parsed)
+            # v37cd: NetLiq als Total (siehe Audit F3). Bei IBKR-Margin-Konten
+            # ist credit+invested NICHT NetLiq (Phantom-Cash-Bug). Verwende
+            # _equity (NetLiquidation) wenn vorhanden, sonst Legacy-Fallback.
+            equity = portfolio.get("_equity")
+            total = equity if equity else (
+                portfolio.get("credit", 0) + sum(p["invested"] for p in parsed)
+            )
             margin_ok, margin_reason, exposure = rm.check_margin_safety(total, parsed, config)
             if not margin_ok:
                 log.warning(f"  MARGIN ALERT: {margin_reason}")
@@ -1872,9 +1882,15 @@ def run_trading_cycle():
     if al and al.should_send_daily_summary():
         if final_portfolio and rm:
             risk = rm.get_risk_summary()
-            total = final_portfolio.get("credit", 0)
-            for pos in final_portfolio.get("positions", []):
-                total += EtoroClient.parse_position(pos)["invested"]
+            # v37cd: NetLiq als Total (siehe Audit F4). Daily-Summary Pushover
+            # zeigte bisher credit+invested = falscher Wert bei Margin-Konto.
+            equity = final_portfolio.get("_equity")
+            if equity:
+                total = equity
+            else:
+                total = final_portfolio.get("credit", 0)
+                for pos in final_portfolio.get("positions", []):
+                    total += EtoroClient.parse_position(pos)["invested"]
             brain_state = load_json("brain_state.json") or {}
             trades_today = risk.get("daily_trades", 0)
             al.send_daily_summary(

@@ -272,12 +272,25 @@ def reconcile(lookback_hours: int = 24,
     pending_symbols = {(o["symbol"], o["side"]) for o in ibkr.get("open_orders", [])
                        if o.get("status") in ("Submitted", "PreSubmitted",
                                               "PendingSubmit", "PendingCancel")}
+    # v37cd: Bot-interne Logging-Actions die NIE eine IBKR-Execution haben.
+    # Wenn diese als MISSED_FILL gemeldet werden -> False-Positive.
+    NON_EXECUTION_ACTIONS = {
+        "PARTIAL_SIGNAL",       # nur Score-Logging, kein Trade
+        "SIGNAL_LOGGED",        # Watchlist-Logging
+        "RISK_BLOCK",           # Trade abgelehnt durch Risk-Manager
+        "INSIDER_BLOCK",        # Insider-Filter-Block (Shadow oder real)
+        "EARNINGS_BLOCK",       # Earnings-Blackout pre-Trade
+        "REGIME_BLOCK",         # Regime-Filter-Block
+    }
     for t in recent_for_fill:
         action = t.get("action", "").upper()
+        # v37cd: Skip Bot-internal logging-Actions die nie zu Order werden
+        if action in NON_EXECUTION_ACTIONS:
+            continue
         # v37t-Fix: SCANNER_BUY/SELL und Compound-Actions wie STOP_LOSS_CLOSE matchen
         if action in ("BUY", "OPEN", "SCANNER_BUY"):
             ib_side = "BOT"
-        elif (action in ("SELL", "CLOSE", "TP", "SL", "SCANNER_SELL")
+        elif (action in ("SELL", "CLOSE", "TP", "SL", "SCANNER_SELL", "MANUAL_SELL")
               or "CLOSE" in action):
             ib_side = "SLD"
         else:
@@ -285,7 +298,8 @@ def reconcile(lookback_hours: int = 24,
         sym = t.get("symbol")
         if sym and (sym, ib_side) not in ibkr_exec_symbols:
             # Akzeptabel falls Status=close_failed (already known)
-            if t.get("status") in ("close_failed", "skipped", "submitted"):
+            if t.get("status") in ("close_failed", "skipped", "submitted",
+                                    "blocked", "failed"):
                 continue
             # v37aa: Order pending bei IBKR? -> kein MISSED_FILL
             if (sym, ib_side) in pending_symbols:
