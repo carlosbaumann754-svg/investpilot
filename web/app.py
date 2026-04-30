@@ -2170,10 +2170,15 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
             raise HTTPException(status_code=400, detail="Invalid symbol")
 
         config = load_config()
+        broker_name = (config.get("broker") or "etoro").lower()
         client = get_broker(config, readonly=False)
 
-        # 1. Position finden in IBKR Live-Portfolio
-        portfolio = client.get_portfolio()
+        # v37z+: Position-Lookup aus brain-cache (vermeidet leeren Live-Cache),
+        # aber close_position laeuft via writable client.
+        if broker_name == "ibkr":
+            portfolio = _portfolio_from_brain_cache()
+        else:
+            portfolio = client.get_portfolio()
         if not portfolio:
             raise HTTPException(status_code=503,
                                 detail="Portfolio-Fetch fehlgeschlagen")
@@ -4809,11 +4814,16 @@ async def api_earnings_watchlist():
         from app.earnings_exit import get_pending_earnings_for_positions, load_exemptions
         from app.config_manager import load_json, load_config
 
-        # Aktuelle Positions aus IBKR (oder bot's Portfolio-Cache)
-        from app.etoro_client import EtoroClient as _EC
+        # v37z+: nutze brain-cache fuer IBKR (loop-safe, kein leerer
+        # Live-Cache-Bug wie bei readonly-Spawn)
         config = load_config()
-        client = get_broker(config, readonly=True)
-        portfolio = client.get_portfolio() or {}
+        broker_name = (config.get("broker") or "etoro").lower()
+        if broker_name == "ibkr":
+            portfolio = _portfolio_from_brain_cache() or {}
+        else:
+            client = get_broker(config, readonly=True)
+            portfolio = client.get_portfolio() or {}
+
         positions_raw = portfolio.get("positions", []) or []
 
         # Equity fuer position_pct-Berechnung
