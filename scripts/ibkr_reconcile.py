@@ -35,7 +35,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 log = logging.getLogger("ibkr_reconcile")
 
-CASH_TOLERANCE_USD = 10.0  # bis zu $10 Drift okay (Rundungen, Pending-Fees)
+# v37t: Cash-Tolerance ist jetzt PROZENTUAL gestaffelt + Floor-Wert.
+# Vorher: fix $10 -> bei $880k Konto = 0.001% = unrealistisch streng,
+# spammt Alerts wegen Rundungen + Slippage + Brain-Snapshot-Latenz.
+# Jetzt: Threshold = max(CASH_TOLERANCE_FLOOR_USD, % von Konto).
+# Per Default 0.5% - bei $880k = $4400 Schwelle = nur echte Drifts melden.
+CASH_TOLERANCE_USD = 10.0          # Legacy-Konstante, fallback bei kleinen Konten
+CASH_TOLERANCE_FLOOR_USD = 50.0    # Mindest-Schwelle (Schutz bei sehr kleinen Konten)
+CASH_TOLERANCE_PCT_DEFAULT = 0.5   # 0.5% des Konto-Cash als Default-Threshold
 
 
 def load_bot_state() -> tuple[list[dict], float]:
@@ -93,8 +100,13 @@ def get_ibkr_state(timeout: int = 15) -> dict:
         broker.disconnect()
 
 
-def reconcile(lookback_hours: int = 24) -> dict:
-    """Hauptlogik. Returns Dict mit Diffs/Status."""
+def reconcile(lookback_hours: int = 24,
+              cash_tolerance_pct: float = CASH_TOLERANCE_PCT_DEFAULT) -> dict:
+    """Hauptlogik. Returns Dict mit Diffs/Status.
+
+    v37t: lookback_hours default 24 (CRON setzt 720=30d).
+    cash_tolerance_pct default 0.5%, mit FLOOR 50$ Mindestschwelle.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
     bot_history, bot_cash = load_bot_state()
@@ -117,14 +129,22 @@ def reconcile(lookback_hours: int = 24) -> dict:
 
     drifts = []
 
-    # 1. Cash-Drift
+    # 1. Cash-Drift mit prozentualer Schwelle
     cash_diff = abs(ibkr["cash"] - bot_cash)
-    if bot_cash > 0 and cash_diff > CASH_TOLERANCE_USD:
+    cash_ref = max(ibkr["cash"], bot_cash)  # groesserer Wert als Basis
+    threshold = max(
+        CASH_TOLERANCE_FLOOR_USD,
+        cash_ref * (cash_tolerance_pct / 100.0)
+    )
+    if bot_cash > 0 and cash_diff > threshold:
         drifts.append({
             "type": "CASH_DRIFT",
             "bot_cash": round(bot_cash, 2),
             "ibkr_cash": round(ibkr["cash"], 2),
             "diff_usd": round(cash_diff, 2),
+            "diff_pct": round((cash_diff / cash_ref) * 100, 3) if cash_ref else 0,
+            "threshold_usd": round(threshold, 2),
+            "tolerance_pct_setting": cash_tolerance_pct,
         })
 
     # 2. Phantom-Positionen (IBKR hat, Bot kennt nicht)
@@ -203,9 +223,16 @@ def maybe_alert(report: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="IBKR Reconciliation")
-    parser.add_argument("--lookback-hours", type=int, default=24)
+    parser.add_argument("--lookback-hours", type=int, default=24,
+                        help="Lookback fuer recent Bot-Trades. Default 24h "
+                             "(Cron sollte 720 = 30 Tage nutzen fuer Position-"
+                             "Lookback).")
+    parser.add_argument("--cash-tolerance-pct", type=float,
+                        default=CASH_TOLERANCE_PCT_DEFAULT,
+                        help="Prozentualer Cash-Drift-Threshold. Default 0.5%% "
+                             "(bei $880k Konto = $4400 Schwelle). Floor: $50.")
     parser.add_argument("--alert", action="store_true",
-                        help="Bei Drift Telegram-Alert ausloesen")
+                        help="Bei Drift Multi-Channel-Alert ausloesen")
     parser.add_argument("--json", action="store_true",
                         help="Output als reines JSON")
     args = parser.parse_args()
@@ -214,7 +241,10 @@ def main():
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     try:
-        report = reconcile(lookback_hours=args.lookback_hours)
+        report = reconcile(
+            lookback_hours=args.lookback_hours,
+            cash_tolerance_pct=args.cash_tolerance_pct,
+        )
     except Exception as e:
         log.error("Reconciliation failed: %s", e)
         return 2
