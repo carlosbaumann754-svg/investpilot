@@ -384,7 +384,15 @@ def get_pending_earnings_for_positions(
             days_until = (earnings_dt - now).days
             if days_until < 0 or days_until > 7:
                 continue
-            pos_value = abs(float(p.get("amount", 0) or 0))
+            # v37z+: brain-cache hat 'amount' (cost-basis), Live-IBKR hat 'invested',
+            # eToro hat 'amount'. Probiere alle Felder durch.
+            pos_value = abs(float(
+                p.get("amount", 0)
+                or p.get("invested", 0)
+                or p.get("amountValue", 0)
+                or p.get("marketValue", 0)
+                or 0
+            ))
             pos_pct = (pos_value / portfolio_value_usd * 100) if portfolio_value_usd > 0 else 0
             vola_pct = _fetch_volatility_proxy(symbol)
             would_exit, reason = check_earnings_exit(
