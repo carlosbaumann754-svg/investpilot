@@ -4768,6 +4768,7 @@ async def api_cutover_confirm_master_2fa(payload: dict = None):
         {"status": "confirmed", "confirmed_at": "...", "methods": [...]}
     """
     from app.config_manager import load_json, save_json
+    from datetime import datetime as _dt, timezone as _tz
     payload = payload or {}
     methods = payload.get("methods") or ["TOTP"]
     if not isinstance(methods, list):
@@ -4795,6 +4796,7 @@ async def api_cutover_confirm_master_2fa(payload: dict = None):
 async def api_cutover_unconfirm_master_2fa():
     """Revoke der Master-2FA-Bestaetigung (z.B. wenn 2FA in IBKR deaktiviert)."""
     from app.config_manager import load_json, save_json
+    from datetime import datetime as _dt, timezone as _tz
     confirms = load_json("cutover_confirmations.json") or {}
     history = confirms.get("_audit", [])
 
