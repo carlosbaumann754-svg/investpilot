@@ -23,6 +23,36 @@ def save_trade(trade_entry):
     save_json("trade_history.json", history)
 
 
+def _has_recent_earnings_close(symbol: str, hours: int = 24) -> bool:
+    """v37aa: Prueft ob fuer dieses Symbol in den letzten N Stunden bereits
+    ein EARNINGS_BLACKOUT_CLOSE in trade_history.json geschrieben wurde.
+
+    Verhindert Duplikate wenn close_position() submitted ist aber IBKR-Fill
+    erst Pre-Market kommt — naechster Cycle wuerde sonst nochmal triggern.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        history = load_json("trade_history.json") or []
+        cutoff_ts = datetime.now(timezone.utc) - timedelta(hours=hours)
+        for t in reversed(history[-200:]):  # nur die letzten 200 reichen
+            if t.get("action") != "EARNINGS_BLACKOUT_CLOSE":
+                continue
+            if (t.get("symbol") or "").upper() != symbol.upper():
+                continue
+            ts_str = t.get("timestamp", "")
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts >= cutoff_ts:
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return False  # bei Fehler nicht blockieren
+
+
 def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
     """v37j: Reichert ein trade_entry um avg_fill_price + intended_price an.
 
@@ -494,6 +524,16 @@ def check_stop_loss_take_profit(client, config):
                     should_exit, reason = check_earnings_exit(
                         sym, pos_value, portfolio_value_usd, config,
                     )
+                    # v37aa: Duplicate-Prevention. Heute morgen 30.04. wurden zwei
+                    # EARNINGS_BLACKOUT_CLOSE fuer ROKU geschrieben (09:10 + 10:21
+                    # CEST), weil close_position() submitted aber IBKR erst Pre-
+                    # Market fillt. Naechster Cycle sieht Position immer noch open
+                    # -> Filter triggered erneut. Skip wenn bereits in den letzten
+                    # N Stunden ein EARNINGS_BLACKOUT_CLOSE fuer dieses Symbol da war.
+                    if should_exit and _has_recent_earnings_close(sym, hours=24):
+                        log.info(f"  EARNINGS-EXIT skip {sym}: bereits in den "
+                                 f"letzten 24h geschlossen (vermeidet Duplikat)")
+                        should_exit = False
                     if should_exit:
                         log.warning(f"  EARNINGS-EXIT: {sym} — {reason}")
                         result = client.close_position(

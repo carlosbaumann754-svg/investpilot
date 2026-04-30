@@ -4797,6 +4797,65 @@ async def api_backups_status():
         return {"error": str(e), "configured": False}
 
 
+@app.post("/api/earnings/exempt/{symbol}")
+async def api_earnings_exempt_add(symbol: str, user=Depends(require_auth)):
+    """v37aa: Setze Symbol auf Earnings-Exit-Exemption-Liste.
+
+    Default: auto_cleanup_after_earnings=True (One-shot). Symbol wird beim
+    naechsten Earnings auto-removed. earnings_date wird via yfinance/Finnhub
+    geholt.
+
+    Aus heutigem ROKU-Erlebnis (30.04.): User wollte Position halten, musste
+    aber via SSH+CLI exempten weil kein UI-Button existierte. Jetzt 1-Klick.
+    """
+    try:
+        from app.earnings_exit import add_exemption, load_exemptions
+        username = getattr(user, "username", None) or str(user)
+        sym_upper = symbol.upper().strip()
+        if not sym_upper or len(sym_upper) > 10:
+            raise HTTPException(status_code=400, detail="Invalid symbol")
+        add_exemption(
+            sym_upper,
+            reason=f"manual-dashboard from {username}",
+            auto_cleanup_after_earnings=True,
+        )
+        try:
+            from app.alerts import send_alert
+            send_alert(
+                f"Earnings-Exemption hinzugefuegt: {sym_upper} "
+                f"(One-shot, auto-removed nach Earnings)",
+                level="INFO",
+            )
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "symbol": sym_upper,
+            "exemptions_now": sorted(load_exemptions()),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/earnings/exempt/{symbol}")
+async def api_earnings_exempt_remove(symbol: str, user=Depends(require_auth)):
+    """v37aa: Entferne Symbol von Earnings-Exit-Exemption-Liste."""
+    try:
+        from app.earnings_exit import remove_exemption, load_exemptions
+        username = getattr(user, "username", None) or str(user)
+        sym_upper = symbol.upper().strip()
+        remove_exemption(sym_upper, reason=f"manual-dashboard-remove from {username}")
+        return {
+            "ok": True,
+            "symbol": sym_upper,
+            "exemptions_now": sorted(load_exemptions()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/earnings/watchlist")
 async def api_earnings_watchlist():
     """v37z: Earnings-Watchlist fuer Dashboard.

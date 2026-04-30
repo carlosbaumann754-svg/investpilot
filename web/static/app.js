@@ -2669,6 +2669,45 @@ async function manualSell(symbol, pnlPct) {
 
 
 /**
+ * v37aa: Toggle Earnings-Exemption fuer ein Symbol.
+ * Aus heute morgen-Erlebnis: User wollte ROKU bewusst halten, musste aber
+ * SSH+CLI nutzen weil kein UI-Button existierte. Jetzt 1-Klick.
+ */
+async function toggleEarningsExempt(symbol, addExempt) {
+    const action = addExempt ? 'EXEMPT setzen (Position halten)' : 'EXEMPT entfernen (Filter wieder aktiv)';
+    const msg = addExempt
+        ? `${symbol} auf Earnings-Exempt-Liste setzen?\n\n` +
+          `Bot wird die Position bei naechstem Earnings NICHT automatisch ` +
+          `schliessen. Nach dem Earnings wird die Exemption automatisch ` +
+          `entfernt (one-shot).\n\nFortfahren?`
+        : `${symbol} von Earnings-Exempt-Liste entfernen?\n\n` +
+          `Bot wird die Position beim naechsten Earnings wieder via Filter ` +
+          `pruefen und ggf. automatisch schliessen.\n\nFortfahren?`;
+    if (!confirm(msg)) return;
+
+    showToast(`${symbol}: ${action}...`);
+    try {
+        const method = addExempt ? 'POST' : 'DELETE';
+        const res = await apiFetch(`/api/earnings/exempt/${symbol}`, { method });
+        if (res && res.ok) {
+            const data = await res.json();
+            if (data.ok) {
+                showToast(`${symbol} ${addExempt ? 'auf Exempt-Liste' : 'von Exempt-Liste entfernt'} (${data.exemptions_now.length} Symbole exempt)`);
+                setTimeout(loadEarningsWatchlist, 500);
+            } else {
+                showToast(`Fehler: ${data.error || 'unbekannt'}`);
+            }
+        } else if (res) {
+            const errData = await res.json().catch(() => ({}));
+            showToast(`Fehler ${res.status}: ${errData.detail || 'Server-Error'}`);
+        }
+    } catch (e) {
+        showToast(`Fehler: ${e.message}`);
+    }
+}
+
+
+/**
  * v37z: Earnings-Watchlist - listet kommende Earnings naechste 7 Tage
  * fuer alle offenen Positionen, mit Filter-Trigger-Vorhersage.
  */
@@ -2705,12 +2744,26 @@ async function loadEarningsWatchlist() {
 
         tbody.innerHTML = wl.map(e => {
             let action;
+            let toggleBtn;
             if (e.is_exempt) {
                 action = `<span style="color:#fbbf24;" title="${e.exempt_reason || ''}">EXEMPT${e.exempt_auto_cleanup ? ' (one-shot)' : ''}</span>`;
+                toggleBtn = `<button onclick="toggleEarningsExempt('${e.symbol}', false)"
+                                     class="btn-secondary"
+                                     style="font-size:10px;padding:2px 6px;cursor:pointer;"
+                                     title="Exemption entfernen — Filter wird wieder aktiv">
+                               Filter aktivieren
+                            </button>`;
             } else if (e.would_exit) {
                 action = `<span style="color:#f87171;" title="${e.reason || ''}">WUERDE SCHLIESSEN</span>`;
+                toggleBtn = `<button onclick="toggleEarningsExempt('${e.symbol}', true)"
+                                     class="btn-secondary"
+                                     style="font-size:10px;padding:2px 6px;cursor:pointer;"
+                                     title="Position halten — Filter ueberspringt dieses Symbol (one-shot)">
+                               Halten
+                            </button>`;
             } else {
                 action = `<span style="opacity:0.7;">halten</span>`;
+                toggleBtn = '';
             }
             const daysClass = e.days_until <= 1 ? 'color:#f87171;font-weight:600;' : '';
             return `
@@ -2721,6 +2774,7 @@ async function loadEarningsWatchlist() {
                     <td style="text-align:right;padding:5px 4px;">${e.position_pct}%</td>
                     <td style="text-align:right;padding:5px 4px;">${e.vola_pct_30d ?? '?'}%</td>
                     <td style="text-align:center;padding:5px 4px;font-size:11px;">${action}</td>
+                    <td style="text-align:center;padding:5px 4px;">${toggleBtn}</td>
                 </tr>`;
         }).join('');
     } catch (e) {

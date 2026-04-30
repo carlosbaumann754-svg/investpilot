@@ -114,6 +114,27 @@ def get_ibkr_state(timeout: int = 15) -> dict:
         ib = broker._get_ib()
         positions = ib.positions()
         execs = ib.executions()  # alle bekannten Executions der Session
+        # v37aa: pending orders fuer MISSED_FILL-Filter (heute morgen 30.04.
+        # Pushover-Alarm: ROKU SELL submitted 09:10 CEST aber IBKR fillte erst
+        # 10:15 Pre-Market — Reconcile-Lauf 10:13 dazwischen meldete MISSED_FILL
+        # obwohl Order pending war. Loesung: pending-Symbol/Side ausschliessen
+        # vom MISSED_FILL-Check.)
+        try:
+            ib.reqAllOpenOrders()
+            ib.sleep(1.0)
+        except Exception:
+            pass
+        open_orders = []
+        try:
+            for t in (ib.openTrades() or []):
+                if t.contract and t.order:
+                    open_orders.append({
+                        "symbol": t.contract.symbol,
+                        "side": "BOT" if t.order.action == "BUY" else "SLD",
+                        "status": t.orderStatus.status if t.orderStatus else "",
+                    })
+        except Exception:
+            pass
         cash = broker.get_available_cash() or 0.0
         equity = broker.get_equity() or 0.0
         return {
@@ -139,6 +160,7 @@ def get_ibkr_state(timeout: int = 15) -> dict:
             ],
             "cash": cash,
             "equity": equity,
+            "open_orders": open_orders,  # v37aa: fuer MISSED_FILL-Pending-Filter
         }
     finally:
         broker.disconnect()
@@ -241,10 +263,15 @@ def reconcile(lookback_hours: int = 24,
         })
 
     # 3. Missed Fills (Bot loggte BUY/SELL, aber IBKR hat keine matching Execution)
-    # v37t+: nur recent_for_fill (24h) statt recent_bot (30d), sonst werden
-    # alle historischen Trades als MISSED_FILL gemeldet (IBKR-Session zeigt
-    # nur kurze Execution-Historie).
+    # v37t+: nur recent_for_fill (24h) statt recent_bot (30d).
+    # v37aa: pending-Order-Symbole ausschliessen — Bot kann Order submitted haben,
+    # IBKR fillt aber erst Pre/Post-Market spaeter. Heute morgen 30.04. Beispiel:
+    # ROKU SELL 09:10 -> IBKR-Fill 10:15 -> Reconcile 10:13 dazwischen meldete
+    # MISSED_FILL false-positive.
     ibkr_exec_symbols = {(e["symbol"], e["side"]) for e in ibkr["executions"]}
+    pending_symbols = {(o["symbol"], o["side"]) for o in ibkr.get("open_orders", [])
+                       if o.get("status") in ("Submitted", "PreSubmitted",
+                                              "PendingSubmit", "PendingCancel")}
     for t in recent_for_fill:
         action = t.get("action", "").upper()
         # v37t-Fix: SCANNER_BUY/SELL und Compound-Actions wie STOP_LOSS_CLOSE matchen
@@ -259,6 +286,9 @@ def reconcile(lookback_hours: int = 24,
         if sym and (sym, ib_side) not in ibkr_exec_symbols:
             # Akzeptabel falls Status=close_failed (already known)
             if t.get("status") in ("close_failed", "skipped", "submitted"):
+                continue
+            # v37aa: Order pending bei IBKR? -> kein MISSED_FILL
+            if (sym, ib_side) in pending_symbols:
                 continue
             drifts.append({
                 "type": "MISSED_FILL",
