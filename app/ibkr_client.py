@@ -437,10 +437,28 @@ class IbkrBroker(BrokerBase):
             # (das schneller updated wird) — nur Items die in BEIDEN Datenquellen
             # sind ueberleben. Verhindert META-style Loop-Bugs (11x SL_FAILED
             # Spam in 50min nach erfolgreichem 15:31 Close).
+            # v37cf: Boot-Race-Schutz — wenn ib.positions() leer ODER deutlich
+            # weniger Items hat als ib.portfolio(), ist der ib_insync-Cache
+            # waehrend Boot noch nicht synct. Filter dann deaktivieren statt
+            # echte Positionen wegzuwerfen (NVDA-Boot-Race vom 30.04. 16:35).
             try:
+                live_pos = list(ib.positions() or [])
                 live_con_ids = {getattr(p.contract, "conId", None)
-                                for p in (ib.positions() or [])
+                                for p in live_pos
                                 if abs(float(getattr(p, "position", 0) or 0)) > 0}
+                # Boot-Race-Detection: ib.positions() liefert <50%% der Items
+                # die ib.portfolio() hat -> wahrscheinlich noch nicht synct.
+                portfolio_qty_count = sum(
+                    1 for p in items
+                    if abs(float(getattr(p, "position", 0) or 0)) > 0
+                )
+                if portfolio_qty_count > 0 and len(live_con_ids) < portfolio_qty_count * 0.5:
+                    log.warning(
+                        "Boot-Race-Detection: ib.positions()=%d, ib.portfolio() "
+                        "hat %d aktive — Stale-Filter pausiert (Sync laeuft).",
+                        len(live_con_ids), portfolio_qty_count,
+                    )
+                    live_con_ids = None  # Kein Filter
             except Exception:
                 live_con_ids = None  # Fallback: kein Filter wenn positions() fehlt
 

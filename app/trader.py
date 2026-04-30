@@ -548,6 +548,10 @@ def check_stop_loss_take_profit(client, config):
                         result = client.close_position(
                             p["position_id"], p.get("instrument_id")
                         )
+                        if _is_already_closed(result):
+                            log.info(f"  EARNINGS-EXIT skip {sym}: bei IBKR bereits "
+                                     f"geschlossen (stale Bot-Cache)")
+                            continue
                         if result:
                             trade_entry = {
                                 "timestamp": datetime.now().isoformat(),
@@ -608,6 +612,10 @@ def check_stop_loss_take_profit(client, config):
             }])
             if triggered:
                 result = client.close_position(p["position_id"], p["instrument_id"])
+                if _is_already_closed(result):
+                    log.info(f"  TRAILING-SL skip {p['instrument_id']}: bei IBKR bereits "
+                             f"geschlossen (stale Bot-Cache)")
+                    continue
                 if result:
                     trade_entry = {
                         "timestamp": datetime.now().isoformat(),
@@ -641,6 +649,10 @@ def check_stop_loss_take_profit(client, config):
                          f"(Instrument {p['instrument_id']}) — "
                          f"{age_days:.1f}d offen, PnL {p['pnl_pct']:+.2f}% < {ts_stale_thr}%")
                 result = client.close_position(p["position_id"], p["instrument_id"])
+                if _is_already_closed(result):
+                    log.info(f"  TIME_STOP skip {p['instrument_id']}: bei IBKR bereits "
+                             f"geschlossen (stale Bot-Cache)")
+                    continue
                 if result:
                     trade_entry = {
                         "timestamp": datetime.now().isoformat(),
@@ -1034,6 +1046,11 @@ def execute_scanner_trades(client, config, scan_results):
 
                 start_time = time.time()
                 result = client.close_position(p["position_id"], p["instrument_id"])
+
+                if _is_already_closed(result):
+                    log.info(f"  SCANNER_SELL skip {candidate['symbol']}: bei IBKR "
+                             f"bereits geschlossen (stale Bot-Cache)")
+                    continue
 
                 if ex and result:
                     ex.track_execution(None, result, candidate["etoro_id"],
@@ -1667,6 +1684,10 @@ def check_overnight_positions(client, config):
     closed = []
     for pos in to_close:
         result = client.close_position(pos["position_id"], pos.get("instrument_id"))
+        if _is_already_closed(result):
+            log.info(f"  OVERNIGHT_CLOSE skip {pos.get('instrument_id')}: bei IBKR "
+                     f"bereits geschlossen (stale Bot-Cache)")
+            continue
         if result:
             trade_entry = {
                 "timestamp": datetime.now().isoformat(),
