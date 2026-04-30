@@ -148,10 +148,16 @@ def reconcile(lookback_hours: int = 24,
         })
 
     # 2. Phantom-Positionen (IBKR hat, Bot kennt nicht)
+    # v37t-Fix: Bot schreibt aktuell "SCANNER_BUY" (nicht nur "BUY"). Plus es
+    # gibt OPEN/BUY/scanner_buy/buy Variants. Match jetzt alles was BUY-aehnlich ist.
+    BUY_LIKE_ACTIONS = {
+        "BUY", "OPEN", "SCANNER_BUY",
+        "buy", "open", "scanner_buy",
+    }
     bot_known_symbols = {
         t.get("symbol")
         for t in recent_bot
-        if t.get("action") in ("BUY", "OPEN", "buy", "open")
+        if t.get("action") in BUY_LIKE_ACTIONS
         and t.get("status") not in ("close_failed", "skipped")
     }
     for pos in ibkr["positions"]:
@@ -168,9 +174,11 @@ def reconcile(lookback_hours: int = 24,
     ibkr_exec_symbols = {(e["symbol"], e["side"]) for e in ibkr["executions"]}
     for t in recent_bot:
         action = t.get("action", "").upper()
-        if action in ("BUY", "OPEN"):
+        # v37t-Fix: SCANNER_BUY/SELL und Compound-Actions wie STOP_LOSS_CLOSE matchen
+        if action in ("BUY", "OPEN", "SCANNER_BUY"):
             ib_side = "BOT"
-        elif action in ("SELL", "CLOSE", "TP", "SL"):
+        elif (action in ("SELL", "CLOSE", "TP", "SL", "SCANNER_SELL")
+              or "CLOSE" in action):
             ib_side = "SLD"
         else:
             continue
