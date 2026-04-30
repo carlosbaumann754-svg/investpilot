@@ -45,6 +45,50 @@ CASH_TOLERANCE_FLOOR_USD = 50.0    # Mindest-Schwelle (Schutz bei sehr kleinen K
 CASH_TOLERANCE_PCT_DEFAULT = 0.5   # 0.5% des Konto-Cash als Default-Threshold
 
 
+# ============================================================
+# v37w: Accept-Phantom-List (Smart-Reconcile)
+# ============================================================
+ACCEPTED_PHANTOMS_FILE = "reconcile_accepted_phantoms.json"
+
+
+def _load_accepted_phantoms() -> set[str]:
+    """Liste der Symbole die als 'Initial-Position akzeptiert' markiert sind.
+
+    Format der Datei (data/reconcile_accepted_phantoms.json):
+        {
+          "accepted_symbols": ["CPER", "USO"],
+          "audit": [
+            {"symbol": "CPER", "accepted_at": "...", "reason": "..."},
+            ...
+          ]
+        }
+    """
+    try:
+        from app.config_manager import load_json
+        data = load_json(ACCEPTED_PHANTOMS_FILE) or {}
+        return set(data.get("accepted_symbols", []) or [])
+    except Exception as e:
+        log.debug(f"Accept-Phantom-Liste nicht ladbar: {e}")
+        return set()
+
+
+def _add_accepted_phantom(symbol: str, reason: str = "manual") -> None:
+    """Fuegt ein Symbol zur Accept-List hinzu (idempotent)."""
+    from app.config_manager import load_json, save_json
+    from datetime import datetime, timezone
+    data = load_json(ACCEPTED_PHANTOMS_FILE) or {}
+    accepted = set(data.get("accepted_symbols", []) or [])
+    accepted.add(symbol)
+    data["accepted_symbols"] = sorted(accepted)
+    audit = data.setdefault("audit", [])
+    audit.append({
+        "symbol": symbol,
+        "accepted_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+    })
+    save_json(ACCEPTED_PHANTOMS_FILE, data)
+
+
 def load_bot_state() -> tuple[list[dict], float]:
     """Liefert (recent_trades, last_known_cash) aus Bot-State-Files."""
     from app.config_manager import load_json
@@ -163,6 +207,9 @@ def reconcile(lookback_hours: int = 24,
     # 2. Phantom-Positionen (IBKR hat, Bot kennt nicht)
     # v37t-Fix: Bot schreibt aktuell "SCANNER_BUY" (nicht nur "BUY"). Plus es
     # gibt OPEN/BUY/scanner_buy/buy Variants. Match jetzt alles was BUY-aehnlich ist.
+    # v37w (Smart-Reconcile): zusaetzlich Initial-Positions-Whitelist beruecksichtigen
+    # (Positionen die der Bot nicht selbst gekauft hat, sondern beim Account-Setup
+    # uebernommen wurden — z.B. CPER, USO im DUP108015 Paper-Account).
     BUY_LIKE_ACTIONS = {
         "BUY", "OPEN", "SCANNER_BUY",
         "buy", "open", "scanner_buy",
@@ -173,15 +220,25 @@ def reconcile(lookback_hours: int = 24,
         if t.get("action") in BUY_LIKE_ACTIONS
         and t.get("status") not in ("close_failed", "skipped")
     }
+
+    # v37w: Whitelist akzeptierter Initial-Positions laden
+    accepted_phantoms = _load_accepted_phantoms()
+
     for pos in ibkr["positions"]:
-        if pos["symbol"] not in bot_known_symbols:
-            drifts.append({
-                "type": "PHANTOM_POSITION",
-                "symbol": pos["symbol"],
-                "qty": pos["qty"],
-                "avg_cost": pos["avg_cost"],
-                "comment": "IBKR hat Position, Bot-trade-history kennt sie nicht im Lookback-Fenster.",
-            })
+        sym = pos["symbol"]
+        if sym in bot_known_symbols:
+            continue  # Bot kennt die Position aus Lookback
+        if sym in accepted_phantoms:
+            continue  # User hat als Initial-Position akzeptiert
+        drifts.append({
+            "type": "PHANTOM_POSITION",
+            "symbol": sym,
+            "qty": pos["qty"],
+            "avg_cost": pos["avg_cost"],
+            "comment": ("IBKR hat Position, Bot-trade-history kennt sie nicht "
+                        "im Lookback-Fenster. Falls Initial-Position: via "
+                        "--accept-phantom akzeptieren."),
+        })
 
     # 3. Missed Fills (Bot loggte BUY/SELL, aber IBKR hat keine matching Execution)
     # v37t+: nur recent_for_fill (24h) statt recent_bot (30d), sonst werden
@@ -268,7 +325,30 @@ def main():
                         help="Bei Drift Multi-Channel-Alert ausloesen")
     parser.add_argument("--json", action="store_true",
                         help="Output als reines JSON")
+    parser.add_argument("--accept-phantom", nargs="+", metavar="SYMBOL",
+                        help="Akzeptiert eine oder mehrere PHANTOM_POSITIONs als "
+                             "Initial-Position (v37w). Fuegt Symbol(e) in "
+                             "data/reconcile_accepted_phantoms.json. "
+                             "Beispiel: --accept-phantom CPER USO")
+    parser.add_argument("--list-accepted", action="store_true",
+                        help="Listet aktuelle Accept-Phantom-Liste und exit.")
     args = parser.parse_args()
+
+    # v37w: Accept-Phantom-Modus (nicht-reconcile)
+    if args.accept_phantom:
+        for sym in args.accept_phantom:
+            _add_accepted_phantom(sym.upper(), reason="cli-accept")
+            print(f"[OK] {sym.upper()} als Initial-Position akzeptiert.")
+        return 0
+    if args.list_accepted:
+        accepted = _load_accepted_phantoms()
+        if not accepted:
+            print("(Liste leer)")
+        else:
+            print(f"Accepted-Phantom-Liste ({len(accepted)} Symbole):")
+            for s in sorted(accepted):
+                print(f"  {s}")
+        return 0
 
     if not args.json:
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
