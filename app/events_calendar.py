@@ -93,6 +93,19 @@ def _fetch_earnings_date(symbol):
     except Exception as e:
         log.warning(f"Earnings-Datum Abruf fehlgeschlagen fuer {symbol}: {e}")
 
+    # v37x: Finnhub-Fallback wenn yfinance kein Earnings-Datum liefert.
+    # yfinance hat seit 2024 sporadische Calendar-API-Probleme (~10-15% der
+    # US-Stocks fehlend). Finnhub /calendar/earnings ist robuster.
+    if earnings_dt is None:
+        try:
+            from app import finnhub_client
+            if finnhub_client.is_available():
+                earnings_dt = finnhub_client.fetch_earnings_calendar(symbol)
+                if earnings_dt is not None:
+                    log.info(f"Earnings-Datum fuer {symbol} via Finnhub-Fallback: {earnings_dt}")
+        except Exception as e:
+            log.debug(f"Finnhub-Earnings-Fallback fuer {symbol} fehlgeschlagen: {e}")
+
     _earnings_cache[symbol] = {"earnings_date": earnings_dt, "fetched_at": now}
     return earnings_dt
 

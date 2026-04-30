@@ -138,6 +138,71 @@ def fetch_company_news(symbol: str, days: int = 7) -> list[str]:
     return headlines
 
 
+# ============================================================
+# Earnings-Calendar (v37x — Fallback fuer events_calendar)
+# ============================================================
+
+_earnings_cache: dict[str, Any] = {}  # symbol -> {"earnings_date": datetime|None, "fetched_at": ts}
+_EARNINGS_CACHE_TTL = 3600 * 6  # 6h cache - earnings-Termine aendern sich kaum
+
+
+def fetch_earnings_calendar(symbol: str, days_ahead: int = 30) -> Any:
+    """Naechster Earnings-Termin fuer ein Symbol via Finnhub Calendar API.
+
+    GET /calendar/earnings?from=YYYY-MM-DD&to=YYYY-MM-DD&symbol=ROKU
+
+    Args:
+        symbol: Ticker
+        days_ahead: Lookback-Window in der Zukunft (default 30 Tage)
+
+    Returns:
+        datetime des Earnings-Termins (mit hour-Info wenn vorhanden:
+        AMC=After Market Close=22:00 UTC, BMO=Before Market Open=11:00 UTC).
+        None wenn kein Termin gefunden oder API-Fehler.
+    """
+    if not symbol:
+        return None
+
+    now_ts = time.time()
+    cached = _earnings_cache.get(symbol)
+    if cached and now_ts - cached["fetched_at"] < _EARNINGS_CACHE_TTL:
+        return cached["earnings_date"]
+
+    today = datetime.utcnow().date()
+    end = today + timedelta(days=max(1, days_ahead))
+
+    data = _get("/calendar/earnings", {
+        "symbol": symbol,
+        "from": today.isoformat(),
+        "to": end.isoformat(),
+    })
+
+    earnings_dt = None
+    if isinstance(data, dict):
+        entries = data.get("earningsCalendar", []) or []
+        if entries and isinstance(entries[0], dict):
+            entry = entries[0]  # naechster Termin
+            date_str = entry.get("date")  # "2026-04-30"
+            hour = (entry.get("hour") or "").lower()  # "amc"=AfterMarketClose, "bmo"=BeforeMarketOpen
+            if date_str:
+                try:
+                    base_date = datetime.fromisoformat(date_str)
+                    # AMC = nach US-Close 16:00 EDT = 20:00 UTC (Sommer)
+                    # BMO = vor US-Open 09:30 EDT = 13:30 UTC -> wir nehmen 11:00 UTC als safe lower bound
+                    # default = 16:00 EDT (Mid-Day) wenn unklar
+                    if hour == "amc":
+                        earnings_dt = base_date.replace(hour=20, minute=0)
+                    elif hour == "bmo":
+                        earnings_dt = base_date.replace(hour=11, minute=0)
+                    else:
+                        earnings_dt = base_date.replace(hour=16, minute=0)
+                except (ValueError, TypeError):
+                    pass
+
+    _earnings_cache[symbol] = {"earnings_date": earnings_dt, "fetched_at": now_ts}
+    return earnings_dt
+
+
 def fetch_general_market_news(category: str = "general") -> list[str]:
     """
     Allgemeine Markt-News (SPY-Feed-artig).  Cached 2h.

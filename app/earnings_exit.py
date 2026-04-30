@@ -49,6 +49,10 @@ DEFAULT_MIN_POSITION_PCT = 10.0        # Position > 10% Portfolio
 DEFAULT_MIN_VOLA_PCT = 8.0             # 30d-Std > 8% (annualisiert ueberproportional)
 DEFAULT_LOOKBACK_DAYS_VOLA = 30        # Lookback fuer Volatility-Proxy
 
+#: Exemption-Liste-Datei (v37x): Symbole die der User bewusst durch
+#: Earnings halten will. Filter ueberspringt diese.
+EXEMPTIONS_FILE = "earnings_exit_exemptions.json"
+
 
 # ============================================================
 # Volatility-Proxy via yfinance
@@ -92,6 +96,55 @@ def _fetch_volatility_proxy(symbol: str, lookback_days: int = DEFAULT_LOOKBACK_D
 # Hauptfunktion
 # ============================================================
 
+def load_exemptions() -> set[str]:
+    """v37x: Symbole die vom Earnings-Exit-Filter ausgenommen sind.
+
+    User kann bewusst Position halten (z.B. wenn er auf positive Earnings spielt).
+    Persistiert in data/earnings_exit_exemptions.json mit Audit-Trail.
+    """
+    try:
+        from app.config_manager import load_json
+        data = load_json(EXEMPTIONS_FILE) or {}
+        return set(data.get("exempt_symbols", []) or [])
+    except Exception as e:
+        logger.debug(f"Exemption-Liste nicht ladbar: {e}")
+        return set()
+
+
+def add_exemption(symbol: str, reason: str = "manual") -> None:
+    """Fuegt ein Symbol zur Exemption-Liste hinzu (idempotent)."""
+    from app.config_manager import load_json, save_json
+    data = load_json(EXEMPTIONS_FILE) or {}
+    exempt = set(data.get("exempt_symbols", []) or [])
+    exempt.add(symbol.upper())
+    data["exempt_symbols"] = sorted(exempt)
+    audit = data.setdefault("audit", [])
+    audit.append({
+        "symbol": symbol.upper(),
+        "added_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+        "action": "ADD",
+    })
+    save_json(EXEMPTIONS_FILE, data)
+
+
+def remove_exemption(symbol: str, reason: str = "manual") -> None:
+    """Entfernt ein Symbol von der Exemption-Liste — Filter wird wieder aktiv."""
+    from app.config_manager import load_json, save_json
+    data = load_json(EXEMPTIONS_FILE) or {}
+    exempt = set(data.get("exempt_symbols", []) or [])
+    exempt.discard(symbol.upper())
+    data["exempt_symbols"] = sorted(exempt)
+    audit = data.setdefault("audit", [])
+    audit.append({
+        "symbol": symbol.upper(),
+        "added_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+        "action": "REMOVE",
+    })
+    save_json(EXEMPTIONS_FILE, data)
+
+
 def check_earnings_exit(
     symbol: str,
     position_value_usd: float,
@@ -117,6 +170,10 @@ def check_earnings_exit(
 
     # Master-Switch (default: aktiv)
     if not cfg.get("earnings_exit_enabled", True):
+        return False, None
+
+    # v37x: Symbol-Exemption (User-Override "halten trotz Earnings")
+    if symbol.upper() in load_exemptions():
         return False, None
 
     max_days = int(cfg.get("earnings_exit_max_days_before", DEFAULT_MAX_DAYS_BEFORE))

@@ -153,6 +153,67 @@ def test_vola_unavailable_falls_back_to_position_only():
 # Watchlist (Dashboard-Helper)
 # ============================================================
 
+# ============================================================
+# v37x: Exemption-Liste
+# ============================================================
+
+@pytest.fixture
+def temp_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVESTPILOT_DATA_DIR", str(tmp_path))
+    import importlib
+    from app import config_manager
+    importlib.reload(config_manager)
+    yield tmp_path
+
+
+def test_exemption_persists(temp_data_dir):
+    from app.earnings_exit import add_exemption, load_exemptions
+    add_exemption("ROKU", reason="user-wants-to-hold")
+    assert load_exemptions() == {"ROKU"}
+
+
+def test_exemption_idempotent(temp_data_dir):
+    from app.earnings_exit import add_exemption, load_exemptions
+    add_exemption("ROKU")
+    add_exemption("ROKU")
+    add_exemption("roku")  # auch lower-case wird zu ROKU
+    assert load_exemptions() == {"ROKU"}
+
+
+def test_exemption_remove(temp_data_dir):
+    from app.earnings_exit import add_exemption, remove_exemption, load_exemptions
+    add_exemption("ROKU")
+    add_exemption("AAPL")
+    remove_exemption("ROKU")
+    assert load_exemptions() == {"AAPL"}
+
+
+def test_exempt_symbol_skips_filter(temp_data_dir):
+    """Wenn Symbol exempt -> Filter triggert NICHT auch wenn alle Kriterien zutreffen."""
+    from app.earnings_exit import add_exemption, check_earnings_exit
+    add_exemption("ROKU", reason="test")
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=15.0):
+        # Position 20%, Vola 15% — wuerde sonst klar triggern
+        should_exit, _ = check_earnings_exit("ROKU", 200_000, 1_000_000, {})
+    assert should_exit is False  # weil exempt
+
+
+def test_exempt_audit_trail(temp_data_dir):
+    from app.earnings_exit import add_exemption, remove_exemption
+    from app.config_manager import load_json
+    add_exemption("ROKU", reason="hold-thru-earnings")
+    add_exemption("AAPL", reason="hold-thru-earnings")
+    remove_exemption("ROKU", reason="changed-mind")
+    data = load_json("earnings_exit_exemptions.json") or {}
+    audit = data.get("audit", [])
+    assert len(audit) == 3
+    assert audit[0]["action"] == "ADD"
+    assert audit[2]["action"] == "REMOVE"
+    assert audit[2]["reason"] == "changed-mind"
+
+
 def test_pending_earnings_watchlist():
     from app.earnings_exit import get_pending_earnings_for_positions
     tomorrow = datetime.now() + timedelta(days=1)
