@@ -462,11 +462,67 @@ def check_stop_loss_take_profit(client, config):
         is_asset_class_tradeable = None
     skipped_off_hours: set[str] = set()  # nur einmal pro Klasse loggen
 
+    # v37v: Earnings-Exit-Filter (vor SL/TP-Loop)
+    # Prueft pro Position ob Earnings <= 1 Tag entfernt + Position > 10%
+    # ODER Vola > 8%. Wenn ja: schliesse Position vor Earnings-Gap.
+    # Loest das ROKU-30.04.-Problem (15% Portfolio + Implied-Move 12.6%).
+    try:
+        from app.earnings_exit import check_earnings_exit
+    except ImportError:
+        check_earnings_exit = None
+
+    portfolio_value_usd = 0
+    try:
+        portfolio_value_usd = float(portfolio.get("creditByRealizedEquity")
+                                    or portfolio.get("_equity") or 0)
+    except (TypeError, ValueError):
+        pass
+
     actions = []
     for pos in portfolio.get("positions", []):
         p = EtoroClient.parse_position(pos)
         if p["invested"] <= 0:
             continue
+
+        # Earnings-Exit-Filter (v37v): vor allen anderen Checks
+        # — wenn Earnings naht und Risk-Profil triggert, sofort schliessen.
+        if check_earnings_exit is not None and portfolio_value_usd > 0:
+            sym = pos.get("symbol")
+            if sym:
+                try:
+                    pos_value = float(pos.get("amount", 0) or p.get("invested", 0))
+                    should_exit, reason = check_earnings_exit(
+                        sym, pos_value, portfolio_value_usd, config,
+                    )
+                    if should_exit:
+                        log.warning(f"  EARNINGS-EXIT: {sym} — {reason}")
+                        result = client.close_position(
+                            p["position_id"], p.get("instrument_id")
+                        )
+                        if result:
+                            trade_entry = {
+                                "timestamp": datetime.now().isoformat(),
+                                "action": "EARNINGS_BLACKOUT_CLOSE",
+                                "symbol": sym,
+                                "instrument_id": p["instrument_id"],
+                                "position_id": p["position_id"],
+                                "pnl_pct": p["pnl_pct"],
+                                "pnl_usd": p["pnl"],
+                                "leverage": p["leverage"],
+                                "earnings_reason": reason,
+                                "status": "executed",
+                            }
+                            save_trade(_attach_fill_prices(trade_entry, result))
+                            actions.append("EARNINGS_BLACKOUT_CLOSE")
+                            if al:
+                                al.alert_trade_executed(trade_entry)
+                            continue  # Position zu, naechste Pruefung skippen
+                        else:
+                            _log_close_failure("EARNINGS_BLACKOUT_CLOSE", p, al,
+                                               extra={"earnings_reason": reason})
+                            # Kein continue — bei Close-Failure den Rest weiterpruefen
+                except Exception as e:
+                    log.debug(f"Earnings-Exit-Check {sym} fehlgeschlagen: {e}")
 
         # Market-Hours Guard
         if is_asset_class_tradeable is not None:

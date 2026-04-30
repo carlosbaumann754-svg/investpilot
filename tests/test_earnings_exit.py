@@ -1,0 +1,180 @@
+"""Tests fuer Earnings-Exit-Filter (v37v) — Variante-E-Logik."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from unittest.mock import patch
+
+import pytest
+
+from app.earnings_exit import check_earnings_exit
+
+
+# ============================================================
+# Trigger-Logik (Variante E)
+# ============================================================
+
+def test_no_trigger_when_no_earnings_date():
+    """Symbol ohne Earnings-Termin -> kein Trigger."""
+    with patch("app.events_calendar._fetch_earnings_date", return_value=None):
+        should_exit, reason = check_earnings_exit("ROKU", 100_000, 1_000_000, {})
+    assert should_exit is False
+    assert reason is None
+
+
+def test_no_trigger_when_earnings_too_far():
+    """Earnings in 3 Tagen, default max_days=1 -> kein Trigger."""
+    future = datetime.now() + timedelta(days=3)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=future), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=15.0):
+        should_exit, reason = check_earnings_exit("ROKU", 200_000, 1_000_000, {})
+    assert should_exit is False  # > max_days_before=1
+
+
+def test_trigger_when_position_too_large():
+    """Earnings morgen + Position 20% Portfolio + niedrige Vola -> Trigger via pos."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=2.0):  # niedrig
+        should_exit, reason = check_earnings_exit("ROKU", 200_000, 1_000_000, {})
+    assert should_exit is True
+    assert "Position 20" in reason or "20.0%" in reason
+
+
+def test_trigger_when_vola_too_high():
+    """Earnings morgen + kleine Position (5%) + hohe Vola (12%) -> Trigger via vola."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=12.0):
+        should_exit, reason = check_earnings_exit("XYZ", 50_000, 1_000_000, {})
+    assert should_exit is True
+    assert "Vola" in reason
+
+
+def test_no_trigger_small_position_low_vola():
+    """Earnings morgen + kleine Position + niedrige Vola -> kein Trigger (gewollt)."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=3.0):
+        should_exit, _ = check_earnings_exit("AAPL", 50_000, 1_000_000, {})
+    assert should_exit is False  # 5% Position + 3% Vola unter Schwellen
+
+
+def test_trigger_both_criteria():
+    """Earnings + grosse Position + hohe Vola -> Trigger mit beidem in Reason."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=15.0):
+        should_exit, reason = check_earnings_exit("ROKU", 200_000, 1_000_000, {})
+    assert should_exit is True
+    assert "Position" in reason
+    assert "Vola" in reason
+
+
+def test_no_trigger_after_earnings():
+    """Earnings 2 Tage in der Vergangenheit -> kein Trigger."""
+    past = datetime.now() - timedelta(days=2)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=past):
+        should_exit, _ = check_earnings_exit("ROKU", 200_000, 1_000_000, {})
+    assert should_exit is False  # days_until < 0
+
+
+# ============================================================
+# Master-Switch (config.market_context.earnings_exit_enabled=False)
+# ============================================================
+
+def test_disabled_via_config():
+    tomorrow = datetime.now() + timedelta(days=1)
+    cfg = {"market_context": {"earnings_exit_enabled": False}}
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=15.0):
+        should_exit, _ = check_earnings_exit("ROKU", 200_000, 1_000_000, cfg)
+    assert should_exit is False
+
+
+# ============================================================
+# Konfigurierbare Schwellen
+# ============================================================
+
+def test_custom_thresholds():
+    """User kann Schwellen erhoehen damit Filter weniger schnell triggert."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    cfg = {"market_context": {
+        "earnings_exit_min_position_pct": 25.0,  # erhoeht
+        "earnings_exit_min_vola_pct": 20.0,      # erhoeht
+    }}
+    # Position 15% (unter 25%), Vola 10% (unter 20%) -> kein Trigger
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=10.0):
+        should_exit, _ = check_earnings_exit("ROKU", 150_000, 1_000_000, cfg)
+    assert should_exit is False
+
+
+def test_custom_max_days_before():
+    """max_days_before=3: Earnings in 2 Tagen triggert."""
+    in_2d = datetime.now() + timedelta(days=2)
+    cfg = {"market_context": {"earnings_exit_max_days_before": 3}}
+    with patch("app.events_calendar._fetch_earnings_date", return_value=in_2d), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=15.0):
+        should_exit, _ = check_earnings_exit("ROKU", 200_000, 1_000_000, cfg)
+    assert should_exit is True
+
+
+# ============================================================
+# Edge-Cases
+# ============================================================
+
+def test_zero_portfolio_value_no_crash():
+    """Portfolio = 0 darf nicht crashen."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=15.0):
+        should_exit, _ = check_earnings_exit("ROKU", 0, 0, {})
+    # Vola triggert weil 15% > 8% default
+    assert should_exit is True
+
+
+def test_vola_unavailable_falls_back_to_position_only():
+    """Wenn yfinance nicht klappt -> Vola=None -> nur Position-Check."""
+    tomorrow = datetime.now() + timedelta(days=1)
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=None):
+        # Position 5% (unter 10%) -> kein Trigger
+        should_exit, _ = check_earnings_exit("XYZ", 50_000, 1_000_000, {})
+    assert should_exit is False
+    # Position 20% -> Trigger
+    with patch("app.events_calendar._fetch_earnings_date", return_value=tomorrow), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=None):
+        should_exit, _ = check_earnings_exit("ROKU", 200_000, 1_000_000, {})
+    assert should_exit is True
+
+
+# ============================================================
+# Watchlist (Dashboard-Helper)
+# ============================================================
+
+def test_pending_earnings_watchlist():
+    from app.earnings_exit import get_pending_earnings_for_positions
+    tomorrow = datetime.now() + timedelta(days=1)
+    far_future = datetime.now() + timedelta(days=30)
+
+    positions = [
+        {"symbol": "ROKU", "amount": 150_000},
+        {"symbol": "AAPL", "amount": 50_000},  # earnings far away
+        {"symbol": "NOSYM", "amount": 10_000},  # no earnings date
+    ]
+
+    def _fake_fetch(sym):
+        return {"ROKU": tomorrow, "AAPL": far_future}.get(sym)
+
+    with patch("app.events_calendar._fetch_earnings_date", side_effect=_fake_fetch), \
+         patch("app.earnings_exit._fetch_volatility_proxy", return_value=12.0):
+        result = get_pending_earnings_for_positions(positions, 1_000_000, {})
+
+    # Nur ROKU (in 1d) im 7-Tage-Window, AAPL (30d) zu weit, NOSYM keine Daten
+    syms = [r["symbol"] for r in result]
+    assert "ROKU" in syms
+    assert "AAPL" not in syms
+    assert "NOSYM" not in syms
+    roku = next(r for r in result if r["symbol"] == "ROKU")
+    assert roku["would_exit"] is True
