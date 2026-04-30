@@ -603,11 +603,34 @@
     <!-- === TRADES TAB === -->
     <div id="tab-trades" class="tab-content">
         <div class="card">
-            <div class="card-title">Trade-Historie</div>
+            <div class="card-title">Trade-Historie<span class="tip" data-tip="Alle Trades historisch. Filter oben: Aktions-Typ (BUY/SELL/Stop-Loss/etc.) und Symbol-Suche. Klicke einen Spalten-Header zum Sortieren.">?</span></div>
+
+            <!-- v37bb: Filter + Suche -->
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+                <select id="trades-filter-action" onchange="applyTradesFilter()" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;font-size:13px;">
+                    <option value="">Alle Aktionen</option>
+                    <option value="BUY">Nur BUYs (BUY/SCANNER_BUY)</option>
+                    <option value="CLOSE">Alle Closes (SL/TP/Trailing/Time/Earnings/Manual)</option>
+                    <option value="STOP_LOSS_CLOSE">Nur Stop-Loss</option>
+                    <option value="TAKE_PROFIT_CLOSE">Nur Take-Profit</option>
+                    <option value="EARNINGS_BLACKOUT_CLOSE">Nur Earnings-Exits</option>
+                    <option value="MANUAL_SELL">Nur Manual-Sells</option>
+                    <option value="FAILED">Nur FAILED</option>
+                </select>
+                <input type="text" id="trades-filter-symbol" placeholder="Symbol-Suche (z.B. ROKU)" oninput="applyTradesFilter()" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;font-size:13px;width:200px;">
+                <span id="trades-filter-count" style="font-size:12px;opacity:0.7;">--</span>
+            </div>
+
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>Zeit</th><th>Aktion</th><th>Symbol</th><th>Betrag</th><th>Lev</th></tr>
+                        <tr style="cursor:pointer;">
+                            <th onclick="sortTrades('timestamp')">Zeit ↕</th>
+                            <th onclick="sortTrades('action')">Aktion ↕</th>
+                            <th onclick="sortTrades('symbol')">Symbol ↕</th>
+                            <th onclick="sortTrades('amount_usd')">Betrag ↕</th>
+                            <th>Lev</th>
+                        </tr>
                     </thead>
                     <tbody id="trades-table"></tbody>
                 </table>

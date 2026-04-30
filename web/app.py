@@ -4797,6 +4797,23 @@ async def api_backups_status():
         return {"error": str(e), "configured": False}
 
 
+@app.get("/api/pending-orders")
+async def api_pending_orders():
+    """v37bb: Aktuell pending IBKR-Orders fuer Diagnostik / Sichtbarkeit.
+
+    Read-only — read aus ib.openTrades() ueber separate clientId-Connection.
+    Praktisch fuer:
+    - Reconcile-Diagnose ('warum kommt MISSED_FILL?')
+    - Cutover-Day-Visibility ('hat IBKR meine Order angenommen?')
+    - Pre-Market/After-Hours-Pending-Tracking
+    """
+    try:
+        from app.pending_orders import summary
+        return summary()
+    except Exception as e:
+        return {"error": str(e), "total_pending": 0, "orders": []}
+
+
 @app.post("/api/earnings/exempt/{symbol}")
 async def api_earnings_exempt_add(symbol: str, user=Depends(require_auth)):
     """v37aa: Setze Symbol auf Earnings-Exit-Exemption-Liste.

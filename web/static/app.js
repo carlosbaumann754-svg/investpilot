@@ -580,20 +580,68 @@ async function killSwitch() {
 }
 
 // === TRADES ===
+// v37bb: in-memory cache mit Filter/Sort (statt rein server-paginated)
+let _allLoadedTrades = [];
+let _tradesSortField = 'timestamp';
+let _tradesSortDesc = true;
+
 async function loadTrades(reset = false) {
-    if (reset) tradesOffset = 0;
+    if (reset) {
+        tradesOffset = 0;
+        _allLoadedTrades = [];
+    }
     const res = await apiFetch(`/api/trades?limit=50&offset=${tradesOffset}`);
     if (!res) return;
     const data = await res.json();
-    const tbody = document.getElementById('trades-table');
-    if (reset) tbody.innerHTML = '';
+    const newTrades = data.trades || [];
+    _allLoadedTrades = _allLoadedTrades.concat(newTrades);
+    tradesOffset += 50;
+    renderTrades();
+}
 
-    (data.trades || []).forEach(t => {
+function renderTrades() {
+    const tbody = document.getElementById('trades-table');
+    tbody.innerHTML = '';
+
+    // Filter anwenden
+    const filterAction = document.getElementById('trades-filter-action')?.value || '';
+    const filterSymbol = (document.getElementById('trades-filter-symbol')?.value || '').toUpperCase().trim();
+
+    let filtered = _allLoadedTrades.filter(t => {
+        const action = t.action || '';
+        if (filterAction === 'BUY' && !(action === 'BUY' || action === 'SCANNER_BUY')) return false;
+        if (filterAction === 'CLOSE' && !action.includes('CLOSE') && action !== 'MANUAL_SELL') return false;
+        if (filterAction === 'STOP_LOSS_CLOSE' && action !== 'STOP_LOSS_CLOSE') return false;
+        if (filterAction === 'TAKE_PROFIT_CLOSE' && action !== 'TAKE_PROFIT_CLOSE') return false;
+        if (filterAction === 'EARNINGS_BLACKOUT_CLOSE' && action !== 'EARNINGS_BLACKOUT_CLOSE') return false;
+        if (filterAction === 'MANUAL_SELL' && action !== 'MANUAL_SELL') return false;
+        if (filterAction === 'FAILED' && !action.includes('FAILED')) return false;
+        if (filterSymbol && !(t.symbol || '').toUpperCase().includes(filterSymbol)) return false;
+        return true;
+    });
+
+    // Sort anwenden
+    filtered.sort((a, b) => {
+        const av = a[_tradesSortField] ?? 0;
+        const bv = b[_tradesSortField] ?? 0;
+        let cmp;
+        if (typeof av === 'string') cmp = av.localeCompare(bv);
+        else cmp = (av || 0) - (bv || 0);
+        return _tradesSortDesc ? -cmp : cmp;
+    });
+
+    const countEl = document.getElementById('trades-filter-count');
+    if (countEl) countEl.textContent = `${filtered.length} / ${_allLoadedTrades.length} Trades`;
+
+    filtered.forEach(t => {
         const tr = document.createElement('tr');
-        const actionClass = t.action === 'BUY' ? 'badge-green' :
+        const actionClass = t.action === 'BUY' || t.action === 'SCANNER_BUY' ? 'badge-green' :
                             t.action.includes('STOP_LOSS') ? 'badge-red' :
-                            t.action.includes('TAKE_PROFIT') ? 'badge-purple' : 'badge-blue';
-        // Zweizeilige Asset-Anzeige: Ticker fett, Name klein darunter
+                            t.action.includes('TAKE_PROFIT') ? 'badge-purple' :
+                            t.action.includes('FAILED') ? 'badge-red' :
+                            t.action === 'MANUAL_SELL' ? 'badge-orange' :
+                            t.action === 'EARNINGS_BLACKOUT_CLOSE' ? 'badge-orange' :
+                            'badge-blue';
         const ticker = t.symbol || ('#' + (t.instrument_id || '?'));
         const fullName = t.name && t.name !== t.symbol ? t.name : '';
         const assetCell = fullName
@@ -609,7 +657,20 @@ async function loadTrades(reset = false) {
         `;
         tbody.appendChild(tr);
     });
-    tradesOffset += 50;
+}
+
+function applyTradesFilter() {
+    renderTrades();
+}
+
+function sortTrades(field) {
+    if (_tradesSortField === field) {
+        _tradesSortDesc = !_tradesSortDesc;
+    } else {
+        _tradesSortField = field;
+        _tradesSortDesc = true;
+    }
+    renderTrades();
 }
 
 function loadMoreTrades() { loadTrades(false); }
