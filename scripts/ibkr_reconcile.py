@@ -289,7 +289,9 @@ def main():
         print(f"IBKR Cash:  ${report['ibkr_cash']:,.2f}")
         print(f"IBKR Equity:${report['ibkr_equity']:,.2f}")
         print(f"IBKR Positions: {report['ibkr_positions_count']}")
-        print(f"Bot Recent Trades ({args.lookback_hours}h): {report['bot_recent_trades_count']}")
+        print(f"Bot Recent Trades ({args.lookback_hours}h Pos / {args.missed_fill_lookback_hours}h Fill): "
+              f"{report['bot_position_lookback_trades_count']} pos / "
+              f"{report['bot_fill_lookback_trades_count']} fill")
         print(f"IBKR Recent Executions: {report['ibkr_recent_executions_count']}")
         if report["drifts"]:
             print(f"\n⚠️ {len(report['drifts'])} Drifts:")
