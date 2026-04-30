@@ -4614,13 +4614,36 @@ async def api_cutover_readiness():
     })
 
     # --- Gate #6: IBKR Master-2FA ---
-    gates.append({
-        "nr": 6, "title": "IBKR Master-Account-2FA",
-        "status": "red",
-        "detail": "USER-ACTION in W4 (18.-24.05.): IBKR Client Portal -> Settings -> "
-                  "Authentication -> Master-2FA aktivieren. Bot-Dashboard-2FA ist eine "
-                  "andere Schicht (seit 28.04. aktiv).",
-    })
+    # IBKR bietet keine API zur Abfrage des 2FA-Status. Daher User-Confirm
+    # ueber Flag-Datei (data/cutover_confirmations.json) mit Audit-Trail
+    # (Datum, Methoden). Carlos muss im IBKR Client Portal selbst pruefen
+    # und dann den /api/cutover/confirm/master_2fa Endpoint triggern.
+    try:
+        from app.config_manager import load_json as _load_confirms
+        confirms = _load_confirms("cutover_confirmations.json") or {}
+        m2fa = confirms.get("master_2fa") or {}
+    except Exception:
+        m2fa = {}
+    if m2fa.get("confirmed") is True:
+        methods = m2fa.get("methods") or []
+        date = m2fa.get("confirmed_at") or "?"
+        method_str = ", ".join(methods) if methods else "TOTP"
+        gates.append({
+            "nr": 6, "title": "IBKR Master-Account-2FA",
+            "status": "green",
+            "detail": f"User-bestaetigt am {date}: {method_str}. Verifiziert "
+                      f"via IBKR Client Portal -> Settings -> Gesicherte Anmeldung.",
+        })
+    else:
+        gates.append({
+            "nr": 6, "title": "IBKR Master-Account-2FA",
+            "status": "red",
+            "detail": "USER-ACTION: IBKR Client Portal -> Settings -> "
+                      "Gesicherte Anmeldung -> IB-Key oder Authenticator aktivieren. "
+                      "Danach POST /api/cutover/confirm/master_2fa mit "
+                      "{methods: ['IB-Key', 'Authenticator']}. "
+                      "Bot-Dashboard-2FA ist eine andere Schicht (seit 28.04. aktiv).",
+        })
 
     # --- Gate #7: Code-Security (Semgrep) ---
     try:
@@ -4727,6 +4750,62 @@ async def api_cutover_readiness():
         "submodules": submodules,
         "generated_at": _dt.now(_tz.utc).isoformat(),
     }
+
+
+@app.post("/api/cutover/confirm/master_2fa")
+async def api_cutover_confirm_master_2fa(payload: dict = None):
+    """v37cc: User-Confirm fuer Hard-Gate #6 (IBKR Master-2FA).
+
+    IBKR bietet keine API zur Abfrage des 2FA-Status. Daher User-bestaetigt
+    via diesem Endpoint mit Audit-Trail (Datum, Methoden, Audit-History).
+
+    Body (optional):
+        {"methods": ["IB-Key", "Authenticator"]} — Liste der aktivierten 2FA-
+        Methoden (z.B. IB-Key via IBKR Mobile, Mobile Authenticator wie
+        Google/Microsoft Authenticator, Digital Security Card+).
+
+    Returns:
+        {"status": "confirmed", "confirmed_at": "...", "methods": [...]}
+    """
+    from app.config_manager import load_json, save_json
+    payload = payload or {}
+    methods = payload.get("methods") or ["TOTP"]
+    if not isinstance(methods, list):
+        methods = [str(methods)]
+
+    confirms = load_json("cutover_confirmations.json") or {}
+    history = confirms.get("_audit", [])
+
+    now = _dt.now(_tz.utc).isoformat()
+    confirms["master_2fa"] = {
+        "confirmed": True,
+        "confirmed_at": now,
+        "methods": methods,
+    }
+    history.append({"action": "CONFIRM_MASTER_2FA", "at": now, "methods": methods})
+    confirms["_audit"] = history[-50:]  # Keep last 50 audit entries
+
+    save_json("cutover_confirmations.json", confirms)
+
+    log.info(f"Cutover Hard-Gate #6 user-confirmed: methods={methods}")
+    return {"status": "confirmed", "confirmed_at": now, "methods": methods}
+
+
+@app.delete("/api/cutover/confirm/master_2fa")
+async def api_cutover_unconfirm_master_2fa():
+    """Revoke der Master-2FA-Bestaetigung (z.B. wenn 2FA in IBKR deaktiviert)."""
+    from app.config_manager import load_json, save_json
+    confirms = load_json("cutover_confirmations.json") or {}
+    history = confirms.get("_audit", [])
+
+    now = _dt.now(_tz.utc).isoformat()
+    confirms["master_2fa"] = {"confirmed": False, "revoked_at": now}
+    history.append({"action": "REVOKE_MASTER_2FA", "at": now})
+    confirms["_audit"] = history[-50:]
+
+    save_json("cutover_confirmations.json", confirms)
+    log.info("Cutover Hard-Gate #6 user-confirmation revoked")
+    return {"status": "revoked", "revoked_at": now}
 
 
 @app.get("/api/backups/status")
