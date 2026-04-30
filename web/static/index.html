@@ -553,6 +553,30 @@
             <div id="v15-dca-plan" class="card-sub" style="margin-top:8px;">--</div>
         </div>
 
+        <!-- v37z: EARNINGS-WATCHLIST -->
+        <div class="card" id="earnings-watchlist-card" style="border-left:4px solid #fbbf24;">
+            <div class="card-title">
+                Earnings-Watchlist
+                <span class="tip" data-tip="Anstehende Earnings (Quartalszahlen) der offenen Positionen in den naechsten 7 Tagen. Pro Symbol: Datum, Tage bis Earnings, Position-Anteil am Portfolio, 30-Tage-Volatility, und ob der Earnings-Exit-Filter die Position schliessen WUERDE. EXEMPT = du hast die Position bewusst auf Exempt-Liste gesetzt (z.B. um durch Earnings zu halten). Filter-Logik: schliesst wenn Earnings <= 1 Tag UND (Position > 10% Portfolio ODER Vola > 8%).">?</span>
+            </div>
+            <div id="earnings-watchlist-summary" class="card-sub" style="margin-bottom:8px;">Lade...</div>
+            <div class="table-wrap">
+                <table style="width:100%;font-size:12px;">
+                    <thead style="opacity:0.7;">
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                            <th style="text-align:left;padding:5px 4px;">Symbol</th>
+                            <th style="text-align:left;padding:5px 4px;">Earnings</th>
+                            <th style="text-align:right;padding:5px 4px;">Tage</th>
+                            <th style="text-align:right;padding:5px 4px;">Pos%</th>
+                            <th style="text-align:right;padding:5px 4px;">Vola</th>
+                            <th style="text-align:center;padding:5px 4px;">Filter-Aktion</th>
+                        </tr>
+                    </thead>
+                    <tbody id="earnings-watchlist-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- KILL SWITCH -->
         <div class="card" id="killswitch-card" style="border: 2px solid var(--red); text-align: center;">
             <div class="card-title" style="color: var(--red);">NOTAUS / Kill Switch</div>
@@ -567,7 +591,7 @@
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>ID</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th><th>Trail SL</th></tr>
+                        <tr><th>ID</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th><th>Trail SL</th><th>Aktion</th></tr>
                     </thead>
                     <tbody id="positions-table"></tbody>
                 </table>

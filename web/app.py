@@ -2140,6 +2140,139 @@ async def api_killswitch(user=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/positions/{symbol}/sell")
+async def api_manual_sell(symbol: str, user=Depends(require_auth)):
+    """v37z: Manueller Sell einer offenen Position via Dashboard.
+
+    Cutover-Vorbereitung: bei Stress-Momenten oder bewussten User-Decisions
+    (z.B. "ROKU vor Earnings doch noch raus") nicht mehr in IBKR-App muessen.
+    Ein Klick im Dashboard schliesst die Position.
+
+    Workflow:
+    1. Symbol-Lookup in offenen IBKR-Positions
+    2. Sicherheits-Check: Symbol muss tatsaechlich offen sein
+    3. close_position() via broker
+    4. Trade-History Eintrag mit action="MANUAL_SELL" + reason
+    5. Pushover-Alert WARNING (du sollst sehen dass DU es warst)
+    6. Audit-Log
+
+    Returns:
+        {ok: True, symbol, qty, avg_cost, result: <broker-response>}
+        oder {ok: False, error: <reason>}
+    """
+    try:
+        from app.config_manager import load_config
+        from app.etoro_client import EtoroClient
+        from datetime import datetime as _dt
+
+        symbol_upper = symbol.upper().strip()
+        if not symbol_upper or len(symbol_upper) > 10:
+            raise HTTPException(status_code=400, detail="Invalid symbol")
+
+        config = load_config()
+        client = get_broker(config, readonly=False)
+
+        # 1. Position finden in IBKR Live-Portfolio
+        portfolio = client.get_portfolio()
+        if not portfolio:
+            raise HTTPException(status_code=503,
+                                detail="Portfolio-Fetch fehlgeschlagen")
+
+        target_pos = None
+        for pos in portfolio.get("positions", []):
+            if pos.get("symbol", "").upper() == symbol_upper:
+                target_pos = pos
+                break
+
+        if target_pos is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Keine offene Position fuer {symbol_upper}")
+
+        p = EtoroClient.parse_position(target_pos)
+        if p.get("invested", 0) <= 0:
+            raise HTTPException(status_code=409,
+                                detail=f"Position {symbol_upper} ist bereits "
+                                       f"geschlossen oder leer")
+
+        username = getattr(user, "username", None) or str(user)
+
+        # 2. Tatsaechlicher Close
+        result = client.close_position(p["position_id"], p.get("instrument_id"))
+        if not result:
+            # Audit + Pushover trotzdem fuer Diagnose
+            try:
+                from web.security import log_audit
+                await log_audit(user, "MANUAL_SELL_FAILED",
+                                f"{symbol_upper}: close_position returned None")
+            except Exception:
+                pass
+            try:
+                from app.alerts import send_alert
+                send_alert(
+                    f"Manual-Sell fuer {symbol_upper} fehlgeschlagen "
+                    f"(close_position lieferte None). Position bleibt offen. "
+                    f"Versuche IBKR-App fuer manuellen Verkauf.",
+                    level="ERROR",
+                )
+            except Exception:
+                pass
+            raise HTTPException(status_code=502,
+                                detail=f"Close fuer {symbol_upper} fehlgeschlagen")
+
+        # 3. Trade-History-Eintrag
+        try:
+            from app.trader import save_trade, _attach_fill_prices
+            trade_entry = {
+                "timestamp": _dt.now().isoformat(),
+                "action": "MANUAL_SELL",
+                "symbol": symbol_upper,
+                "instrument_id": p.get("instrument_id"),
+                "position_id": p["position_id"],
+                "pnl_pct": p.get("pnl_pct", 0),
+                "pnl_usd": p.get("pnl", 0),
+                "leverage": p.get("leverage", 1),
+                "user": username,
+                "reason": "manual-dashboard-sell",
+                "status": "executed",
+            }
+            save_trade(_attach_fill_prices(trade_entry, result))
+        except Exception:
+            pass
+
+        # 4. Audit + Pushover
+        try:
+            from web.security import log_audit
+            await log_audit(user, "MANUAL_SELL",
+                            f"{symbol_upper} qty={p.get('invested')} pnl={p.get('pnl_pct')}%")
+        except Exception:
+            pass
+
+        try:
+            from app.alerts import send_alert
+            send_alert(
+                f"Manual-Sell von '{username}': {symbol_upper} "
+                f"({p.get('pnl_pct', 0):+.1f}% PnL). Position geschlossen.",
+                level="WARNING",
+            )
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "symbol": symbol_upper,
+            "qty": p.get("invested"),
+            "avg_cost": p.get("entry_price"),
+            "pnl_pct": p.get("pnl_pct"),
+            "pnl_usd": p.get("pnl"),
+            "result": result,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/risk")
 async def api_risk(user=Depends(require_auth)):
     """Aktuelle Risiko-Zusammenfassung."""
@@ -4657,6 +4790,68 @@ async def api_backups_status():
         }
     except Exception as e:
         return {"error": str(e), "configured": False}
+
+
+@app.get("/api/earnings/watchlist")
+async def api_earnings_watchlist():
+    """v37z: Earnings-Watchlist fuer Dashboard.
+
+    Listet alle Portfolio-Positionen mit Earnings in den naechsten 7 Tagen.
+    Nutzt earnings_exit.get_pending_earnings_for_positions() Helper +
+    Multi-Source-Lookup (yfinance + Finnhub-Fallback).
+
+    Pro Position: Symbol, Earnings-Datum, Tage bis Earnings, Position-%,
+    Vola-30d, would_exit (greift Filter?), Reason.
+
+    Plus: Exemption-Liste (welche Symbole sind aktuell exempt + auto_cleanup-Status).
+    """
+    try:
+        from app.earnings_exit import get_pending_earnings_for_positions, load_exemptions
+        from app.config_manager import load_json, load_config
+
+        # Aktuelle Positions aus IBKR (oder bot's Portfolio-Cache)
+        from app.etoro_client import EtoroClient as _EC
+        config = load_config()
+        client = get_broker(config, readonly=True)
+        portfolio = client.get_portfolio() or {}
+        positions_raw = portfolio.get("positions", []) or []
+
+        # Equity fuer position_pct-Berechnung
+        equity = float(portfolio.get("creditByRealizedEquity")
+                       or portfolio.get("_equity") or 0)
+
+        # Pending-Earnings-Lookup
+        watchlist = get_pending_earnings_for_positions(
+            positions_raw, equity, config,
+        )
+
+        # Exemption-Details laden
+        exempt_data = load_json("earnings_exit_exemptions.json") or {}
+        exempt_symbols = set(exempt_data.get("exempt_symbols", []) or [])
+        auto_cleanup = exempt_data.get("auto_cleanup", {}) or {}
+
+        # Augment watchlist mit Exemption-Status
+        for entry in watchlist:
+            sym = entry.get("symbol")
+            if sym in exempt_symbols:
+                entry["is_exempt"] = True
+                cleanup_meta = auto_cleanup.get(sym, {})
+                entry["exempt_reason"] = cleanup_meta.get("reason", "manual")
+                entry["exempt_auto_cleanup"] = bool(cleanup_meta)
+            else:
+                entry["is_exempt"] = False
+
+        return {
+            "watchlist": watchlist,
+            "watchlist_count": len(watchlist),
+            "would_exit_count": sum(1 for e in watchlist if e.get("would_exit")),
+            "exempt_count": sum(1 for e in watchlist if e.get("is_exempt")),
+            "exempt_symbols_total": sorted(exempt_symbols),
+            "filter_active": config.get("market_context", {})
+                                  .get("earnings_exit_enabled", True),
+        }
+    except Exception as e:
+        return {"error": str(e), "watchlist": []}
 
 
 @app.get("/api/insider/shadow")

@@ -422,6 +422,16 @@ async function loadDashboard() {
                     const ticker = pos.symbol || ('#' + pos.instrument_id);
                     const title = pos.name ? `title="${pos.name}"` : '';
                     const assetCell = `<span ${title} style="${pos.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>`;
+                    // v37z: Manueller Sell-Button — bei Cutover-Phase wertvoll
+                    // (heute morgen ROKU-Beispiel: nicht mehr in IBKR-App muessen)
+                    const sellBtn = pos.symbol
+                        ? `<button onclick="manualSell('${pos.symbol}', ${pos.pnl_pct || 0})"
+                                   title="Position sofort verkaufen (Confirm-Dialog erscheint)"
+                                   class="btn-secondary"
+                                   style="font-size:11px;padding:3px 8px;cursor:pointer;">
+                             Verkaufen
+                          </button>`
+                        : '<span style="color:#666;font-size:11px;">--</span>';
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${assetCell}</td>
@@ -430,6 +440,7 @@ async function loadDashboard() {
                         <td class="${pnlClass(pos.pnl_pct)}">${fmtPct(pos.pnl_pct)}</td>
                         <td>${pos.leverage}x</td>
                         ${trailTd}
+                        <td>${sellBtn}</td>
                     `;
                     tbody.appendChild(tr);
                 });
@@ -1726,6 +1737,7 @@ async function askQuestion() {
     loadSurvivorship();
     loadCostModelStatus();
     loadCutoverReadiness();
+    loadEarningsWatchlist();
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1737,6 +1749,7 @@ async function askQuestion() {
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
     setInterval(loadCutoverReadiness, 300000); // Cutover-Readiness alle 5 Min
+    setInterval(loadEarningsWatchlist, 900000); // Earnings-Watchlist alle 15 Min (calendar-Daten aendern sich kaum)
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
             loadLogs();
@@ -2618,6 +2631,104 @@ async function loadCostModelStatus() {
  * v37p: Cutover-Readiness Card — zentrale Health-Uebersicht.
  * Aggregiert Hard-Gates + Submodule-Status auf einen Blick.
  */
+/**
+ * v37z: Manueller Sell einer einzelnen Position via Position-Card-Button.
+ * Mit Confirm-Dialog (Position kann irreversibel geschlossen werden).
+ */
+async function manualSell(symbol, pnlPct) {
+    const pnlStr = pnlPct >= 0 ? `+${pnlPct.toFixed(2)}%` : `${pnlPct.toFixed(2)}%`;
+    const confirmed = confirm(
+        `Position ${symbol} sofort verkaufen?\n\n` +
+        `Aktueller PnL: ${pnlStr}\n\n` +
+        `Diese Aktion ist NICHT umkehrbar. Die Position wird zum aktuellen ` +
+        `Marktpreis geschlossen (Slippage moeglich).`
+    );
+    if (!confirmed) return;
+
+    showToast(`${symbol} wird verkauft...`);
+    try {
+        const res = await apiFetch(`/api/positions/${symbol}/sell`, { method: 'POST' });
+        if (res && res.ok) {
+            const data = await res.json();
+            if (data.ok) {
+                const pnlFinal = data.pnl_pct >= 0 ? `+${data.pnl_pct.toFixed(2)}%` : `${data.pnl_pct.toFixed(2)}%`;
+                showToast(`${symbol} geschlossen — PnL ${pnlFinal}`);
+                // Dashboard refresh in 2s damit Position aus Liste verschwindet
+                setTimeout(loadDashboard, 2000);
+            } else {
+                showToast(`Fehler: ${data.error || 'unbekannt'}`);
+            }
+        } else if (res) {
+            const errData = await res.json().catch(() => ({}));
+            showToast(`Fehler ${res.status}: ${errData.detail || 'Server-Error'}`);
+        }
+    } catch (e) {
+        showToast(`Fehler: ${e.message}`);
+    }
+}
+
+
+/**
+ * v37z: Earnings-Watchlist - listet kommende Earnings naechste 7 Tage
+ * fuer alle offenen Positionen, mit Filter-Trigger-Vorhersage.
+ */
+async function loadEarningsWatchlist() {
+    try {
+        const r = await fetch('/api/earnings/watchlist');
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data.error) return;
+
+        const card = document.getElementById('earnings-watchlist-card');
+        const tbody = document.getElementById('earnings-watchlist-tbody');
+        const summary = document.getElementById('earnings-watchlist-summary');
+        if (!card || !tbody) return;
+
+        const wl = data.watchlist || [];
+        if (wl.length === 0) {
+            summary.innerHTML = '<span style="opacity:0.7;">Keine Earnings in den naechsten 7 Tagen.</span>';
+            tbody.innerHTML = '';
+            return;
+        }
+
+        const wouldExit = data.would_exit_count || 0;
+        const exempt = data.exempt_count || 0;
+        const filterActive = data.filter_active;
+
+        summary.innerHTML =
+            `<strong>${wl.length}</strong> Earnings in den naechsten 7 Tagen &middot; ` +
+            (filterActive
+                ? `<span style="color:#34d399;">Filter aktiv</span>`
+                : `<span style="color:#fbbf24;">Filter aus</span>`) +
+            ` &middot; ${wouldExit} wuerden geschlossen` +
+            (exempt > 0 ? ` &middot; <span style="color:#fbbf24;">${exempt} exempt</span>` : '');
+
+        tbody.innerHTML = wl.map(e => {
+            let action;
+            if (e.is_exempt) {
+                action = `<span style="color:#fbbf24;" title="${e.exempt_reason || ''}">EXEMPT${e.exempt_auto_cleanup ? ' (one-shot)' : ''}</span>`;
+            } else if (e.would_exit) {
+                action = `<span style="color:#f87171;" title="${e.reason || ''}">WUERDE SCHLIESSEN</span>`;
+            } else {
+                action = `<span style="opacity:0.7;">halten</span>`;
+            }
+            const daysClass = e.days_until <= 1 ? 'color:#f87171;font-weight:600;' : '';
+            return `
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                    <td style="padding:5px 4px;font-weight:600;">${e.symbol}</td>
+                    <td style="padding:5px 4px;${daysClass}">${e.earnings_date}</td>
+                    <td style="text-align:right;padding:5px 4px;${daysClass}">${e.days_until}d</td>
+                    <td style="text-align:right;padding:5px 4px;">${e.position_pct}%</td>
+                    <td style="text-align:right;padding:5px 4px;">${e.vola_pct_30d ?? '?'}%</td>
+                    <td style="text-align:center;padding:5px 4px;font-size:11px;">${action}</td>
+                </tr>`;
+        }).join('');
+    } catch (e) {
+        console.error('loadEarningsWatchlist failed:', e);
+    }
+}
+
+
 async function loadCutoverReadiness() {
     try {
         const r = await fetch('/api/cutover/readiness');
