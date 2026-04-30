@@ -102,7 +102,7 @@ def get_ibkr_state(timeout: int = 15) -> dict:
 
 def reconcile(lookback_hours: int = 24,
               cash_tolerance_pct: float = CASH_TOLERANCE_PCT_DEFAULT,
-              missed_fill_lookback_hours: int = 24) -> dict:
+              missed_fill_lookback_hours: int = 3) -> dict:
     """Hauptlogik. Returns Dict mit Diffs/Status.
 
     v37t/t+: zwei separate Lookback-Fenster:
@@ -257,10 +257,13 @@ def main():
                         default=CASH_TOLERANCE_PCT_DEFAULT,
                         help="Prozentualer Cash-Drift-Threshold. Default 0.5%% "
                              "(bei $880k Konto = $4400 Schwelle). Floor: $50.")
-    parser.add_argument("--missed-fill-lookback-hours", type=int, default=24,
-                        help="Lookback fuer MISSED_FILL-Detection. Default 24h. "
-                             "Sollte kurz bleiben weil IBKR-Session-Executions "
-                             "nur kurze Historie haben.")
+    parser.add_argument("--missed-fill-lookback-hours", type=int, default=3,
+                        help="Lookback fuer MISSED_FILL-Detection. Default 3h. "
+                             "Sollte KURZ bleiben (max ~6-8h) weil IBKR-Session-"
+                             "Executions nach Daily-Restart 03:00 UTC verloren "
+                             "gehen. Trades aelter als der letzte Restart sind "
+                             "naturgemaess nicht mehr in der Live-Session sichtbar "
+                             "und wuerden False-Positives erzeugen.")
     parser.add_argument("--alert", action="store_true",
                         help="Bei Drift Multi-Channel-Alert ausloesen")
     parser.add_argument("--json", action="store_true",
