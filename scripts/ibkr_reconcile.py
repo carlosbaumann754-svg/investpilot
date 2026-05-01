@@ -113,7 +113,12 @@ def get_ibkr_state(timeout: int = 15) -> dict:
     try:
         ib = broker._get_ib()
         positions = ib.positions()
-        execs = ib.executions()  # alle bekannten Executions der Session
+        # v37cl (01.05.2026): ib_insync API-Drift — ib.executions() returnt
+        # jetzt rohe Execution-Objekte ohne .contract/.commissionReport-
+        # Wrapper. ib.fills() liefert Fill-Objekte mit voller Struktur
+        # (.execution + .contract + .commissionReport) wie der Code erwartet.
+        # Fehler war seit Tagen: "'Execution' object has no attribute 'execution'".
+        execs = ib.fills()  # alle bekannten Fills (= Execution + Contract + CommReport)
         # v37aa: pending orders fuer MISSED_FILL-Filter (heute morgen 30.04.
         # Pushover-Alarm: ROKU SELL submitted 09:10 CEST aber IBKR fillte erst
         # 10:15 Pre-Market — Reconcile-Lauf 10:13 dazwischen meldete MISSED_FILL
