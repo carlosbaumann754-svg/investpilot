@@ -12,7 +12,7 @@ Erstellt jeden Freitag Abend einen vollstaendigen Bericht:
 import os
 import logging
 import smtplib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -783,6 +783,10 @@ def send_weekly_report():
 
 
 def is_friday_evening():
-    """Pruefe ob es Freitag zwischen 18:00-18:05 ist (innerhalb eines 5-Min Zyklus)."""
-    now = datetime.now()
+    """Pruefe ob es Freitag zwischen 18:00-18:05 UTC ist (innerhalb eines 5-Min Zyklus).
+
+    UTC, damit das Trigger-Fenster konsistent mit den GitHub-Action-Crons und
+    dem Discovery-Slot bleibt (sonst DST-anfaellig).
+    """
+    now = datetime.now(timezone.utc)
     return now.weekday() == 4 and now.hour == 18 and now.minute < 5

@@ -10,7 +10,7 @@ Safety Guards: Max 1 Aenderung/Woche, OOS muss besser sein, Rollback bei Einbruc
 import logging
 import copy
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config_manager import load_config, save_config, load_json, save_json
 
@@ -1104,11 +1104,13 @@ def run_merge_optimization():
 def is_sunday_optimization_time():
     """Pruefe ob Sonntag-Optimierung faellig ist.
 
-    Erweitertes Fenster: Sonntag 02:00-06:00.
+    Erweitertes Fenster: Sonntag 02:00-06:00 UTC.
+    UTC, damit das Fenster nicht durch DST-Wechsel oder Container-TZ
+    verschoben wird (analog GitHub-Action-Crons).
     Intervall konfigurierbar (default: 14 Tage = bi-weekly).
     Verhindert verpasste Laeufe durch Render Free Tier Sleep.
     """
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if now.weekday() != 6 or now.hour < 2 or now.hour >= 6:
         return False
 

@@ -9,7 +9,7 @@ import logging
 import os
 import threading
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config_manager import get_data_path
 
@@ -264,7 +264,9 @@ def scheduler_loop():
             from app.asset_discovery import is_friday_discovery_time
             if is_friday_discovery_time():
                 guard = get_data_path("discovery_last_dispatched.flag")
-                today_key = datetime.now().strftime("%Y-%m-%d")
+                # UTC, damit der Day-Key zum UTC-Slot der Stundenpruefung passt
+                # (sonst kann nahe Mitternacht der Local-Day-Key abweichen).
+                today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 already = False
                 try:
                     if guard.exists() and guard.read_text().strip() == today_key:

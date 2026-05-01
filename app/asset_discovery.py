@@ -7,7 +7,7 @@ vielversprechende automatisch zum Scanner-Universum hinzu.
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config_manager import load_config, load_json, save_json
 from app.etoro_client import EtoroClient
@@ -306,6 +306,10 @@ def run_weekly_discovery():
 
 
 def is_friday_discovery_time():
-    """Pruefe ob es Freitag zwischen 17:00-17:05 ist (vor dem Report)."""
-    now = datetime.now()
+    """Pruefe ob es Freitag zwischen 17:00-17:05 UTC ist (vor dem Report).
+
+    UTC, damit das Trigger-Fenster deckungsgleich mit den GitHub-Action-Crons
+    bleibt und nicht durch DST-Wechsel oder Container-TZ verschoben wird.
+    """
+    now = datetime.now(timezone.utc)
     return now.weekday() == 4 and now.hour == 17 and now.minute < 5
