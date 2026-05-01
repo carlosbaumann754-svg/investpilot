@@ -26,7 +26,7 @@
 </div>
 
 <style>
-/* Broker-Badge — sichtbarer State-Indikator (eToro/IBKR + Paper/Real + Connection-LED) */
+/* Broker-Badge — sichtbarer State-Indikator (IBKR Paper/Real + Connection-LED) */
 .broker-badge {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; margin-left: 12px;
@@ -188,7 +188,7 @@
                 <table class="data-table" id="exit-forecast-table" style="display:none;width:100%;">
                     <thead>
                         <tr>
-                            <th>Asset<span class="tip" data-tip="Instrument-ID bei eToro. Gleiche ID = gleiches Wertpapier (mehrere Positionen bei Nachkaeufen).">?</span></th>
+                            <th>Asset<span class="tip" data-tip="Das Wertpapier (z.B. Aktie, ETF). Gleiches Symbol = gleiches Wertpapier, auch wenn der Bot mehrmals nachgekauft hat.">?</span></th>
                             <th>Alter<span class="tip" data-tip="Tage seit Oeffnung der Position. Wichtig fuer den Time-Stop (ab 10 Tagen relevant).">?</span></th>
                             <th>PnL %<span class="tip" data-tip="Aktuelle Rendite der Position in Prozent. Grundlage fuer fast alle Trigger-Berechnungen.">?</span></th>
                             <th>Naechster Trigger<span class="tip" data-tip="Der Exit-Typ, dessen Ausloesung am naechsten ist. Pfeil zeigt die Richtung: Hoch = Kurs muss noch steigen (Take-Profit), Runter = Kurs muesste fallen (Stop-Loss oder Trailing).">?</span></th>
@@ -259,11 +259,11 @@
                     <span id="v12-universe-value" style="font-weight:700;font-size:16px;">--</span>
                 </div>
                 <div class="regime-detail-item">
-                    <span class="card-sub">Kelly Sizing<span class="tip" data-tip="Mathematisch optimale Positionsgroesse basierend auf Gewinnwahrscheinlichkeit und Gewinn/Verlust-Verhaeltnis. Half-Kelly = vorsichtigere Variante (halbiert). Cap = absolute Obergrenze pro Trade als Anteil des Kontos.">?</span></span>
+                    <span class="card-sub">Kelly Sizing<span class="tip" data-tip="Berechnet automatisch wie gross jeder Trade sein soll. Beruht auf der Idee: 'Wenn ich oefter gewinne als verliere, kann ich etwas mehr riskieren'. Der Bot nutzt eine sehr vorsichtige Variante (Half-Kelly) und hat zusaetzlich eine harte Obergrenze pro Trade.">?</span></span>
                     <span id="v12-kelly-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
                 <div class="regime-detail-item">
-                    <span class="card-sub">Meta-Labeler<span class="tip" data-tip="Zweites KI-Modell nach Lopez de Prado: Bewertet jeden Kauf-Signal vom ersten Modell nochmal und filtert schwache Signale heraus. Laeuft zuerst im Schatten-Modus und wird erst live, wenn genug Daten und hohe Praezision da sind.">?</span></span>
+                    <span class="card-sub">Meta-Labeler<span class="tip" data-tip="Eine zweite KI die jedes Kauf-Signal noch einmal pruefen soll: 'Ist dieser Kauf wirklich gut?'. Schwache Signale werden so aussortiert. Lernt aktuell noch im Hintergrund und greift erst live ein wenn er ueber laengere Zeit zuverlaessig richtig liegt.">?</span></span>
                     <span id="v12-meta-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
                 <div class="regime-detail-item">
@@ -271,7 +271,7 @@
                     <span id="v12-timestop-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
                 <div class="regime-detail-item">
-                    <span class="card-sub">VIX Term Structure<span class="tip" data-tip="Nutzt die Struktur der VIX-Terminkurve um Panik-Dips zu erkennen: Wenn kurzfristiger VIX deutlich ueber langfristigem liegt, ist es meist eine Ueberreaktion — guenstige Einstiegsgelegenheit statt Grund zur Panik.">?</span></span>
+                    <span class="card-sub">VIX Term Structure<span class="tip" data-tip="Marktangst-Indikator: Erkennt kurzfristige Panik-Phasen am Markt. Wenn die kurzfristige Angst deutlich groesser ist als die langfristige, ist es meist Ueberreaktion und eine guenstige Einstiegsgelegenheit — der Bot kauft dann sogar etwas mutiger statt zu pausieren.">?</span></span>
                     <span id="v12-vts-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
                 <div class="regime-detail-item">
@@ -306,7 +306,7 @@
 
         <!-- SURVIVORSHIP-BIAS-AUDIT (E4, Q1 Foundation) -->
         <div class="card" id="survivorship-card">
-            <div class="card-title">Survivorship-Bias-Audit (E4)<span class="tip" data-tip="Quantifiziert wie stark unsere WFO/Backtest-Sharpe durch Survivorship-Bias verzerrt ist. Yfinance liefert nur Daten von HEUTE existierenden Tickern — alle 2021-2026 insolvent gegangenen Stocks fehlen dem Backtest, was Performance positiv verfaelscht. 3-Schicht-Audit: (1) Live-Check ob alle Universe-Symbole noch yfinance-Daten haben, (2) Cross-Check gegen 19 bekannte 2021-2026 Insolvenzen/Delistings, (3) Asset-Mix-basierte Sharpe-Reduktion-Schaetzung aus Quant-Literatur. Output: ehrlicher Sharpe-Bereich nach Bias-Korrektur.">?</span></div>
+            <div class="card-title">Ueberlebenden-Verzerrung-Check<span class="tip" data-tip="Pruefung ob unsere Backtest-Ergebnisse zu optimistisch sind. Hintergrund: Wenn man heute auf historische Kurse schaut, fehlen dort alle Firmen die in den letzten Jahren pleite gegangen oder von der Boerse genommen wurden — der Backtest sieht so kuenstlich gut aus weil nur die Gewinner ueberlebt haben. Dieser Check rechnet die Verzerrung heraus und liefert eine ehrlichere Rendite-Erwartung.">?</span></div>
             <div id="surv-state-summary" class="card-sub" style="margin-bottom:10px;">Lade...</div>
 
             <div id="surv-content" style="display:none;">
@@ -344,11 +344,11 @@
                 </div>
             </div>
 
-            <!-- HISTORY Time-Series Tabelle -->
-            <div id="surv-history-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;">
-                    <strong>Trend</strong> &middot; <span id="surv-hist-count">--</span> Audits
-                </div>
+            <!-- HISTORY Time-Series Tabelle (v37ci: collapsible via <details>) -->
+            <details id="surv-history-block" style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <summary style="cursor:pointer;font-size:13px;opacity:0.85;margin-bottom:6px;">
+                    <strong>Trend</strong> &middot; <span id="surv-hist-count">--</span> Audits <span style="font-size:11px;color:var(--muted);font-weight:400;">(klicken zum Ausklappen)</span>
+                </summary>
                 <table style="width:100%;font-size:12px;border-collapse:collapse;">
                     <thead style="opacity:0.7;">
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
@@ -362,20 +362,12 @@
                     </thead>
                     <tbody id="surv-hist-tbody"></tbody>
                 </table>
-            </div>
-
-            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <button onclick="surveyRunNow()" id="surv-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
-                        title="Voller Audit mit yfinance Live-Check (~30-60 Sek). Auto-Run laeuft jeden Sonntag 13:00 UTC via VPS-Cron, Telegram-Alert nur bei Anomalien.">
-                    ▶ Audit jetzt laufen lassen
-                </button>
-                <span id="surv-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
-            </div>
+            </details>
         </div>
 
         <!-- WALK-FORWARD-OPTIMIZATION (E1, vorgezogen) -->
         <div class="card" id="wfo-card">
-            <div class="card-title">Walk-Forward-Optimization (E1)<span class="tip" data-tip="Ehrliche Sharpe-Schaetzung VOR Real-Money. Statt einmal auf 4 Jahren zu optimieren (das ueberfittet), splitten wir die Historie in 6 rolling Windows: 24 Monate Train + 6 Monate Test, jedes Mal um 6 Monate vorgeschoben. Pro Window: optimiere auf Train, evaluiere ehrlich auf nie-gesehenen Test-Daten. Aggregiere alle 6 OOS-Sharpe-Werte. Konsistent hoch -> echte Edge. Zerfallen sie -> Overfitting entdeckt VOR Cutover. Roadmap-Item E1 aus Q1 Foundation, vorgezogen weil TRADING-NULL-RISK (pure Backtester-Erweiterung).">?</span></div>
+            <div class="card-title">Walk-Forward-Validation<span class="tip" data-tip="Ehrlichkeits-Test der Bot-Strategie: Statt einmal auf der gesamten Historie zu optimieren (das fuehrt zu 'Auswendig-Lernen' und schlechten Live-Ergebnissen), wird die Vergangenheit in mehrere Zeit-Fenster geschnitten. Der Bot lernt jeweils auf einem Teil und wird dann ehrlich auf dem naechsten unbekannten Teil getestet. Wenn die Ergebnisse ueber alle Fenster aehnlich gut sind, hat die Strategie eine echte Kante. Zerfallen sie, war es nur Zufall.">?</span></div>
             <div id="wfo-state-summary" class="card-sub" style="margin-bottom:10px;">Lade Status...</div>
 
             <!-- Status-spezifische Inhalte -->
@@ -420,12 +412,13 @@
                 </div>
             </div>
 
-            <!-- HISTORY Time-Series Sparkline -->
-            <div id="wfo-history-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <div style="font-size:13px;opacity:0.85;margin-bottom:6px;">
+            <!-- HISTORY Time-Series Sparkline (v37ci: collapsible <details>) -->
+            <details id="wfo-history-block" style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <summary style="cursor:pointer;font-size:13px;opacity:0.85;margin-bottom:6px;">
                     <strong>Trend</strong> &middot; <span id="wfo-hist-count">--</span> Runs &middot;
                     naechster Auto-Run <span id="wfo-hist-next">--</span>
-                </div>
+                    <span style="font-size:11px;color:var(--muted);font-weight:400;">(klicken zum Ausklappen)</span>
+                </summary>
                 <table style="width:100%;font-size:12px;border-collapse:collapse;">
                     <thead style="opacity:0.7;">
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
@@ -438,12 +431,12 @@
                     </thead>
                     <tbody id="wfo-hist-tbody"></tbody>
                 </table>
-            </div>
+            </details>
 
-            <!-- Run-Button (Manual Trigger) -->
+            <!-- Force-Run Button (manuell, fuer Test-Run vor Cutover) -->
             <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
                 <button onclick="wfoRunNow()" id="wfo-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
-                        title="Startet einen vollstaendigen WFO-Lauf JETZT. Runtime ca. 10-15 Min, laeuft im Hintergrund. Auto-Lauf erfolgt 1. Sonntag jedes Monats 12:00 UTC via GitHub Action.">
+                        title="Startet einen vollstaendigen WFO-Lauf JETZT (Bestaetigung erforderlich). Auto-Lauf laeuft sonst 1. Sonntag jedes Monats 12:00 UTC. Runtime 10-15 Min, im Hintergrund auf GitHub Actions.">
                     ▶ WFO jetzt starten (~10-15 Min)
                 </button>
                 <span id="wfo-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
@@ -685,15 +678,15 @@
 
         <!-- META-LABELER STATUS -->
         <div class="card" id="meta-labeler-card">
-            <div class="card-title">Meta-Labeler (Shadow-Mode)<span class="tip" data-tip="Zweites KI-Modell, das Kauf-Signale vom Haupt-Scanner filtert. Lernt aus historischen Trades: 'Wenn Score X + VIX Y + RSI Z = dieser Trade geht meist auf'. Wird erst scharfgeschaltet, wenn genug Trades gesammelt UND die Praezision hoch genug ist. Bis dahin laeuft er nur im Schatten mit und beobachtet.">?</span></div>
+            <div class="card-title">Meta-Labeler (Beobachtungs-Modus)<span class="tip" data-tip="Zweite KI die im Hintergrund mitlernt: Sie schaut sich jeden Trade des Haupt-Bots an und merkt sich Muster wie 'wenn die Marktlage so-und-so ist, geht dieser Trade meistens auf'. Greift erst live ein, wenn sie ueber Wochen bewiesen hat dass sie zuverlaessig richtig liegt.">?</span></div>
             <div id="meta-status-badge" class="badge badge-blue" style="margin-bottom:12px;">--</div>
             <div class="grid-3">
                 <div>
-                    <div class="card-sub">Shadow-Trades<span class="tip" data-tip="Wie viele Signale der Meta-Labeler bisher im Schatten-Modus beobachtet hat. Je mehr, desto zuverlaessiger die Statistik.">?</span></div>
+                    <div class="card-sub">Beobachtete Trades<span class="tip" data-tip="Wie viele Trades die zweite KI bisher im Hintergrund beobachtet hat. Je mehr, desto verlaesslicher kann sie spaeter beurteilen ob ein neues Signal gut oder schlecht ist.">?</span></div>
                     <div class="card-value" style="font-size:18px" id="meta-shadow-count">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Precision<span class="tip" data-tip="Wenn der Meta-Labeler 'kauf!' sagt — wie oft lag er richtig? Muss ueber 65% sein, damit er live gehen darf.">?</span></div>
+                    <div class="card-sub">Treffer-Quote<span class="tip" data-tip="Wenn die zweite KI 'Kauf!' sagt — wie oft lag sie damit tatsaechlich richtig? Muss bei mindestens 65% liegen, bevor sie scharfgeschaltet wird.">?</span></div>
                     <div class="card-value" style="font-size:18px" id="meta-precision">--</div>
                 </div>
                 <div>
@@ -756,10 +749,10 @@
 
         <!-- Discovery Results -->
         <div class="card" id="discovery-results" style="display:none">
-            <div class="card-title">Discovery Ergebnisse<span class="tip" data-tip="Ergebnisse der letzten Suche nach neuen Assets auf eToro.">?</span></div>
+            <div class="card-title">Discovery Ergebnisse<span class="tip" data-tip="Ergebnisse der letzten automatischen Suche nach neuen handelbaren Wertpapieren. Der Bot durchsucht regelmaessig den Markt nach interessanten neuen Aktien/ETFs die er noch nicht kennt.">?</span></div>
             <div class="grid-3">
                 <div>
-                    <div class="card-sub">Neue gefunden<span class="tip" data-tip="Wie viele neue Assets der Bot auf eToro entdeckt hat, die er vorher nicht kannte.">?</span></div>
+                    <div class="card-sub">Neue gefunden<span class="tip" data-tip="Wie viele neue Wertpapiere der Bot beim letzten Suchlauf entdeckt hat, die er vorher noch nicht kannte.">?</span></div>
                     <div class="card-value" style="font-size:20px" id="disc-found">--</div>
                 </div>
                 <div>
@@ -800,13 +793,12 @@
                 <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-backtest-lastrun">--</div>
             </div>
             <div class="card" style="text-align:center">
-                <div class="card-title">ML-Modell trainieren<span class="tip" data-tip="Trainiert das Machine-Learning-'Hirn' des Bots neu mit aktuellen Daten. Es lernt aus historischen Kursen, welche Muster zu Gewinnen fuehrten. Laeuft automatisch jeden Samstag 06:00 CEST.">?</span></div>
-                <div class="card-sub">Gradient Boosting auf historischen Daten</div>
-                <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-train-ml" onclick="trainML()">Train ML Model</button>
+                <div class="card-title">ML-Modell Training<span class="tip" data-tip="Trainiert das Machine-Learning-'Hirn' des Bots neu mit aktuellen Daten. Es lernt aus historischen Kursen, welche Muster zu Gewinnen fuehrten. Laeuft automatisch jeden Samstag 06:00 CEST — kein manueller Trigger noetig.">?</span></div>
+                <div class="card-sub">Sa 06:00 CEST automatisch &middot; Gradient Boosting</div>
                 <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-ml-lastrun">--</div>
             </div>
             <div class="card" style="text-align:center">
-                <div class="card-title">Kelly Sweep<span class="tip" data-tip="Testet verschiedene Kelly-Fraktionen (0.01 bis 0.10) durch und zeigt welcher Wert die beste risiko-adjustierte Rendite bringt. Nutze das Ergebnis um kelly_sizing.max_fraction optimal einzustellen. Alle 4-8 Wochen manuell empfohlen.">?</span></div>
+                <div class="card-title">Kelly Sweep<span class="tip" data-tip="Testet automatisch verschiedene Werte fuer 'wie risikofreudig soll der Bot bei der Positionsgroesse sein' und zeigt welcher Wert die beste Balance zwischen Rendite und Risiko liefert. Empfohlen alle 4-8 Wochen einmal manuell laufen lassen, mit dem Ergebnis stellt der Bot sich selbst sauberer ein.">?</span></div>
                 <div class="card-sub">Optimale Positionsgroesse finden</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btn-run-kelly-sweep" onclick="runKellySweep()">Kelly Sweep starten</button>
                 <div class="card-sub" style="margin-top:6px;font-size:11px;color:var(--text-dim)" id="btn-kelly-lastrun">--</div>
@@ -876,7 +868,7 @@
 
         <!-- Kelly Sweep Results -->
         <div class="card" id="kelly-sweep-card" style="display:none">
-            <div class="card-title">Kelly Sweep Ergebnisse<span class="tip" data-tip="Vergleich verschiedener Kelly-Fraktionen: Wie viel Prozent des Kontos pro Trade riskiert wird. Hoehere Fraktion = mehr Rendite, aber auch mehr Drawdown. Die gruen markierte Zeile ist dein aktueller Wert.">?</span></div>
+            <div class="card-title">Kelly Sweep Ergebnisse<span class="tip" data-tip="Vergleich verschiedener Risiko-Stufen: Wie viel Prozent des Kontos der Bot pro Trade einsetzt. Hoeherer Wert = mehr Rendite-Chance, aber auch groessere Verluste in Pechstraehnen. Die gruen markierte Zeile ist der aktuell genutzte Wert.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead><tr><th>Kelly k</th><th>Return</th><th>Sharpe</th><th>Max DD</th></tr></thead>
@@ -946,10 +938,9 @@
 
         <!-- Optimizer Section -->
         <div class="card" style="border-color:var(--orange)">
-            <div class="card-title" style="color:var(--orange)">Self-Improvement Optimizer<span class="tip" data-tip="Der Selbst-Verbesserer: Laeuft jeden Sonntag automatisch und probiert hunderte Parameter-Kombinationen durch, um die beste Strategie fuer die aktuelle Marktlage zu finden. Aenderungen werden nur uebernommen wenn sie auch bei unbekannten Daten funktionieren.">?</span></div>
-            <div class="card-sub" style="margin-bottom:12px">Automatische Parameter-Optimierung (woechentlich Sonntag 05:00 CEST)</div>
-            <div class="grid-3">
-                <button class="btn btn-primary" id="btn-run-optimizer" onclick="runOptimizer()" style="background:var(--orange)">Optimizer starten</button>
+            <div class="card-title" style="color:var(--orange)">Self-Improvement Optimizer<span class="tip" data-tip="Der Selbst-Verbesserer: Laeuft jeden Sonntag automatisch und probiert hunderte Parameter-Kombinationen durch, um die beste Strategie fuer die aktuelle Marktlage zu finden. Aenderungen werden nur uebernommen wenn sie auch bei unbekannten Daten funktionieren — kein manueller Trigger noetig.">?</span></div>
+            <div class="card-sub" style="margin-bottom:12px">So 05:00 CEST automatisch &middot; Status laden + Rollback bleiben verfuegbar</div>
+            <div class="grid-2">
                 <button class="btn btn-secondary" onclick="loadOptimizer()">Status laden</button>
                 <button class="btn btn-danger" id="btn-rollback" onclick="rollbackOptimizer()">Rollback</button>
             </div>
@@ -1030,7 +1021,7 @@
                         <input type="number" id="cfg-rebalance" step="0.5" min="1" max="20">
                     </div>
                     <div class="form-group">
-                        <label>Default Leverage</label><span class="tip" data-tip="Hebel-Wert wird nur bei eToro-CFD-Trading angewendet. Bei IBKR (aktuell aktiv) wird das Feld IGNORIERT — IBKR steuert Margin/Leverage ueber das Account-Setup (Reg-T-Margin) selbst. Eintrag hier bleibt fuer eToro-Klone-Bots oder Migration zurueck zu eToro vorhanden.">?</span>
+                        <label>Default Leverage</label><span class="tip" data-tip="Standard-Hebel fuer neue Trades. Aktuell IGNORIERT — IBKR steuert Margin/Hebel automatisch ueber das Konto-Setup. Wert bleibt nur als historischer Default in der Config.">?</span>
                         <select id="cfg-leverage">
                             <option value="1">1x</option>
                             <option value="2">2x</option>
@@ -1081,12 +1072,8 @@
                 <div id="cost-model-notes" style="font-size:12px;opacity:0.75;margin-top:8px;line-height:1.5;"></div>
             </div>
 
-            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <button onclick="costModelCalibrate()" id="cost-model-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
-                        title="Liest die letzten 90 Tage trade_history.json, berechnet realisierte Slippage pro Asset-Klasse, schreibt cost_model_calibration.json. Runtime <1 Sek. Erstmal sinnvoll wenn 20+ Fills pro Klasse vorliegen — sonst graceful Fallback auf Defaults.">
-                    ▶ Calibrator jetzt starten
-                </button>
-                <span id="cost-model-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
+            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;font-size:12px;opacity:0.75;">
+                Calibrator laeuft automatisch jeden Sonntag 17:00 CEST. Manueller Trigger entfernt — Werte aktualisieren sich woechentlich von selbst.
             </div>
         </div>
 

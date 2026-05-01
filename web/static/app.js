@@ -964,6 +964,8 @@ async function loadReports() {
 }
 
 async function generateReport() {
+    // v37ci: Confirm gegen Mobile-Tap
+    if (!confirm('Weekly Report jetzt generieren + senden?\n\nLaeuft sonst automatisch jeden Freitag 20:00 CEST. Manueller Run schickt sofort eine neue Email/Notification.')) return;
     showToast('Report wird generiert...');
     try {
         const res = await apiFetch('/api/weekly-report/send', { method: 'POST' });
@@ -1003,6 +1005,8 @@ async function downloadReportPdf() {
 }
 
 async function runDiscovery() {
+    // v37ci: Confirm gegen Mobile-Tap
+    if (!confirm('Asset Discovery jetzt manuell starten?\n\nLaeuft sonst automatisch jeden Freitag 19:00 CEST. Manueller Run dauert 2-10 Min auf GitHub Actions, blockiert evtl. Auto-Run-Slot.')) return;
     showToast('Asset Discovery gestartet (laeuft auf GitHub Actions, ~2-10 Min)');
     try {
         const res = await apiFetch('/api/discovery/run', { method: 'POST' });
@@ -1263,6 +1267,8 @@ function renderMLModel(ml) {
 }
 
 async function runBacktest() {
+    // v37ci: Confirm gegen versehentlichen Mobile-Tap
+    if (!confirm('Backtest jetzt manuell starten?\n\nLaeuft sonst automatisch jeden Sonntag 08:00 CEST. Manueller Run dauert mehrere Minuten und blockiert ggf. naechsten Auto-Run-Slot.')) return;
     const btn = document.getElementById('btn-run-backtest');
     btn.disabled = true;
     btn.textContent = 'Backtest dispatching...';
@@ -1553,6 +1559,8 @@ function renderKellySweep(data) {
 }
 
 async function runKellySweep() {
+    // v37ci: Confirm — Kelly-Sweep ist Hard-Gate-relevant
+    if (!confirm('Kelly Sweep jetzt starten?\n\nDauert ca. 10-15 Min auf GitHub Actions. Berechnet die optimale Risiko-Stufe fuer Position-Sizing aus den letzten Trades. Empfohlen alle 4-8 Wochen.\n\nFortfahren?')) return;
     const btn = document.getElementById('btn-run-kelly-sweep');
     btn.disabled = true;
     btn.textContent = 'Sweep dispatching...';
@@ -2164,6 +2172,14 @@ async function withdrawalCreate() {
         alert('Bitte Zielbetrag und Deadline ausfuellen');
         return;
     }
+    // v37ci: Confirm-Dialog gegen versehentlichen Mobile-Tap
+    if (!confirm(
+        `Entnahme-Plan anlegen?\n\n` +
+        `Zielbetrag: ${amount.toLocaleString()} USD\n` +
+        `Deadline: ${deadline}\n` +
+        `${notes ? 'Notiz: ' + notes + '\n' : ''}` +
+        `\nDer Bot beginnt schrittweise Cash aufzubauen — ist umkehrbar via "Plan stornieren".`
+    )) return;
     try {
         const resp = await fetch('/api/withdrawal/plan', {
             method: 'POST',
@@ -2225,7 +2241,7 @@ async function universeReset() {
 }
 
 /**
- * Broker-Badge im Header — zeigt aktuellen Broker (eToro/IBKR), Modus
+ * Broker-Badge im Header — zeigt aktuellen Broker (IBKR), Modus
  * (Paper/Demo/Real) und Connection-Status (gruene LED = ok, gelb =
  * configured aber not connected, rot = error).
  */
