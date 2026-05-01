@@ -157,8 +157,13 @@ async def require_auth(request: Request):
 # HEALTH CHECK (kein Auth)
 # ============================================================
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
+    """v37ck: HEAD zusaetzlich akzeptiert. UptimeRobot pingt zuerst per
+    HEAD (effizienter als GET), bekam vorher 405 Method Not Allowed
+    -> Monitor zeigte DOWN trotz funktionierendem Service. Antwort-Body
+    ist bei HEAD-Requests automatisch leer (FastAPI/Starlette-Default).
+    """
     return {"status": "ok", "service": "investpilot"}
 
 
