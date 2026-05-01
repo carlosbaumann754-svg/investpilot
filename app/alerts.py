@@ -245,8 +245,11 @@ def send_alert(message, level="INFO", config=None):
         po_title = f"{prefix} InvestPilot"
         po_body = f"{message}\n{datetime.now():%d.%m.%Y %H:%M}"
         po_priority = _pushover_priority_for_level(level, config)
+        # v37cg: html=True damit <b>, <i> Tags gerendert werden statt als
+        # Literal-Text. Carlos sah heute morgen "<b>FEHLER</b> (Watchdog)"
+        # in Pushover-Notifications. Alle send_alert-Bodies enthalten HTML.
         sent = send_pushover(po_body, config, title=po_title,
-                             priority=po_priority) or sent
+                             priority=po_priority, html=True) or sent
 
     if sent:
         state = _load_alert_state()
