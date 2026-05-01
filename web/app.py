@@ -2206,7 +2206,13 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
                                 detail=f"Keine offene Position fuer {symbol_upper}")
 
         p = EtoroClient.parse_position(target_pos)
-        if p.get("invested", 0) <= 0:
+        # v37ch (01.05.): SHORT-Support. Vorher blockierte `invested <= 0`
+        # SHORT-Positionen (cost_basis = qty * avgCost, qty<0 -> invested<0).
+        # Carlos versuchte heute morgen ROKU SHORT zu schliessen -> Fehler
+        # 'bereits geschlossen oder leer'. Fix: nur bei abs(invested)==0
+        # blockieren (echte leere Position). close_position() handhabt SHORTs
+        # bereits korrekt (qty<0 -> action='BUY' = covering).
+        if abs(p.get("invested", 0)) == 0:
             raise HTTPException(status_code=409,
                                 detail=f"Position {symbol_upper} ist bereits "
                                        f"geschlossen oder leer")
@@ -2237,11 +2243,15 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
                                 detail=f"Close fuer {symbol_upper} fehlgeschlagen")
 
         # 3. Trade-History-Eintrag
+        # v37ch: action_type unterscheidet LONG-Sell vs SHORT-Cover fuer
+        # spaetere Analyse + Reconcile-Klarheit.
+        is_short = p.get("invested", 0) < 0
+        action_label = "MANUAL_COVER" if is_short else "MANUAL_SELL"
         try:
             from app.trader import save_trade, _attach_fill_prices
             trade_entry = {
                 "timestamp": _dt.now().isoformat(),
-                "action": "MANUAL_SELL",
+                "action": action_label,
                 "symbol": symbol_upper,
                 "instrument_id": p.get("instrument_id"),
                 "position_id": p["position_id"],
@@ -2249,7 +2259,8 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
                 "pnl_usd": p.get("pnl", 0),
                 "leverage": p.get("leverage", 1),
                 "user": username,
-                "reason": "manual-dashboard-sell",
+                "reason": "manual-dashboard-sell" if not is_short else "manual-dashboard-cover-short",
+                "position_side": "SHORT" if is_short else "LONG",
                 "status": "executed",
             }
             save_trade(_attach_fill_prices(trade_entry, result))
