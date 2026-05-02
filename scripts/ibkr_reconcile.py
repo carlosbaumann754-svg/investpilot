@@ -114,7 +114,7 @@ def get_ibkr_state(timeout: int = 15) -> dict:
     # reqExecutionsAsync, das bei vielen Fills laenger dauern kann.
     # Symptom war seit dem 02.05.: jeder Reconcile-Cron Error mit leerer
     # TimeoutError-Message).
-    broker = IbkrBroker({"ibkr": {"client_id": 99, "readonly": True, "timeout": 30}})
+    broker = IbkrBroker({"ibkr": {"client_id": 99, "readonly": True, "timeout": 60}})
     try:
         ib = broker._get_ib()
         positions = ib.positions()
