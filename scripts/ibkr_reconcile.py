@@ -108,8 +108,13 @@ def get_ibkr_state(timeout: int = 15) -> dict:
     der Connect mit der laufenden Bot-Session.
     """
     from app.ibkr_client import IbkrBroker
-    # Eigene clientId fuer Reconciliation, vermeidet Conflict mit Bot
-    broker = IbkrBroker({"ibkr": {"client_id": 99, "readonly": True}})
+    # Eigene clientId fuer Reconciliation, vermeidet Conflict mit Bot.
+    # v37cm (02.05.): timeout auf 30s erhoeht (Default 15s war zu eng bei
+    # busy IB-Gateway nach Trade-Tagen — connectAsync wartet intern auf
+    # reqExecutionsAsync, das bei vielen Fills laenger dauern kann.
+    # Symptom war seit dem 02.05.: jeder Reconcile-Cron Error mit leerer
+    # TimeoutError-Message).
+    broker = IbkrBroker({"ibkr": {"client_id": 99, "readonly": True, "timeout": 30}})
     try:
         ib = broker._get_ib()
         positions = ib.positions()
@@ -409,7 +414,10 @@ def main():
             missed_fill_lookback_hours=args.missed_fill_lookback_hours,
         )
     except Exception as e:
-        log.error("Reconciliation failed: %s", e)
+        # v37cm: repr() statt %s — bare Exceptions wie TimeoutError() haben
+        # leeren __str__, vorher loggte das 'Reconciliation failed: ' ohne
+        # Diagnose-Info. Jetzt sieht man den Exception-Type explizit.
+        log.error("Reconciliation failed: %r", e)
         return 2
 
     if args.json:
