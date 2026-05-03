@@ -4589,16 +4589,25 @@ async def api_cutover_readiness():
         last_run = kelly.get("timestamp") if isinstance(kelly, dict) else None
         if last_run:
             try:
-                age_days = (_dt.now(_tz.utc) - _dt.fromisoformat(last_run.replace("Z","+00:00"))).days
+                # v37cs (03.05.): Kelly-Sweep speichert Timestamp ohne TZ-Info
+                # ('2026-05-03T08:30:48.957429'). Vergleich mit tz-aware now()
+                # warf 'cant subtract offset-naive and offset-aware' Exception
+                # -> Fallback 'Datum unklar' obwohl Kelly heute morgen lief.
+                # Fix: parsed dt als UTC annehmen wenn keine TZ vorhanden.
+                parsed = _dt.fromisoformat(last_run.replace("Z","+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                age_days = (_dt.now(_tz.utc) - parsed).days
                 gates.append({
                     "nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
                     "status": "yellow" if age_days > 14 else "green",
                     "detail": f"Letzter Sweep: {age_days}d alt — fuer Cutover sollte er <14d sein",
                     "last_check": last_run,
                 })
-            except Exception:
+            except Exception as e:
                 gates.append({"nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
-                              "status": "yellow", "detail": "Letzter Sweep vorhanden, Datum unklar"})
+                              "status": "yellow",
+                              "detail": f"Letzter Sweep vorhanden, Parse-Fehler: {type(e).__name__}"})
         else:
             gates.append({
                 "nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
