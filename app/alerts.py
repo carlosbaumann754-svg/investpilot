@@ -499,8 +499,13 @@ def update_heartbeat():
     _save_alert_state(state)
 
 
-def check_watchdog(max_silence_minutes=15):
-    """Pruefe ob Bot noch aktiv ist. Gibt (alive, minutes_since_last) zurueck."""
+def check_watchdog(max_silence_minutes=20):
+    """Pruefe ob Bot noch aktiv ist. Gibt (alive, minutes_since_last) zurueck.
+
+    v37co (03.05.2026): Default 15 -> 20 Minuten. Mit v37co-Heartbeat-Fix
+    schreibt Scheduler bei jedem 5-Min-Tick (egal ob Trading oder Skip).
+    20 Min = 4 Cycles Toleranz fuer langsame Cycles oder Restart-Phasen.
+    """
     state = _load_alert_state()
     last = state.get("last_heartbeat")
 

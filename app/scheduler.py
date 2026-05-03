@@ -245,6 +245,18 @@ def scheduler_loop():
 
     while True:
         try:
+            # v37co (03.05.2026): Heartbeat IMMER schreiben — auch bei Skip-Cycles
+            # (Markt zu / Trading deaktiviert). Bot ist clearly alive wenn er den
+            # Cycle-Check macht. Vorher hat Watchdog am Wochenende falsch alarmiert
+            # ('Bot inaktiv seit 408 Min!') weil Heartbeat-Update nur in trader.py
+            # nach vollem Cycle passierte. Carlos bekam Sa+So Pushovers obwohl
+            # Bot gesund war.
+            try:
+                from app.alerts import update_heartbeat
+                update_heartbeat()
+            except Exception as e:
+                log.debug(f"Heartbeat-Update fehlgeschlagen (non-fatal): {e}")
+
             if not is_trading_enabled():
                 log.info(f"[{datetime.now():%H:%M}] Trading deaktiviert (Flag=false)")
                 time.sleep(INTERVAL_SECONDS)
