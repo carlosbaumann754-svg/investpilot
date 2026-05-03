@@ -4061,6 +4061,11 @@ async def api_v12_status(user=Depends(require_auth)):
                 "health_ok": uh_summary.get("ok"),
                 "health_bad": uh_bad,
             },
+            "scanner": {
+                # v37cp (03.05.): Aktueller min_scanner_score sichtbar im Dashboard.
+                # War vorher nur im Backtest-Tab als Optimizer-Param zu sehen.
+                "min_scanner_score": (config.get("scanner") or {}).get("min_scanner_score"),
+            },
             "kelly_sizing": {
                 "enabled": bool(kelly_cfg.get("enabled")),
                 "half_kelly": bool(kelly_cfg.get("half_kelly")),

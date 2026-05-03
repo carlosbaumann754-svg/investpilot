@@ -286,6 +286,10 @@
                     <span class="card-sub">Trailing SL<span class="tip" data-tip="Dynamischer Stop-Loss, der bei Gewinn mit dem Kurs mitwandert. Aktivierungs-% = ab welchem Gewinn er scharfgestellt wird, Trail-% = wie viel Abstand er zum Hoechstkurs haelt.">?</span></span>
                     <span id="v12-tsl-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
+                <div class="regime-detail-item">
+                    <span class="card-sub">Min Scanner-Score<span class="tip" data-tip="Mindest-Score den ein Wertpapier beim Scanner haben muss damit der Bot ueberhaupt einen Kauf in Erwaegung zieht. Hoeherer Wert = strenger Filter = weniger aber qualitativ bessere Trades. Wird vom WFO-Optimizer ermittelt und woechentlich revalidiert. Aktueller Wert = WFO-empfohlen.">?</span></span>
+                    <span id="v12-minscore-value" style="font-weight:700;font-size:14px;">--</span>
+                </div>
             </div>
             </details>
         </div>
@@ -352,12 +356,12 @@
                 <table style="width:100%;font-size:12px;border-collapse:collapse;">
                     <thead style="opacity:0.7;">
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
-                            <th style="text-align:left;padding:4px 4px;">Run</th>
-                            <th style="text-align:right;padding:4px 4px;">Universe</th>
-                            <th style="text-align:right;padding:4px 4px;">Alive</th>
-                            <th style="text-align:right;padding:4px 4px;">Dead</th>
-                            <th style="text-align:right;padding:4px 4px;">Bias</th>
-                            <th style="text-align:right;padding:4px 4px;">WFO-corr</th>
+                            <th style="text-align:left;padding:4px 4px;">Run<span class="tip" data-tip="Datum + Trigger des Audit-Laufs (cron-weekly = automatischer Sonntags-Lauf 13:00 UTC, manual = manuell ausgeloest).">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Universe<span class="tip" data-tip="Anzahl Wertpapiere im aktuellen Bot-Universum zum Audit-Zeitpunkt.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Alive<span class="tip" data-tip="Wie viele dieser Symbole heute noch handelbar sind (yfinance liefert Daten). Wenn eines stirbt -> Universe-Filter Auto-Disable.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Dead<span class="tip" data-tip="Symbole die delisted/insolvent sind. Sollte ueblicherweise 0 sein im aktuellen Universum (alle aktiv handelbar). Wenn >0 -> Symbol manuell aus disabled_symbols entfernen.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Bias<span class="tip" data-tip="Geschaetzte Sharpe-Reduktion durch Survivorship-Bias (Punktwert). 0.23 = WFO-Sharpe ist um ~0.23 zu optimistisch weil die historisch insolvenent Firmen in den Backtest-Daten fehlen. Niedriger = ehrlicher.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">WFO-corr<span class="tip" data-tip="WFO-Sharpe NACH Bias-Korrektur — der ehrliche, realistisch erwartbare Wert wenn man fuer die fehlenden insolventen Firmen korrigiert. Aktuell 4.56 = immer noch deutlich ueber Cutover-Hard-Gate von 2.0.">?</span></th>
                         </tr>
                     </thead>
                     <tbody id="surv-hist-tbody"></tbody>
@@ -395,11 +399,11 @@
                 <table style="width:100%;font-size:13px;border-collapse:collapse;">
                     <thead>
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
-                            <th style="text-align:left;padding:6px 4px;">Window</th>
-                            <th style="text-align:right;padding:6px 4px;">IS Sharpe</th>
-                            <th style="text-align:right;padding:6px 4px;">OOS Sharpe</th>
-                            <th style="text-align:right;padding:6px 4px;">Decay</th>
-                            <th style="text-align:right;padding:6px 4px;">OOS Trades</th>
+                            <th style="text-align:left;padding:6px 4px;">Window<span class="tip" data-tip="Zeit-Fenster im Backtest. Format: 'WX (Jahr-Monat)' = Test-Periode beginnt zu diesem Datum. Pro Window wurde der Bot 24 Monate vorher trainiert.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">IS Sharpe<span class="tip" data-tip="In-Sample Sharpe = wie gut der Bot auf den Trainings-Daten lief. Hoeher = besser, aber wenn IS deutlich groesser OOS dann hat der Bot 'auswendig gelernt' (Overfitting).">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">OOS Sharpe<span class="tip" data-tip="Out-of-Sample Sharpe = wie gut der Bot auf NEUEN, NIE-GESEHENEN Daten lief. Das ist die EHRLICHE Performance-Schaetzung. Cutover-Hard-Gate verlangt > 2.0.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">Decay<span class="tip" data-tip="OOS / IS Verhaeltnis in Prozent. 100%% = Strategie funktioniert genauso gut auf neuen Daten wie im Training. <50%% = starkes Overfitting, Strategie bricht im echten Leben ein.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">OOS Trades<span class="tip" data-tip="Anzahl Trades im OOS-Fenster (6 Monate Test-Periode). <30 Trades = Stichprobe zu klein, Sharpe-Schaetzung unsicher. >100 = solide Statistik.">?</span></th>
                         </tr>
                     </thead>
                     <tbody id="wfo-windows-tbody"></tbody>
@@ -422,11 +426,11 @@
                 <table style="width:100%;font-size:12px;border-collapse:collapse;">
                     <thead style="opacity:0.7;">
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
-                            <th style="text-align:left;padding:4px 4px;">Run</th>
-                            <th style="text-align:right;padding:4px 4px;">OOS-Sharpe</th>
-                            <th style="text-align:right;padding:4px 4px;">Decay</th>
-                            <th style="text-align:right;padding:4px 4px;">Stability</th>
-                            <th style="text-align:right;padding:4px 4px;">Trades</th>
+                            <th style="text-align:left;padding:4px 4px;">Run<span class="tip" data-tip="Datum + Trigger des WFO-Laufs (manual = manuell, monthly-cron = automatisch jeden ersten Sonntag).">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">OOS-Sharpe<span class="tip" data-tip="Mean OOS-Sharpe ueber alle Fenster — die ehrliche Performance-Schaetzung. Aktuell 4.80 = sehr stark, deutlich ueber Cutover-Hard-Gate von 2.0.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Decay<span class="tip" data-tip="Mean OOS / IS Verhaeltnis ueber alle Fenster. 90%% = sehr gut. <50%% = Overfitting-Alarm.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Stability<span class="tip" data-tip="Stabilitaet des OOS-Sharpe ueber alle Fenster (= Mean / Std). Hoeher = Strategie funktioniert konsistent. <1.0 = stark schwankend, einzelne Fenster brechen ein. >2.0 = sehr stabil.">?</span></th>
+                            <th style="text-align:right;padding:4px 4px;">Trades<span class="tip" data-tip="Mittlere Anzahl Trades pro OOS-Fenster. Indikator fuer Strategie-Aktivitaet. Sehr niedrig = Bot tradet kaum, sehr hoch = ueber-aktiv.">?</span></th>
                         </tr>
                     </thead>
                     <tbody id="wfo-hist-tbody"></tbody>

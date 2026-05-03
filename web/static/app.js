@@ -2473,6 +2473,10 @@ async function loadV12Status() {
         setTxt('v12-tsl-value', 'aus');
     }
 
+    // v37cp: Min Scanner-Score (aktueller WFO-empfohlener Wert)
+    const sc = data.scanner || {};
+    setTxt('v12-minscore-value', sc.min_scanner_score ?? '?');
+
     // Universe Health (aus dem gleichen Payload, ohne extra Call)
     renderUniverseHealth({
         timestamp: u.health_last_update,
