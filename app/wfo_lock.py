@@ -37,10 +37,16 @@ hoechster min_scanner_score = strenger).
 Locked Keys
 -----------
 - demo_trading.stop_loss_pct  (im Backtester benannt 'stop_loss_pct')
+- demo_trading.take_profit_pct (NEU v37ct)
 - scanner.min_scanner_score   (in der Live-Config aliased)
 
-take_profit_pct ist BEWUSST nicht gelockt — WFO-Range war 9-18 ueber 5
-Windows, also gibts keinen klaren Modus. User entscheidet manuell.
+v37ct (2026-05-03): take_profit_pct jetzt auch gelockt. Vorher BEWUSST
+ausgenommen mit Begruendung 'WFO-Range war 9-18, kein klarer Modus'.
+Aber: heutiger WFO-Run bestaetigt 60%% Konsens fuer TP=15 (3/5 Windows).
+Der Mode-basierte Lock-Mechanismus kann das auch handhaben.
+Live-Discovery: TP war 18.0 ohne Audit-Spur — vermutlich Initial-Default
+oder pre-v37r Optimizer-Override. Pre-Cutover-Aufraeum-Item.
+Picker 'min' = konservativ (frueher Gewinn sichern bei Tie).
 """
 
 from __future__ import annotations
@@ -57,6 +63,7 @@ logger = logging.getLogger(__name__)
 #:   "max" = hoechster Wert (strenger Filter = 50 schlaegt 40)
 LOCKED_KEYS = [
     ("stop_loss_pct", "demo_trading.stop_loss_pct", "max"),  # max: -3 > -5 (näher zu 0)
+    ("take_profit_pct", "demo_trading.take_profit_pct", "min"),  # v37ct: min = konservativ (frueher Gewinn-Lock)
     ("min_scanner_score", "scanner.min_scanner_score", "max"),
 ]
 

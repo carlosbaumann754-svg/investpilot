@@ -64,6 +64,30 @@ def test_locked_params_no_wfo_status(temp_data_dir):
     assert get_wfo_locked_params() == {}
 
 
+def test_locked_take_profit_majority(temp_data_dir):
+    """v37ct: Take-Profit jetzt auch gelockt — 3/5 TP=15 -> 15 gewinnt."""
+    from app.wfo_lock import get_wfo_locked_params
+    _write_wfo_status(temp_data_dir, [
+        {"best_params": {"take_profit_pct": 12}},
+        {"best_params": {"take_profit_pct": 9}},
+        {"best_params": {"take_profit_pct": 15}},
+        {"best_params": {"take_profit_pct": 15}},
+        {"best_params": {"take_profit_pct": 15}},
+    ])
+    assert get_wfo_locked_params()["take_profit_pct"] == 15
+
+
+def test_locked_take_profit_tie_min_picker(temp_data_dir):
+    """v37ct: TP-Lock nutzt 'min' picker (konservativ — frueher Gewinn-Lock)."""
+    from app.wfo_lock import get_wfo_locked_params
+    _write_wfo_status(temp_data_dir, [
+        {"best_params": {"take_profit_pct": 12}},
+        {"best_params": {"take_profit_pct": 18}},
+    ])
+    # Tie -> min(12, 18) = 12
+    assert get_wfo_locked_params()["take_profit_pct"] == 12
+
+
 def test_locked_params_empty_windows(temp_data_dir):
     """wfo_status mit leerem windows-Array -> leeres Dict."""
     from app.wfo_lock import get_wfo_locked_params
