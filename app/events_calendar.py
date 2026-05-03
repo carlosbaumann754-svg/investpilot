@@ -26,6 +26,13 @@ def _fetch_earnings_date(symbol):
     """Fetch next earnings date from yfinance for a single symbol.
 
     Returns datetime or None. Results are cached for 24h.
+
+    v37cr (03.05.): Asset-Class-Pre-Filter. ETFs, Crypto, Commodities,
+    Forex und Indices haben STRUKTURELL keine Earnings — yfinance
+    returnt fuer diese 404 'No fundamentals data', was als ERROR ins
+    Log floss (4x pro 5-Min-Cycle bei 4 ETFs = ~50 Errors/h fuer rein
+    erwartetes Verhalten). Loesung: Pre-Filter via ASSET_UNIVERSE.class —
+    wenn nicht 'stocks', silent skip + cache.
     """
     now = time.time()
 
@@ -34,6 +41,20 @@ def _fetch_earnings_date(symbol):
         entry = _earnings_cache[symbol]
         if now - entry["fetched_at"] < _CACHE_TTL_SECONDS:
             return entry["earnings_date"]
+
+    # v37cr: Pre-Filter — keine Earnings fuer Non-Stocks-Asset-Klassen.
+    # Spart yfinance-404-ERROR-Spam fuer ETFs/Crypto/Commodities/Forex/Indices.
+    try:
+        from app.market_scanner import ASSET_UNIVERSE
+        info = ASSET_UNIVERSE.get(symbol) or {}
+        asset_class = info.get("class")
+        if asset_class and asset_class != "stocks":
+            # Cache permanent (24h) — Asset-Class aendert sich nicht
+            _earnings_cache[symbol] = {"earnings_date": None, "fetched_at": now}
+            return None
+    except Exception:
+        # Falls Lookup fehlschlaegt: weitermachen wie vorher (yfinance probieren)
+        pass
 
     earnings_dt = None
 
