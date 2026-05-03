@@ -5146,9 +5146,12 @@ async def api_wfo_history():
             param_summary = last.get("param_summary") or {}
             cfg = load_config()
             # Map: Param-Name in WFO -> Pfad in Config
+            # v37cs (03.05.): Korrigiert — SL/TP liegen unter 'demo_trading',
+            # nicht 'risk_management' (war v37cq Annahme). Live-Verifikation
+            # ergab demo_trading.stop_loss_pct=-3.0, demo_trading.take_profit_pct=18.0.
             param_paths = {
-                "stop_loss_pct": ["risk_management", "stop_loss_pct"],
-                "take_profit_pct": ["risk_management", "take_profit_pct"],
+                "stop_loss_pct": ["demo_trading", "stop_loss_pct"],
+                "take_profit_pct": ["demo_trading", "take_profit_pct"],
                 "min_scanner_score": ["scanner", "min_scanner_score"],
             }
             for pname, freq_dict in param_summary.items():
