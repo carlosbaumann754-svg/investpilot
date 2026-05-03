@@ -5107,12 +5107,18 @@ async def api_insider_shadow(days: int = 14):
 
 @app.get("/api/wfo/history")
 async def api_wfo_history():
-    """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart."""
+    """WFO History — Time-Series der monatlichen Runs fuer Trend-Chart.
+
+    v37cq (03.05.): Erweitert um param_summary + Live-Vergleich. Zeigt
+    welche Parameter WFO empfohlen hat (Konsens ueber Windows) und ob
+    die aktuelle Live-Config damit uebereinstimmt.
+    """
     try:
-        from app.config_manager import load_json
+        from app.config_manager import load_json, load_config
         hist = load_json("wfo_history.json") or {"runs": []}
         runs = hist.get("runs") if isinstance(hist, dict) else []
-        # Nur die wichtigsten Felder + Timestamps fuer Chart
+
+        # Compact-View fuer Sharpe-Chart (war bisher schon hier)
         compact = [{
             "ts": r.get("timestamp", "")[:16],
             "trigger": r.get("trigger"),
@@ -5120,11 +5126,68 @@ async def api_wfo_history():
             "sharpe_decay_pct": r.get("sharpe_decay_pct"),
             "oos_stability_std": r.get("oos_stability_std"),
             "mean_oos_trades": r.get("mean_oos_trades"),
+            "param_summary": r.get("param_summary") or {},
         } for r in (runs or [])]
+
+        # v37cq: Aus dem letzten Run die "konsens-empfohlenen" Parameter
+        # extrahieren und gegen Live-Config vergleichen.
+        recommendations = []
+        if runs:
+            last = runs[-1] if isinstance(runs, list) else {}
+            param_summary = last.get("param_summary") or {}
+            cfg = load_config()
+            # Map: Param-Name in WFO -> Pfad in Config
+            param_paths = {
+                "stop_loss_pct": ["risk_management", "stop_loss_pct"],
+                "take_profit_pct": ["risk_management", "take_profit_pct"],
+                "min_scanner_score": ["scanner", "min_scanner_score"],
+            }
+            for pname, freq_dict in param_summary.items():
+                if not isinstance(freq_dict, dict) or not freq_dict:
+                    continue
+                # Konsens = haeufigster Wert ueber alle Windows
+                # freq_dict sieht aus: {"-3.0": 5, "-4.0": 0}
+                wfo_value = max(freq_dict.items(), key=lambda x: x[1])
+                wfo_recommended_str = wfo_value[0]
+                wfo_consensus_count = wfo_value[1]
+                total_windows = sum(freq_dict.values())
+
+                # Live-Wert holen
+                path = param_paths.get(pname)
+                live_value = None
+                if path:
+                    cur = cfg
+                    try:
+                        for p in path:
+                            cur = cur[p] if cur and p in cur else None
+                            if cur is None:
+                                break
+                        live_value = cur
+                    except Exception:
+                        live_value = None
+
+                # Type-tolerantes Match: float("-3.0") == -3.0 etc.
+                try:
+                    matches = float(wfo_recommended_str) == float(live_value)
+                except Exception:
+                    matches = str(wfo_recommended_str) == str(live_value)
+
+                recommendations.append({
+                    "parameter": pname,
+                    "wfo_recommended": wfo_recommended_str,
+                    "wfo_consensus": f"{wfo_consensus_count}/{total_windows}",
+                    "wfo_consensus_pct": round(wfo_consensus_count / max(total_windows, 1) * 100, 0),
+                    "live_value": live_value,
+                    "matches": bool(matches),
+                    "all_values": freq_dict,
+                })
+
         return {
             "runs_total": len(compact),
             "runs": compact,
             "updated_at": hist.get("updated_at") if isinstance(hist, dict) else None,
+            "recommendations": recommendations,
+            "last_run_ts": runs[-1].get("timestamp") if runs else None,
         }
     except Exception as e:
         return {"runs_total": 0, "runs": [], "error": str(e)}

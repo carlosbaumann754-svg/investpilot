@@ -416,6 +416,28 @@
                 </div>
             </div>
 
+            <!-- v37cq (03.05.): Empfohlene Parameter mit Live-Vergleich -->
+            <div id="wfo-recommendations-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
+                <div style="font-size:13px;opacity:0.85;margin-bottom:8px;">
+                    <strong>Empfohlene Parameter</strong> (vom letzten WFO-Run)<span class="tip" data-tip="Welche Parameter der WFO-Lauf als optimal ermittelt hat — basierend auf Konsens ueber alle 5 Test-Fenster. 'Live-Wert' zeigt was der Bot aktuell tatsaechlich nutzt. Match-Status (gruen/rot) zeigt ob beides uebereinstimmt. Bei Drift: Auto-Restore via WFO-Lock (v37r) korrigiert beim Bot-Start.">?</span>
+                </div>
+                <table style="width:100%;font-size:12px;border-collapse:collapse;">
+                    <thead style="opacity:0.7;">
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+                            <th style="text-align:left;padding:6px 4px;">Parameter<span class="tip" data-tip="Strategie-Parameter den WFO testet und empfehlen kann.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">WFO-Empfehlung<span class="tip" data-tip="Bester Wert basierend auf Mehrheits-Konsens ueber alle Test-Fenster.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">Konsens<span class="tip" data-tip="In wie vielen der Test-Fenster dieser Wert optimal war (z.B. 5/5 = einstimmig, 3/5 = Mehrheit). Hoeher = robuster.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">Live-Wert<span class="tip" data-tip="Was der Bot aktuell wirklich nutzt (aus config.json).">?</span></th>
+                            <th style="text-align:center;padding:6px 4px;">Match<span class="tip" data-tip="Stimmt Live-Wert mit WFO-Empfehlung ueberein? Bei NEIN: WFO-Lock korrigiert beim naechsten Bot-Start automatisch.">?</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="wfo-recommendations-tbody"></tbody>
+                </table>
+                <div style="font-size:11px;opacity:0.7;margin-top:8px;">
+                    Letzter WFO-Run: <span id="wfo-last-run-ts">--</span>
+                </div>
+            </div>
+
             <!-- HISTORY Time-Series Sparkline (v37ci: collapsible <details>) -->
             <details id="wfo-history-block" style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
                 <summary style="cursor:pointer;font-size:13px;opacity:0.85;margin-bottom:6px;">

@@ -2123,6 +2123,37 @@ async function loadWfoHistory() {
                     (r.mean_oos_trades != null ? Math.round(r.mean_oos_trades) : '--') + '</td>';
             tbody.appendChild(tr);
         });
+
+        // v37cq: Empfohlene Parameter mit Live-Vergleich rendern
+        const recsBlock = document.getElementById('wfo-recommendations-block');
+        const recsTbody = document.getElementById('wfo-recommendations-tbody');
+        const recs = d.recommendations || [];
+        if (recsBlock && recsTbody && recs.length > 0) {
+            recsBlock.style.display = 'block';
+            recsTbody.innerHTML = '';
+            const lastRunEl = document.getElementById('wfo-last-run-ts');
+            if (lastRunEl) lastRunEl.textContent = (d.last_run_ts || '?').replace('T', ' ').slice(0, 16);
+            recs.forEach(rec => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
+                const matchIcon = rec.matches ? '✅' : '❌';
+                const matchColor = rec.matches ? '#34d399' : '#f87171';
+                const consensusColor = (rec.wfo_consensus_pct >= 80) ? '#34d399'
+                    : (rec.wfo_consensus_pct >= 50 ? '#fbbf24' : '#f87171');
+                tr.innerHTML =
+                    '<td style="padding:6px 4px;font-family:monospace;font-size:11px;">' + rec.parameter + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;font-weight:600;">' + rec.wfo_recommended + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;color:' + consensusColor + ';">' +
+                        rec.wfo_consensus + ' (' + rec.wfo_consensus_pct + '%)</td>' +
+                    '<td style="text-align:right;padding:6px 4px;font-weight:600;">' +
+                        (rec.live_value != null ? rec.live_value : '?') + '</td>' +
+                    '<td style="text-align:center;padding:6px 4px;color:' + matchColor + ';font-size:14px;">' +
+                        matchIcon + '</td>';
+                recsTbody.appendChild(tr);
+            });
+        } else if (recsBlock) {
+            recsBlock.style.display = 'none';
+        }
     } catch (e) {
         console.warn('WFO history load failed:', e);
     }
