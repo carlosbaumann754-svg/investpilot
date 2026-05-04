@@ -532,7 +532,13 @@ def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
         return []
 
     if enabled_classes is None:
-        enabled_classes = ["stocks", "etf", "crypto", "commodities", "forex", "indices"]
+        # v37cv (04.05.2026): Default auf IBKR-handelbar reduziert.
+        # Crypto (Spot via Kraken in Q3), Forex (IDEALPRO-Notation noetig),
+        # Indices (nicht direkt handelbar, nur Futures/ETFs) sind explizit
+        # ausgeschlossen — sonst Symbol-Resolution-Errors bei Order-Submit.
+        # Commodities sind safe weil ibkr_override sie auf liquide ETFs
+        # routed (GLD/SLV/USO/UNG/CPER auf ARCA).
+        enabled_classes = ["stocks", "etf", "commodities"]
 
     # ML-Flag aus Config lesen wenn nicht explizit gesetzt
     if use_ml is None:

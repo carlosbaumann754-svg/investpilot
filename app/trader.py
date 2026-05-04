@@ -1974,8 +1974,11 @@ def run_trading_cycle():
                 or not scan_state.get("last_results")
                 or cache_too_old):
             log.info("\n--- Market Scan wird ausgefuehrt ---")
+            # v37cv (04.05.2026): Default-Asset-Klassen auf IBKR-handelbar reduziert.
+            # Vorher: alle 6 Klassen (Legacy aus eToro-Zeit). Crypto/Forex/Indices
+            # auf IBKR-Paper nicht direkt handelbar -> Order-Errors.
             enabled_classes = dt_config.get("enabled_asset_classes",
-                                            ["stocks", "etf", "crypto", "commodities", "forex", "indices"])
+                                            ["stocks", "etf", "commodities"])
             scan_results = scan_all_assets(enabled_classes=enabled_classes)
             scan_state["cycle_count"] = 0
             scan_state["last_results"] = scan_results
