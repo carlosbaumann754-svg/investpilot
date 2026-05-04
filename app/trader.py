@@ -97,6 +97,131 @@ def _is_already_closed(result) -> bool:
     return False
 
 
+# ============================================================
+# v37cu (04.05.2026): Anti-Loop-Idempotency-Schutz
+# ============================================================
+# CRITICAL-BUG-FIX nach Episode 04.05. mit BA + CPER:
+# Bot machte 19x SELL fuer BA und 55x SELL fuer CPER innerhalb eines Tages.
+# IBKR fillte ALLE Orders -> BA wurde von +238 LONG zu -1373 SHORT,
+# CPER von +1408 zu -21'120 SHORT. v37ce Stale-Filter griff nicht weil
+# sowohl ib.portfolio() als auch ib.positions() denselben stale-state
+# hatten (beide einig auf altem qty>0, Cross-Check fand keine Diskrepanz).
+#
+# Loesung: file-based Pending-Close-Tracker. Vor jedem close_position-Call
+# pruefen wir:
+#   1. Hat IB gerade eine open Trade-Order fuer diese Position? -> skip
+#   2. Haben wir in den letzten 60 Sek schon eine Close-Order rausgeschickt
+#      fuer diese Position? -> skip
+# Persistenz via data/pending_closes.json damit auch Cycle-uebergreifend
+# (alle 5 Min) funktioniert.
+
+_PENDING_CLOSE_COOLDOWN_SEC = 300  # 5 Min — eine ganze Cycle-Periode
+
+def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
+    """v37cu: Pre-Close-Check vor jeder close_position-Aufruf.
+
+    Returns:
+        (skip: bool, reason: str)
+        skip=True -> Bot soll close_position NICHT aufrufen.
+    """
+    if instrument_id is None:
+        return False, ""
+
+    # Check 1: persistent pending-close-tracker
+    try:
+        pending = load_json("pending_closes.json") or {}
+        key = str(instrument_id)
+        if key in pending:
+            last_ts = pending[key].get("submitted_at")
+            if last_ts:
+                from datetime import datetime as _dt2
+                try:
+                    last_dt = _dt2.fromisoformat(last_ts)
+                    age_sec = (_dt2.now() - last_dt).total_seconds()
+                    if age_sec < _PENDING_CLOSE_COOLDOWN_SEC:
+                        return True, (
+                            f"Anti-Loop: Close fuer {instrument_id} bereits "
+                            f"vor {age_sec:.0f}s submitted (Cooldown "
+                            f"{_PENDING_CLOSE_COOLDOWN_SEC}s)"
+                        )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Check 2: Live IB-Gateway Open-Trades (am verlaesslichsten)
+    try:
+        if hasattr(client, "_get_ib"):
+            ib = client._get_ib()
+            for t in (ib.openTrades() or []):
+                if not (t.contract and t.order and t.orderStatus):
+                    continue
+                con_id = getattr(t.contract, "conId", None)
+                if con_id and str(con_id) == str(instrument_id):
+                    status = t.orderStatus.status or ""
+                    if status in ("Submitted", "PreSubmitted",
+                                   "PendingSubmit", "PendingCancel"):
+                        return True, (
+                            f"Anti-Loop: Open Trade fuer {instrument_id} "
+                            f"bereits in Status '{status}' bei IBKR"
+                        )
+    except Exception:
+        # Wenn IB-Check fehlschlaegt: nicht skippen, Trader sollte trotzdem
+        # versuchen (Fallback auf normalen Pfad). Pending-Tracker oben
+        # ist primaerer Schutz.
+        pass
+
+    return False, ""
+
+
+def _track_pending_close(instrument_id, result):
+    """v37cu: Nach erfolgreicher close_position()-Aufruf das Submitted-
+    Timestamp persistieren. Cleanup von >24h alten Eintraegen."""
+    if instrument_id is None or not result:
+        return
+    if isinstance(result, dict) and result.get("_already_closed"):
+        return  # Schon geschlossen, kein neuer Submit
+    try:
+        from datetime import datetime as _dt3, timedelta as _td3
+        pending = load_json("pending_closes.json") or {}
+        key = str(instrument_id)
+        pending[key] = {
+            "submitted_at": _dt3.now().isoformat(),
+            "result_summary": str(result)[:200],
+        }
+        # Cleanup: Eintraege > 24h sind irrelevant
+        cutoff = _dt3.now() - _td3(hours=24)
+        pending = {
+            k: v for k, v in pending.items()
+            if _dt3.fromisoformat(v.get("submitted_at", "1900-01-01")) > cutoff
+        }
+        save_json("pending_closes.json", pending)
+    except Exception as e:
+        log.debug(f"Pending-Close-Track fehlgeschlagen (non-fatal): {e}")
+
+
+def _close_position_safe(client, position_id, instrument_id, action_name="CLOSE"):
+    """v37cu: Idempotency-safe Wrapper um client.close_position().
+
+    Prueft Anti-Loop-Schutz BEFORE submit, traked submitted-Order AFTER.
+    Returns gleiches wie close_position() oder {_skipped_idempotent: True, reason: ...}
+    bei Skip.
+    """
+    skip, reason = _check_close_idempotent(client, instrument_id)
+    if skip:
+        log.warning(f"  {action_name} SKIP fuer {instrument_id}: {reason}")
+        return {"_skipped_idempotent": True, "reason": reason}
+
+    result = client.close_position(position_id, instrument_id)
+    _track_pending_close(instrument_id, result)
+    return result
+
+
+def _is_skipped_idempotent(result) -> bool:
+    """v37cu: True wenn close_position vom Anti-Loop-Wrapper geskipped wurde."""
+    return isinstance(result, dict) and result.get("_skipped_idempotent") is True
+
+
 def _log_close_failure(action_name: str, p: dict, alerts_mod=None, extra: dict | None = None):
     """Protokolliere + persistiere eine fehlgeschlagene close_position()-Antwort.
 
@@ -545,9 +670,11 @@ def check_stop_loss_take_profit(client, config):
                         should_exit = False
                     if should_exit:
                         log.warning(f"  EARNINGS-EXIT: {sym} — {reason}")
-                        result = client.close_position(
-                            p["position_id"], p.get("instrument_id")
-                        )
+                        result = _close_position_safe(
+                            client, p["position_id"], p.get("instrument_id"),
+                            "EARNINGS-EXIT")
+                        if _is_skipped_idempotent(result):
+                            continue
                         if _is_already_closed(result):
                             log.info(f"  EARNINGS-EXIT skip {sym}: bei IBKR bereits "
                                      f"geschlossen (stale Bot-Cache)")
@@ -611,7 +738,9 @@ def check_stop_loss_take_profit(client, config):
                 "current_price": p["current_price"],
             }])
             if triggered:
-                result = client.close_position(p["position_id"], p["instrument_id"])
+                result = _close_position_safe(client, p["position_id"], p["instrument_id"], "TRAILING-SL")
+                if _is_skipped_idempotent(result):
+                    continue
                 if _is_already_closed(result):
                     log.info(f"  TRAILING-SL skip {p['instrument_id']}: bei IBKR bereits "
                              f"geschlossen (stale Bot-Cache)")
@@ -708,7 +837,9 @@ def check_stop_loss_take_profit(client, config):
                         if new_total >= 100:
                             log.info(f"  PROFIT_LOCK_CLOSE: Alle Tranchen erreicht "
                                      f"({new_total}%) — schliesse Position komplett")
-                            result = client.close_position(p["position_id"], p["instrument_id"])
+                            result = _close_position_safe(client, p["position_id"], p["instrument_id"], "PROFIT_LOCK")
+                            if _is_skipped_idempotent(result):
+                                continue
                             trade_status = "executed" if result else "failed"
                             if not result:
                                 log.warning(f"  PROFIT_LOCK_CLOSE FEHLGESCHLAGEN — "
@@ -757,7 +888,9 @@ def check_stop_loss_take_profit(client, config):
         if p["pnl_pct"] <= sl_pct:
             log.warning(f"  STOP-LOSS: Position {p['position_id']} "
                         f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
-            result = client.close_position(p["position_id"], p["instrument_id"])
+            result = _close_position_safe(client, p["position_id"], p["instrument_id"], "STOP-LOSS")
+            if _is_skipped_idempotent(result):
+                continue  # Anti-Loop-Skip, naechster Position pruefen
             if _is_already_closed(result):
                 log.info(f"  STOP-LOSS skip {p['instrument_id']}: bei IBKR bereits "
                          f"geschlossen (stale Bot-Cache)")
@@ -787,7 +920,9 @@ def check_stop_loss_take_profit(client, config):
             remaining_label = f" (Rest nach {closed_pct_total}% Partial Close)" if closed_pct_total > 0 else ""
             log.info(f"  TAKE-PROFIT: Position {p['position_id']} "
                      f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%{remaining_label}")
-            result = client.close_position(p["position_id"], p["instrument_id"])
+            result = _close_position_safe(client, p["position_id"], p["instrument_id"], "TAKE-PROFIT")
+            if _is_skipped_idempotent(result):
+                continue
             if _is_already_closed(result):
                 log.info(f"  TAKE-PROFIT skip {p['instrument_id']}: bei IBKR bereits "
                          f"geschlossen (stale Bot-Cache)")
@@ -1045,7 +1180,9 @@ def execute_scanner_trades(client, config, scan_results):
                          f"(Score={candidate['score']:+.1f}, {candidate['signal']})")
 
                 start_time = time.time()
-                result = client.close_position(p["position_id"], p["instrument_id"])
+                result = _close_position_safe(client, p["position_id"], p["instrument_id"], "SCANNER_SELL")
+                if _is_skipped_idempotent(result):
+                    continue
 
                 if _is_already_closed(result):
                     log.info(f"  SCANNER_SELL skip {candidate['symbol']}: bei IBKR "
@@ -1683,7 +1820,9 @@ def check_overnight_positions(client, config):
 
     closed = []
     for pos in to_close:
-        result = client.close_position(pos["position_id"], pos.get("instrument_id"))
+        result = _close_position_safe(client, pos["position_id"], pos.get("instrument_id"), "OVERNIGHT_CLOSE")
+        if _is_skipped_idempotent(result):
+            continue
         if _is_already_closed(result):
             log.info(f"  OVERNIGHT_CLOSE skip {pos.get('instrument_id')}: bei IBKR "
                      f"bereits geschlossen (stale Bot-Cache)")
