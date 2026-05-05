@@ -433,8 +433,11 @@ async function loadDashboard() {
                           </button>`
                         : '<span style="color:#666;font-size:11px;">--</span>';
                     const tr = document.createElement('tr');
+                    // v37cx: Alter-Spalte (age_days vom Backend, sonst trade_history-Lookup)
+                    const ageDays = pos.age_days != null ? pos.age_days.toFixed(1) + d : --;
                     tr.innerHTML = `
                         <td>${assetCell}</td>
+                        <td title="Tage seit Eroeffnung der Position">${ageDays}</td>
                         <td>${fmtUsd(pos.invested)}</td>
                         <td class="${pnlClass(pos.pnl)}">${fmtUsd(pos.pnl)}</td>
                         <td class="${pnlClass(pos.pnl_pct)}">${fmtPct(pos.pnl_pct)}</td>
@@ -699,7 +702,7 @@ async function loadBrain() {
         const scoreColor = s.score > 0 ? 'var(--green)' : 'var(--red)';
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td>#${iid}</td>
+            <td title="instrument_id=${iid}">${s.symbol || ("#" + iid)}</td>
             <td style="color:${scoreColor}; font-weight:700">${s.score}</td>
             <td>${fmtPct(s.avg_return_pct)}</td>
             <td>${s.consistency}%</td>
@@ -1806,6 +1809,7 @@ async function askQuestion() {
     loadSurvivorship();
     loadCostModelStatus();
     loadCutoverReadiness();
+    loadSelfTest();  // v37cx
     loadEarningsWatchlist();
 
     // Auto-refresh
@@ -1815,6 +1819,7 @@ async function askQuestion() {
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
     setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
+    setInterval(loadSelfTest, 600000); // Self-Test-Card alle 10 Min refresh
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
     setInterval(loadCutoverReadiness, 300000); // Cutover-Readiness alle 5 Min
@@ -2989,4 +2994,54 @@ async function costModelCalibrate() {
         if (btn) btn.disabled = false;
         setTimeout(() => { if (msg) msg.textContent = ''; }, 8000);
     }
+}
+
+
+// v37cx: Anti-Regression Self-Test Card
+async function loadSelfTest() {
+    try {
+        const r = await fetch("/api/selftest/history", { credentials: "include" });
+        const data = await r.json();
+        const last = (data.history || []).slice(-1)[0];
+        if (!last) {
+            document.getElementById("selftest-summary").textContent = "Noch keine Runs.";
+            return;
+        }
+        renderSelfTest(last);
+    } catch (e) {
+        document.getElementById("selftest-summary").textContent = "Fehler: " + e;
+    }
+}
+
+async function runSelfTest() {
+    document.getElementById("selftest-summary").textContent = "Pruefe…";
+    try {
+        const r = await fetch("/api/selftest", { credentials: "include" });
+        const suite = await r.json();
+        renderSelfTest(suite);
+    } catch (e) {
+        document.getElementById("selftest-summary").textContent = "Fehler: " + e;
+    }
+}
+
+function renderSelfTest(suite) {
+    const badge = document.getElementById("selftest-status-badge");
+    const badgeMap = { ok: "badge-green", warning: "badge-orange", critical: "badge-red" };
+    badge.className = "badge " + (badgeMap[suite.overall_status] || "badge-blue");
+    badge.textContent = (suite.overall_status || "unknown").toUpperCase();
+    document.getElementById("selftest-summary").innerHTML =
+        `<strong>${suite.passed}/${suite.total}</strong> bestanden, ${suite.failed} fehlgeschlagen.`;
+    const tbody = document.getElementById("selftest-results");
+    tbody.innerHTML = (suite.results || []).map(r => {
+        const sevColor = r.passed ? "var(--green)" : (r.severity === "critical" ? "var(--red)" : "var(--orange,orange)");
+        const ico = r.passed ? "OK" : "FAIL";
+        return `<tr>
+            <td title="${r.category || ""}">${r.name}</td>
+            <td style="color:${sevColor};font-weight:700">${ico}</td>
+            <td style="font-size:11px;white-space:normal;word-break:break-word;">${(r.detail || "").slice(0,140)}</td>
+        </tr>`;
+    }).join("");
+    const finished = suite.finished_at ? new Date(suite.finished_at).toLocaleString("de-CH") : "--";
+    document.getElementById("selftest-meta").textContent =
+        `Letzter Run: ${finished} · Dauer: ${suite.duration_ms}ms`;
 }

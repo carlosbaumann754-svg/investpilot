@@ -101,6 +101,26 @@
                         <div style="opacity:0.7;font-size:11px;">PUSHOVER ALERTS</div>
                         <div id="cutover-sub-pushover" style="font-weight:600;margin-top:2px;">--</div>
                     </div>
+        <!-- v37cx: Anti-Regression Self-Test Card -->
+        <div class="card" id="selftest-card" style="border-left:4px solid #10b981;">
+            <div class="card-title">
+                Self-Test (Anti-Regression)
+                <span class="tip" data-tip="Bot prueft sich selbst stuendlich auf 10 kritische Punkte: broker=ibkr, Trading-Flag-Persistenz, IB-Gateway erreichbar, Heartbeat frisch, keine eToro-Reste in Logs, kritische Files lesbar, etc. Bei NEUEM Fail kommt Pushover-Alert. Card zeigt aktuellen Stand."></span>
+                <button onclick="runSelfTest()" style="float:right;font-size:11px;padding:4px 10px;cursor:pointer;">Jetzt pruefen</button>
+            </div>
+            <div id="selftest-status-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
+            <div id="selftest-summary" class="card-sub" style="margin-bottom:8px;">Lade…</div>
+            <div class="table-wrap" style="max-height:280px;overflow-y:auto;">
+                <table>
+                    <thead>
+                        <tr><th>Test</th><th>Status</th><th>Detail</th></tr>
+                    </thead>
+                    <tbody id="selftest-results"></tbody>
+                </table>
+            </div>
+            <div id="selftest-meta" style="font-size:11px;color:var(--text-dim);margin-top:6px;">--</div>
+        </div>
+
                     <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
                         <div style="opacity:0.7;font-size:11px;">BACKUPS</div>
                         <div id="cutover-sub-backups" style="font-weight:600;margin-top:2px;">--</div>
@@ -611,7 +631,7 @@
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>ID</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th><th>Trail SL</th><th>Aktion</th></tr>
+                        <tr><th>Symbol</th><th>Alter</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th><th>Trail SL</th><th>Aktion</th></tr>
                     </thead>
                     <tbody id="positions-table"></tbody>
                 </table>
@@ -690,7 +710,7 @@
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>ID</th><th>Score</th><th>Avg %</th><th>Win %</th><th>Trend</th></tr>
+                        <tr><th>Symbol</th><th>Score</th><th>Avg %</th><th>Win %</th><th>Trend</th></tr>
                     </thead>
                     <tbody id="scores-table"></tbody>
                 </table>
@@ -1020,17 +1040,9 @@
     <div id="tab-settings" class="tab-content">
         <div class="card">
             <div class="card-title">Strategie<span class="tip" data-tip="Hier stellst du die Regeln ein, nach denen der Bot handelt. Du kannst eine fertige Vorlage waehlen oder alles selbst anpassen.">?</span></div>
-            <form id="settings-form" onsubmit="saveSettings(event)">
-                <div class="form-group">
-                    <label>Strategie-Vorlage</label><span class="tip" data-tip="Fertige Voreinstellungen: Aggressiv = kurze Trades mit Hebel, Ausgewogen = mittelfristiges Wachstum, Konservativ = ETFs langfristig halten. 'Eigene' = alles selbst einstellen.">?</span>
-                    <select id="cfg-strategy" onchange="onStrategyPreset(this.value)">
-                        <option value="aggressive_day_trade">Aggressiv (Day Trade)</option>
-                        <option value="balanced_growth">Ausgewogen (Growth)</option>
-                        <option value="conservative_etf">Konservativ (ETF)</option>
-                        <option value="custom">Eigene Strategie</option>
-                    </select>
-                </div>
-                <div id="strategy-desc" class="card-sub" style="margin:-4px 0 12px; font-size:12px"></div>
+                        <form id="settings-form" onsubmit="saveSettings(event)">
+                <!-- v37cx: Strategie-Wechsler entfernt. Bot bleibt fix auf der WFO-validierten
+                     Strategie. Andere Strategien werden in separate Bots ausgegliedert. -->
                 <div class="grid-2">
                     <div class="form-group">
                         <label>Stop-Loss (%)</label><span class="tip" data-tip="Die Notbremse: Wenn eine Position so viel ins Minus faellt, wird sie automatisch verkauft. Beispiel: -5% = verkauft, sobald der Kurs 5% unter dem Kaufpreis liegt. Schuetzt vor grossen Verlusten.">?</span>

@@ -29,7 +29,17 @@ class EtoroClient(BrokerBase):
         return "etoro"
 
 
-    def __init__(self, config):
+    def __init__(self, config, _v37cx_allow=False):
+        # v37cx (2026-05-05): eToro-Pfad seit Cutover-Migration deaktiviert.
+        # Carlos hat klar entschieden: Bot ist IBKR-only. Init blockt Live-Trading.
+        # parse_position()-Static-Method bleibt nutzbar (broker-agnostic Code).
+        if not _v37cx_allow:
+            raise RuntimeError(
+                "EtoroClient ist ab v37cx deaktiviert. Bot nutzt IBKR (broker=ibkr). "
+                "Falls absichtlich: EtoroClient(config, _v37cx_allow=True). "
+                "Dann auch app/broker_base.py:get_broker() Hinweis pruefen."
+            )
+        # Original-Init: 
         etoro = config.get("etoro", {})
         self.base_url = etoro.get("base_url", "https://public-api.etoro.com/api/v1")
         self.public_key = etoro.get("public_key", "")

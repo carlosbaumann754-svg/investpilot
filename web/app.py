@@ -690,6 +690,18 @@ async def api_portfolio(user=Depends(require_auth)):
         # Symbol/Name aus ASSET_UNIVERSE anreichern (Dashboard-freundlich)
         enrich_with_asset_meta(parsed)
 
+        # v37cx: Position-Alter berechnen (open_time -> age_days)
+        from app.trader import _find_position_open_time
+        for _pos in parsed:
+            try:
+                _, _age = _find_position_open_time(
+                    _pos.get("position_id"), _pos.get("open_time"))
+                if _age is not None:
+                    _pos["age_days"] = round(_age, 1)
+            except Exception:
+                _pos["age_days"] = None
+
+
         # v36g — Total-Value: bei IBKR den NetLiquidation-Wert aus dem
         # Brain-Snapshot bzw. _equity-Feld nehmen (= echtes Total-Equity).
         # Vorher hat credit + invested + pnl ueberrechnet weil credit bei
@@ -4525,6 +4537,31 @@ async def api_alerts_test_pushover(user=Depends(require_auth)):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+
+
+# v37cx: Self-Test API-Endpoint
+@app.get("/api/selftest")
+def api_selftest_run(_user=Depends(require_auth)):
+    """Triggert Self-Test-Suite, returnt Snapshot."""
+    from app.self_test import run_self_tests
+    suite = run_self_tests()
+    return suite.to_dict()
+
+
+@app.get("/api/selftest/history")
+def api_selftest_history(_user=Depends(require_auth)):
+    """Letzte Self-Test-Historie aus self_test_history.json."""
+    import json
+    from app.config_manager import get_data_path
+    path = get_data_path("self_test_history.json")
+    if not path.exists():
+        return {"history": []}
+    try:
+        history = json.loads(path.read_text() or "[]")
+        return {"history": history[-30:], "total": len(history)}
+    except Exception as e:
+        return {"error": str(e), "history": []}
 
 @app.get("/api/cutover/readiness")
 async def api_cutover_readiness():
