@@ -1443,6 +1443,19 @@ def execute_scanner_trades(client, config, scan_results):
                 asset_class = candidate["class"]
                 analysis = candidate.get("analysis", {})
 
+                # v37cw: Pre-Submit Market-Hours Guard pro Asset-Klasse.
+                # Verhindert Episode 05.05.2026 wo Bot um 04:03 UTC (=06:03 CEST,
+                # =00:03 ET, weit vor Pre-Market) AAPL+TSLA Limit-Orders submittete
+                # die ueber Nacht pending lagen → MISSED_FILL-Alerts.
+                try:
+                    from app.asset_classes import is_asset_class_tradeable as _is_tradeable
+                    if not _is_tradeable(asset_class):
+                        log.info(f"  SKIP {symbol}: Markt geschlossen fuer Klasse '{asset_class}' "
+                                 f"— SCANNER_BUY uebersprungen (kein Pre-/Post-Market-Trading)")
+                        continue
+                except Exception as _e:
+                    log.debug(f"Market-Hours-Pre-Check fuer {symbol} fehlgeschlagen (non-fatal): {_e}")
+
                 # Asset Filter Check
                 if af:
                     allowed, filter_reasons = af.apply_asset_filters(
