@@ -434,7 +434,7 @@ async function loadDashboard() {
                         : '<span style="color:#666;font-size:11px;">--</span>';
                     const tr = document.createElement('tr');
                     // v37cx: Alter-Spalte (age_days vom Backend, sonst trade_history-Lookup)
-                    const ageDays = pos.age_days != null ? pos.age_days.toFixed(1) + d : --;
+                    const ageDays = pos.age_days != null ? pos.age_days.toFixed(1) + 'd' : '--';
                     tr.innerHTML = `
                         <td>${assetCell}</td>
                         <td title="Tage seit Eroeffnung der Position">${ageDays}</td>
