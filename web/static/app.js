@@ -1739,60 +1739,6 @@ async function loadV15Sizing() {
 }
 
 // === ASK (Q&A Chat) ===
-async function askQuestion() {
-    const input = document.getElementById('ask-input');
-    const question = input.value.trim();
-    if (!question) return;
-
-    const btn = document.getElementById('ask-btn');
-    btn.disabled = true;
-    btn.textContent = 'Denke...';
-    input.disabled = true;
-
-    // Frage anzeigen
-    const history = document.getElementById('ask-history');
-    const qCard = document.createElement('div');
-    qCard.className = 'card';
-    qCard.style.borderLeft = '3px solid var(--blue)';
-    qCard.innerHTML = '<div class="card-sub" style="color:var(--blue);margin-bottom:4px;">Deine Frage</div>' +
-        '<div>' + question.replace(/</g, '&lt;') + '</div>';
-    history.appendChild(qCard);
-
-    input.value = '';
-
-    try {
-        const res = await apiFetch('/api/ask', {
-            method: 'POST',
-            body: JSON.stringify({ question }),
-        });
-
-        const data = await res.json();
-        const aCard = document.createElement('div');
-        aCard.className = 'card';
-        aCard.style.borderLeft = '3px solid var(--green)';
-
-        if (data.error) {
-            aCard.style.borderLeftColor = 'var(--red)';
-            aCard.innerHTML = '<div class="card-sub" style="color:var(--red);margin-bottom:4px;">Fehler</div>' +
-                '<div>' + data.error + '</div>';
-        } else {
-            const answer = (data.answer || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
-            const tokens = data.tokens_used ? ' (' + data.tokens_used + ' Tokens)' : '';
-            aCard.innerHTML = '<div class="card-sub" style="color:var(--green);margin-bottom:4px;">Antwort' + tokens + '</div>' +
-                '<div style="line-height:1.6;">' + answer + '</div>';
-        }
-        history.appendChild(aCard);
-        aCard.scrollIntoView({ behavior: 'smooth' });
-    } catch (e) {
-        showToast('Fehler: ' + e.message);
-    }
-
-    btn.disabled = false;
-    btn.textContent = 'Fragen';
-    input.disabled = false;
-    input.focus();
-}
-
 // === INIT ===
 (function init() {
     if (!getToken()) {

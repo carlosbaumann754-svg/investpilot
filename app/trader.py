@@ -313,8 +313,11 @@ def _find_position_open_time(position_id, api_open_time=None):
     if dt is None and position_id is not None:
         history = load_json("trade_history.json") or []
         for entry in history:
+            # v37cx: SCANNER_BUY ist der echte Bot-Action-Name (BUY/OPEN sind eToro-Legacy)
             if (str(entry.get("position_id")) == str(position_id)
-                    and entry.get("action") in ("BUY", "OPEN", "buy", "open")):
+                    and entry.get("action") in (
+                        "BUY", "OPEN", "buy", "open",
+                        "SCANNER_BUY", "MANUAL_BUY")):
                 dt = _parse(entry.get("timestamp"))
                 if dt is not None:
                     break
