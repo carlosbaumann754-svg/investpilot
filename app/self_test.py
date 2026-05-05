@@ -375,6 +375,45 @@ def tc_ibkr_session_watchdog() -> TestResult:
                           severity="warning", category="ibkr")
 
 
+
+
+def tc_discovery_freshness() -> TestResult:
+    """v37cz: Discovery soll innerhalb der letzten 14 Tage gelaufen sein."""
+    try:
+        f = _get_data_path("discovery_status.json")
+        if not f.exists():
+            return TestResult("discovery_freshness", True,
+                              "discovery_status.json fehlt — vermutlich noch kein Run",
+                              severity="info", category="scheduler")
+        data = json.loads(f.read_text() or "{}")
+        last = data.get("finished_at") or data.get("started_at")
+        if not last:
+            return TestResult("discovery_freshness", False,
+                              "discovery_status.json hat kein finished_at",
+                              severity="warning", category="scheduler")
+        from datetime import datetime, timezone
+        ts = last.replace("Z", "+00:00") if last.endswith("Z") else last
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400
+        # Discovery soll Freitags laufen, also max 9d (Toleranz fuer Verzoegerungen)
+        if days > 14:
+            return TestResult("discovery_freshness", False,
+                              f"Letzter Discovery-Run vor {days:.1f} Tagen (> 14d) — GH-Action defekt?",
+                              severity="warning", category="scheduler")
+        if days > 9:
+            return TestResult("discovery_freshness", True,
+                              f"Letzter Discovery-Run vor {days:.1f}d (>9d, leicht stale)",
+                              severity="info", category="scheduler")
+        return TestResult("discovery_freshness", True,
+                          f"Letzter Discovery-Run vor {days:.1f}d",
+                          severity="info", category="scheduler")
+    except Exception as e:
+        return TestResult("discovery_freshness", False, f"exception: {e!r}",
+                          severity="warning", category="scheduler")
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -387,6 +426,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_pending_closes_fresh,
     tc_no_etoro_in_logs,
     tc_ibkr_session_watchdog,
+    tc_discovery_freshness,
 ]
 
 

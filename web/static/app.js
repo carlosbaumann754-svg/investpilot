@@ -920,20 +920,42 @@ async function loadReports() {
         }
     } catch (e) { console.error('Report load:', e); }
 
-    // Lade Discovery Ergebnisse
+    // Lade Discovery Ergebnisse (v37cz: immer Freshness anzeigen, nicht nur bei new_found>0)
     try {
         const res = await apiFetch('/api/discovery');
         if (res) {
             const d = await res.json();
-            if (d.new_found > 0) {
-                document.getElementById('discovery-results').style.display = 'block';
-                document.getElementById('disc-found').textContent = d.new_found;
-                document.getElementById('disc-evaluated').textContent = d.evaluated;
-                document.getElementById('disc-added').textContent = d.added;
+            // Freshness-Header
+            let freshTxt = '';
+            if (d.last_run_at) {
+                const days = d.days_since_last_run;
+                let badge = '';
+                if (days != null) {
+                    if (days < 8) badge = '<span style="color:var(--green)">aktuell</span>';
+                    else if (days < 14) badge = '<span style="color:var(--orange,orange)">leicht stale</span>';
+                    else badge = '<span style="color:var(--red)">veraltet</span>';
+                }
+                const lastDate = new Date(d.last_run_at).toLocaleString('de-CH', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+                const nextDate = d.next_run_at ? new Date(d.next_run_at).toLocaleString('de-CH', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '--';
+                freshTxt = `Letzter Run: <strong>${lastDate}</strong> (vor ${days != null ? days + 'd' : '?'}) ${badge} · Naechster: ${nextDate} CEST`;
+            } else {
+                freshTxt = '<span style="color:var(--orange,orange)">Noch nie gelaufen</span>';
+            }
+            const fEl = document.getElementById('disc-freshness');
+            if (fEl) fEl.innerHTML = freshTxt;
 
-                const tbody = document.getElementById('disc-top-table');
-                tbody.innerHTML = '';
-                (d.top_10 || []).forEach(a => {
+            // Zahlen IMMER anzeigen (auch 0)
+            document.getElementById('disc-found').textContent = d.new_found ?? 0;
+            document.getElementById('disc-evaluated').textContent = d.evaluated ?? 0;
+            document.getElementById('disc-added').textContent = d.added ?? 0;
+
+            const tbody = document.getElementById('disc-top-table');
+            tbody.innerHTML = '';
+            const top = d.top_10 || [];
+            if (top.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-dim);font-style:italic;padding:12px;">Keine neuen Symbole gefunden im letzten Run</td></tr>';
+            } else {
+                top.forEach(a => {
                     const scoreColor = a.score >= 15 ? 'var(--green)' : a.score >= 0 ? 'var(--text)' : 'var(--red)';
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
