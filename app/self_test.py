@@ -341,6 +341,40 @@ def tc_no_etoro_in_logs() -> TestResult:
 # RUNNER
 # ============================================================
 
+
+
+def tc_ibkr_session_watchdog() -> TestResult:
+    """v37cy: Watchdog-State darf keine offenen Recovery-Probleme zeigen."""
+    try:
+        f = _get_data_path("ibkr_session_watchdog.json")
+        if not f.exists():
+            return TestResult("ibkr_session_watchdog", True,
+                              "State-File noch nicht initialisiert (erster Run kommt)",
+                              severity="info", category="ibkr")
+        data = json.loads(f.read_text() or "{}")
+        decision = data.get("last_decision", "")
+        recoveries = len(data.get("recovery_attempts", []))
+        consecutive_fails = data.get("consecutive_fails", 0)
+        if decision == "rate_limited":
+            return TestResult("ibkr_session_watchdog", False,
+                              f"Rate-Limit erreicht ({recoveries} Restarts/h) — manuell pruefen!",
+                              severity="critical", category="ibkr")
+        if decision in ("no_baseline", "stale_baseline"):
+            return TestResult("ibkr_session_watchdog", False,
+                              f"Watchdog kann nicht auto-recovern: {decision}",
+                              severity="warning", category="ibkr")
+        if consecutive_fails >= 1:
+            return TestResult("ibkr_session_watchdog", True,
+                              f"Aktuelle Fail-Streak: {consecutive_fails} (noch unter 2-Strikes-Threshold)",
+                              severity="warning", category="ibkr")
+        return TestResult("ibkr_session_watchdog", True,
+                          f"decision={decision}, recoveries letzte 60min={recoveries}",
+                          severity="info", category="ibkr")
+    except Exception as e:
+        return TestResult("ibkr_session_watchdog", False, f"exception: {e!r}",
+                          severity="warning", category="ibkr")
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -352,6 +386,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_health_endpoint,
     tc_pending_closes_fresh,
     tc_no_etoro_in_logs,
+    tc_ibkr_session_watchdog,
 ]
 
 
