@@ -2968,7 +2968,8 @@ async function costModelCalibrate() {
 // v37cx: Anti-Regression Self-Test Card
 async function loadSelfTest() {
     try {
-        const r = await fetch("/api/selftest/history", { credentials: "include" });
+        const r = await apiFetch("/api/selftest/history");
+        if (!r) return;
         const data = await r.json();
         const last = (data.history || []).slice(-1)[0];
         if (!last) {
@@ -2984,7 +2985,8 @@ async function loadSelfTest() {
 async function runSelfTest() {
     document.getElementById("selftest-summary").textContent = "Pruefe…";
     try {
-        const r = await fetch("/api/selftest", { credentials: "include" });
+        const r = await apiFetch("/api/selftest");
+        if (!r) return;
         const suite = await r.json();
         renderSelfTest(suite);
     } catch (e) {
