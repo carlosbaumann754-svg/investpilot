@@ -270,25 +270,36 @@ def reconcile(lookback_hours: int = 24,
     # v37w (Smart-Reconcile): zusaetzlich Initial-Positions-Whitelist beruecksichtigen
     # (Positionen die der Bot nicht selbst gekauft hat, sondern beim Account-Setup
     # uebernommen wurden — z.B. CPER, USO im DUP108015 Paper-Account).
+    # v37de (06.05.2026): Symbol-Translation Bot<->IBKR fuer Match. Bot loggt
+    # Universum-Names (SILVER, GOLD, OIL), IBKR liefert ETF-Tickers (SLV, GLD,
+    # USO) via ibkr_override. Beide Welten muessen matchen — bidirektional
+    # expandieren via expand_symbol_for_match (gibt Set aus Bot+IBKR Variants).
+    from app.market_scanner import expand_symbol_for_match
     BUY_LIKE_ACTIONS = {
         "BUY", "OPEN", "SCANNER_BUY",
         "buy", "open", "scanner_buy",
     }
-    bot_known_symbols = {
-        t.get("symbol")
-        for t in recent_bot
-        if t.get("action") in BUY_LIKE_ACTIONS
-        and t.get("status") not in ("close_failed", "skipped")
-    }
+    bot_known_symbols = set()
+    for t in recent_bot:
+        if (t.get("action") in BUY_LIKE_ACTIONS
+                and t.get("status") not in ("close_failed", "skipped")):
+            sym = t.get("symbol")
+            if sym:
+                bot_known_symbols.update(expand_symbol_for_match(sym))
 
     # v37w: Whitelist akzeptierter Initial-Positions laden
     accepted_phantoms = _load_accepted_phantoms()
+    # v37de: Phantom-Whitelist auch expandieren (User akzeptiert "SLV",
+    # bot soll auch "SILVER"-Match matchen)
+    accepted_phantoms_expanded = set()
+    for sym in accepted_phantoms:
+        accepted_phantoms_expanded.update(expand_symbol_for_match(sym))
 
     for pos in ibkr["positions"]:
         sym = pos["symbol"]
         if sym in bot_known_symbols:
-            continue  # Bot kennt die Position aus Lookback
-        if sym in accepted_phantoms:
+            continue  # Bot kennt die Position aus Lookback (mit Symbol-Translation)
+        if sym in accepted_phantoms_expanded:
             continue  # User hat als Initial-Position akzeptiert
         drifts.append({
             "type": "PHANTOM_POSITION",
@@ -306,20 +317,30 @@ def reconcile(lookback_hours: int = 24,
     # IBKR fillt aber erst Pre/Post-Market spaeter. Heute morgen 30.04. Beispiel:
     # ROKU SELL 09:10 -> IBKR-Fill 10:15 -> Reconcile 10:13 dazwischen meldete
     # MISSED_FILL false-positive.
-    ibkr_exec_symbols = {(e["symbol"], e["side"]) for e in ibkr["executions"]}
-    pending_symbols = {(o["symbol"], o["side"]) for o in ibkr.get("open_orders", [])
-                       if o.get("status") in ("Submitted", "PreSubmitted",
-                                              "PendingSubmit", "PendingCancel")}
+    # v37de: Match-Sets mit Symbol-Translation expandieren — IBKR-Ticker UND
+    # Bot-Symbol kommen beide ins Set, damit Bot-Log "SILVER" gegen IBKR-
+    # Execution "SLV" matched.
+    ibkr_exec_symbols = set()
+    for e in ibkr["executions"]:
+        for sym_variant in expand_symbol_for_match(e["symbol"]):
+            ibkr_exec_symbols.add((sym_variant, e["side"]))
+    pending_symbols = set()
+    for o in ibkr.get("open_orders", []):
+        if o.get("status") in ("Submitted", "PreSubmitted",
+                               "PendingSubmit", "PendingCancel"):
+            for sym_variant in expand_symbol_for_match(o["symbol"]):
+                pending_symbols.add((sym_variant, o["side"]))
     # v37db (06.05.2026): Cancelled + Rejected Orders sind KEIN MISSED_FILL.
     # Bug-Reproduktion 06.05.: Bot's SLV-Limit-Order (Pre-Market 13:10) wurde
     # von IBKR cancelled (Limit 70.75 nicht erreicht). Reconcile sah Bot-Log +
     # 0 Executions + nicht-mehr-pending -> meldete MISSED_FILL alle 30 Min.
     # Cry-Wolf-Risk gegen "Stille = OK"-Regel. Fix: cancelled/rejected hier
     # excluden (gleiche Approximation wie pending_symbols: Symbol+Side-Match).
-    cancelled_rejected_symbols = (
-        {(o["symbol"], o["side"]) for o in ibkr.get("cancelled_orders", [])}
-        | {(o["symbol"], o["side"]) for o in ibkr.get("rejected_orders", [])}
-    )
+    # v37de: auch cancelled/rejected mit Symbol-Translation expandieren
+    cancelled_rejected_symbols = set()
+    for o in ibkr.get("cancelled_orders", []) + ibkr.get("rejected_orders", []):
+        for sym_variant in expand_symbol_for_match(o["symbol"]):
+            cancelled_rejected_symbols.add((sym_variant, o["side"]))
     # v37cd: Bot-interne Logging-Actions die NIE eine IBKR-Execution haben.
     # Wenn diese als MISSED_FILL gemeldet werden -> False-Positive.
     NON_EXECUTION_ACTIONS = {
