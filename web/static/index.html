@@ -84,9 +84,14 @@
                 <span class="tip" data-tip="Zentraler Status fuer den Real-Money-Cutover am 28.05.2026. Zeigt alle 8 Hard-Gates (kritische Sicherheitspruefungen) plus die wichtigsten Sub-Systeme (Pushover-Alerts, Backups, Insider-Shadow-Tracker, Cost-Model-Calibrator). Gruen=bereit, Gelb=in Arbeit, Rot=offen + blockiert. Aktualisiert sich alle 5 Min automatisch.">?</span>
                 <span id="cutover-overall-badge" style="float:right;font-size:13px;padding:4px 10px;border-radius:12px;background:rgba(99,102,241,0.15);color:#a5b4fc;">--</span>
             </div>
-            <div id="cutover-headline" class="card-sub" style="margin-bottom:12px;font-size:14px;">
+            <div id="cutover-headline" class="card-sub" style="margin-bottom:6px;font-size:14px;">
                 Lade Status...
             </div>
+
+            <details id="cutover-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:10px;list-style:revert;">
+                Details (Hard-Gates + Sub-Systeme) — klicken zum Ausklappen
+            </summary>
 
             <!-- HARD-GATES Liste -->
             <div style="font-size:13px;opacity:0.85;margin-bottom:6px;"><strong>Hard-Gates</strong> (8 kritische Sicherheitspruefungen)</div>
@@ -114,6 +119,7 @@
                     </div>
                 </div>
             </div>
+            </details>
         </div>
 
 
@@ -126,6 +132,10 @@
             </div>
             <div id="selftest-status-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
             <div id="selftest-summary" class="card-sub" style="margin-bottom:8px;">Lade…</div>
+            <details id="selftest-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                Details (12 Tests) — klicken zum Ausklappen
+            </summary>
             <div class="table-wrap" style="max-height:280px;overflow-y:auto;">
                 <table>
                     <thead>
@@ -135,6 +145,7 @@
                 </table>
             </div>
             <div id="selftest-meta" style="font-size:11px;color:var(--text-dim);margin-top:6px;">--</div>
+            </details>
         </div>
 
         <div class="card">
