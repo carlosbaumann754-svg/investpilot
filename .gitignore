@@ -8,6 +8,7 @@ data/trade_history.json
 data/logs/
 data/audit.db
 .claude/
+.claude_sessions/
 briefings/
 brain_state.json
 trade_history.json
