@@ -87,6 +87,11 @@ def record_snapshot(portfolio):
         # v36e: symbol + entry_price + current_price mit in den Snapshot,
         # damit Dashboard nicht "#null" zeigen muss (vorher war nur conId/iid
         # gespeichert, was im Frontend unleserlich ist).
+        # v37dd (06.05.2026): position_id + open_time hinzugefuegt — Carlos hat
+        # 06.05. gesehen dass im Positionen-Tab "ALTER"-Spalte immer "--" zeigt.
+        # Root-Cause: parse_position liefert position_id+open_time, brain.py
+        # droppt sie beim Snapshot-Persist, web/app.py /api/portfolio liest aus
+        # Cache → _find_position_open_time(None, None) → age_days=None → "--".
         "positions": [{
             "instrument_id": p["instrument_id"],
             "symbol": p.get("symbol"),
@@ -96,6 +101,8 @@ def record_snapshot(portfolio):
             "leverage": p["leverage"],
             "entry_price": p.get("entry_price"),
             "current_price": p.get("current_price"),
+            "position_id": p.get("position_id"),  # v37dd: fuer Age-Lookup
+            "open_time": p.get("open_time"),       # v37dd: direkter Age-Marker
         } for p in parsed],
     }
 
