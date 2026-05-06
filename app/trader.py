@@ -313,8 +313,11 @@ def _find_position_open_time(position_id, api_open_time=None):
     if dt is None and position_id is not None:
         history = load_json("trade_history.json") or []
         for entry in history:
+            # v37cx: SCANNER_BUY ist der echte Bot-Action-Name (BUY/OPEN sind eToro-Legacy)
             if (str(entry.get("position_id")) == str(position_id)
-                    and entry.get("action") in ("BUY", "OPEN", "buy", "open")):
+                    and entry.get("action") in (
+                        "BUY", "OPEN", "buy", "open",
+                        "SCANNER_BUY", "MANUAL_BUY")):
                 dt = _parse(entry.get("timestamp"))
                 if dt is not None:
                     break
@@ -1442,6 +1445,19 @@ def execute_scanner_trades(client, config, scan_results):
                 symbol = candidate["symbol"]
                 asset_class = candidate["class"]
                 analysis = candidate.get("analysis", {})
+
+                # v37cw: Pre-Submit Market-Hours Guard pro Asset-Klasse.
+                # Verhindert Episode 05.05.2026 wo Bot um 04:03 UTC (=06:03 CEST,
+                # =00:03 ET, weit vor Pre-Market) AAPL+TSLA Limit-Orders submittete
+                # die ueber Nacht pending lagen → MISSED_FILL-Alerts.
+                try:
+                    from app.asset_classes import is_asset_class_tradeable as _is_tradeable
+                    if not _is_tradeable(asset_class):
+                        log.info(f"  SKIP {symbol}: Markt geschlossen fuer Klasse '{asset_class}' "
+                                 f"— SCANNER_BUY uebersprungen (kein Pre-/Post-Market-Trading)")
+                        continue
+                except Exception as _e:
+                    log.debug(f"Market-Hours-Pre-Check fuer {symbol} fehlgeschlagen (non-fatal): {_e}")
 
                 # Asset Filter Check
                 if af:

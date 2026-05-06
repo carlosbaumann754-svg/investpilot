@@ -690,6 +690,18 @@ async def api_portfolio(user=Depends(require_auth)):
         # Symbol/Name aus ASSET_UNIVERSE anreichern (Dashboard-freundlich)
         enrich_with_asset_meta(parsed)
 
+        # v37cx: Position-Alter berechnen (open_time -> age_days)
+        from app.trader import _find_position_open_time
+        for _pos in parsed:
+            try:
+                _, _age = _find_position_open_time(
+                    _pos.get("position_id"), _pos.get("open_time"))
+                if _age is not None:
+                    _pos["age_days"] = round(_age, 1)
+            except Exception:
+                _pos["age_days"] = None
+
+
         # v36g — Total-Value: bei IBKR den NetLiquidation-Wert aus dem
         # Brain-Snapshot bzw. _equity-Feld nehmen (= echtes Total-Equity).
         # Vorher hat credit + invested + pnl ueberrechnet weil credit bei
@@ -1908,17 +1920,78 @@ async def api_weekly_maintenance_preview(user=Depends(require_auth)):
 
 @app.get("/api/discovery")
 async def api_discovery(user=Depends(require_auth)):
-    """Letzte Asset Discovery Ergebnisse."""
+    """Letzte Asset Discovery Ergebnisse.
+
+    v37cz: status_json ist source-of-truth (frisch nach jedem Run),
+    result_json ist Detail-Fallback (wird nur bei new_found>0 ueberschrieben).
+    Returnt zusaetzlich freshness-info (last_run_at, days_since, next_run).
+    """
     try:
         from app.persistence import check_and_reload_discovery_output
         check_and_reload_discovery_output()
     except Exception as e:
         log.debug(f"check_and_reload_discovery_output skipped: {e}")
 
-    result = read_json_safe("discovery_result.json")
-    if result:
-        return result
-    return {"new_found": 0, "evaluated": 0, "added": 0, "message": "Noch keine Discovery gelaufen"}
+    status = read_json_safe("discovery_status.json") or {}
+    result = read_json_safe("discovery_result.json") or {}
+
+    # Source-of-truth fuer aktuelle Zahlen: status.result (vom letzten Run),
+    # fallback auf result.json wenn status.result fehlt (z.B. running-State).
+    status_result = status.get("result") or {}
+    new_found = status_result.get("new_found", result.get("new_found", 0))
+    evaluated = status_result.get("evaluated", result.get("evaluated", 0))
+    added = status_result.get("added", result.get("added", 0))
+
+    # Freshness-Info
+    last_run_at = status.get("finished_at") or status.get("started_at")
+    state = status.get("state", "unknown")
+
+    days_since_last_run = None
+    if last_run_at:
+        try:
+            from datetime import datetime, timezone
+            ts = last_run_at
+            if ts.endswith("Z"):
+                ts = ts.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            days_since_last_run = round((datetime.now(timezone.utc) - dt).total_seconds() / 86400, 1)
+        except Exception:
+            pass
+
+    # Next run: naechster Freitag 17:00 UTC = 19:00 CEST
+    next_run_at = None
+    try:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        # Friday = 4 in weekday()
+        days_until_fri = (4 - now.weekday()) % 7
+        if days_until_fri == 0 and now.hour >= 17:
+            days_until_fri = 7
+        next_friday = now.replace(hour=17, minute=0, second=0, microsecond=0) + timedelta(days=days_until_fri)
+        next_run_at = next_friday.isoformat()
+    except Exception:
+        pass
+
+    # added_assets / top_10 falls vorhanden
+    added_assets = result.get("added_assets", [])
+    top_10 = result.get("top_10", [])
+
+    return {
+        "new_found": new_found,
+        "evaluated": evaluated,
+        "added": added,
+        "added_assets": added_assets,
+        "top_10": top_10,
+        "last_run_at": last_run_at,
+        "days_since_last_run": days_since_last_run,
+        "next_run_at": next_run_at,
+        "state": state,
+        "summary": status.get("summary"),
+        # Backwards-compat: alte Frontend-Felder
+        "timestamp": last_run_at or result.get("timestamp"),
+    }
 
 
 def _trigger_github_action_discovery(username: str):
@@ -4525,6 +4598,31 @@ async def api_alerts_test_pushover(user=Depends(require_auth)):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+
+
+# v37cx: Self-Test API-Endpoint
+@app.get("/api/selftest")
+def api_selftest_run(_user=Depends(require_auth)):
+    """Triggert Self-Test-Suite, returnt Snapshot."""
+    from app.self_test import run_self_tests
+    suite = run_self_tests()
+    return suite.to_dict()
+
+
+@app.get("/api/selftest/history")
+def api_selftest_history(_user=Depends(require_auth)):
+    """Letzte Self-Test-Historie aus self_test_history.json."""
+    import json
+    from app.config_manager import get_data_path
+    path = get_data_path("self_test_history.json")
+    if not path.exists():
+        return {"history": []}
+    try:
+        history = json.loads(path.read_text() or "[]")
+        return {"history": history[-30:], "total": len(history)}
+    except Exception as e:
+        return {"error": str(e), "history": []}
 
 @app.get("/api/cutover/readiness")
 async def api_cutover_readiness():

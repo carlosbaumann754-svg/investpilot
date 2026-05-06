@@ -45,12 +45,21 @@ def write_json_safe(filename, data):
 
 
 def get_trading_status():
-    """Lese Trading-Status (enabled/disabled, letzter Lauf)."""
+    """Lese Trading-Status (enabled/disabled, letzter Lauf).
+
+    v37cw: Fail-CLOSED Default. Wenn Flag-File fehlt oder unleserlich ist,
+    behandeln wir Trading als DEAKTIVIERT (konservativ). Frueher: Default=True.
+    Verhinderte Episode 05.05.2026 wo Container-Rebuild die Flag verlor und
+    Bot ueber Nacht 6 unintended Limit-Orders submittete.
+    """
     flag_path = get_data_path("trading_enabled.flag")
-    enabled = True
-    if flag_path.exists():
-        content = flag_path.read_text().strip().lower()
-        enabled = content in ("true", "1", "")
+    enabled = False  # fail-closed
+    try:
+        if flag_path.exists():
+            content = flag_path.read_text().strip().lower()
+            enabled = content in ("true", "1")
+    except Exception:
+        enabled = False
 
     # Letzter Lauf aus brain_state
     brain = read_json_safe("brain_state.json")

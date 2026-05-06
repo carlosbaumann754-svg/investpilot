@@ -166,7 +166,19 @@ def get_broker(config: Optional[dict] = None, readonly: bool = False) -> BrokerB
         from app.config_manager import load_config
         config = load_config()
 
-    broker_name = (config.get("broker") or "etoro").lower().strip()
+    # v37cx (2026-05-05): Default geaendert von etoro auf ibkr.
+    # Carlos hat eToro-Konto seit Cutover-Plan deaktiviert. Fail-safe: bei
+    # fehlender Config -> IBKR (Paper) statt eToro. Verhindert dass eine
+    # versehentliche Config-Korruption den Bot zurueck zu eToro zwingt.
+    broker_name = (config.get("broker") or "ibkr").lower().strip()
+    if broker_name == "etoro":
+        log = __import__("logging").getLogger(__name__)
+        log.warning(
+            "BROKER=etoro angefordert — seit v37cx ist eToro-Pfad deprecated. "
+            "Carlos hat seit Cutover-Migration auf IBKR umgestellt. "
+            "Falls absichtlich: in config.json broker=etoro setzen "
+            "und v37cx-Block in app/broker_base.py kommentieren."
+        )
 
     if broker_name == "etoro":
         # Lazy-import to avoid circular dependencies

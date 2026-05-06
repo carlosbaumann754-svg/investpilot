@@ -94,20 +94,73 @@ def _dispatch_discovery_workflow(triggered_by: str = "scheduler-cron") -> bool:
 
 
 def is_trading_enabled():
-    """Pruefe ob Trading vom Dashboard aktiviert ist."""
-    # Wenn Flag-Datei nicht existiert, ist Trading standardmaessig AN
+    """Pruefe ob Trading vom Dashboard aktiviert ist.
+
+    v37cw: Fail-CLOSED. Wenn Flag-Datei FEHLT, ist Trading DEAKTIVIERT.
+    Frueher: Default=True bei fehlender Datei. Das fuehrte am 05.05.2026
+    nach einem Container-Rebuild dazu, dass der Bot ueber Nacht autonom
+    AAPL+TSLA-Orders submittete obwohl der User pausiert hatte.
+    """
     if not TRADING_FLAG.exists():
-        return True
+        log.warning("Trading-Flag-Datei fehlt — fail-closed: Trading PAUSIERT "
+                    "bis Flag-Datei mit 'true' angelegt wird.")
+        return False
     try:
         content = TRADING_FLAG.read_text().strip().lower()
         return content == "true" or content == "1"
     except Exception as e:
-        # Flag-Datei existiert aber ist nicht lesbar (Permission / korrupt).
-        # Konservativ: Trading aus lassen bis das behoben ist — sonst traden
-        # wir evtl. gegen den User-Willen wenn das Flag "false" gesetzt war.
-        log.error(f"Trading-Flag nicht lesbar ({e}) — safe default: Trading PAUSIERT "
-                  f"bis Flag-Datei repariert oder entfernt ist.", exc_info=True)
+        log.error(f"Trading-Flag nicht lesbar ({e}) — safe default: Trading PAUSIERT.",
+                  exc_info=True)
         return False
+
+
+def _ensure_trading_flag_initialized():
+    """Boot-Init: legt trading_enabled.flag mit 'false' an, falls nicht existiert.
+
+    v37cw. Verhindert Race wo der Watchdog/Web-UI eine fehlende Flag als
+    'true' interpretiert (alte data_access.py-Logik), waehrend der Scheduler
+    sie korrekt als 'false' liest. Mit Init sind beide konsistent.
+    """
+    try:
+        if not TRADING_FLAG.exists():
+            TRADING_FLAG.parent.mkdir(parents=True, exist_ok=True)
+            TRADING_FLAG.write_text("false")
+            log.warning(f"Trading-Flag initialisiert -> false (Default fail-closed): {TRADING_FLAG}")
+    except Exception as e:
+        log.error(f"Trading-Flag-Init fehlgeschlagen: {e}", exc_info=True)
+
+
+def cancel_all_pending_orders(reason: str = "trading_disabled") -> int:
+    """Cancel ALLE pending IBKR-Orders. Wird beim Trading-Off-Transition gerufen.
+
+    v37cw. Verhindert Episode 04.05.2026 wo gestern abend gesetzte
+    Limit-Orders ueber Nacht durch Pre-Market-Open trotzdem fillten obwohl
+    Trading-Flag inzwischen aus war.
+
+    Returns: Anzahl gecancelter Orders.
+    """
+    cancelled = 0
+    try:
+        from app.ibkr_client import IbkrBroker  # lazy import
+        broker = IbkrBroker()
+        ib = broker._get_ib()
+        open_trades = list(ib.openTrades())
+        if not open_trades:
+            log.info("cancel_all_pending: keine offenen IBKR-Trades")
+            return 0
+        log.warning(f"cancel_all_pending ({reason}): {len(open_trades)} offene Trades — cancelling…")
+        for t in open_trades:
+            try:
+                ib.cancelOrder(t.order)
+                cancelled += 1
+                log.warning(f"  cancelled: {t.contract.symbol} {t.order.action} "
+                            f"qty={t.order.totalQuantity} status={t.orderStatus.status}")
+            except Exception as e:
+                log.error(f"  cancel FAILED for {t.contract.symbol}: {e}")
+        ib.sleep(1.0)
+    except Exception as e:
+        log.error(f"cancel_all_pending unexpected error: {e}", exc_info=True)
+    return cancelled
 
 
 def is_us_stock_hours():
@@ -258,9 +311,22 @@ def scheduler_loop():
                 log.debug(f"Heartbeat-Update fehlgeschlagen (non-fatal): {e}")
 
             if not is_trading_enabled():
+                # v37cw: bei Trading-Off zusaetzlich offene IBKR-Orders cancellen.
+                # Verhindert dass gestern gesetzte Limit-Orders heute fillen.
+                # Guard: nur cancellen wenn vorher tatsaechlich an war (Transition),
+                # nicht in jedem 5min-Tick wenn Flag dauerhaft aus.
+                if globals().get('_TRADING_WAS_ENABLED', False):
+                    try:
+                        n = cancel_all_pending_orders(reason='trading_flag_off_transition')
+                        log.warning(f"Trading-Off-Transition: {n} pending Orders gecancelt.")
+                    except Exception as e:
+                        log.error(f"Cancel-on-Off-Transition fehlgeschlagen: {e}", exc_info=True)
+                    globals()['_TRADING_WAS_ENABLED'] = False
                 log.info(f"[{datetime.now():%H:%M}] Trading deaktiviert (Flag=false)")
                 time.sleep(INTERVAL_SECONDS)
                 continue
+            else:
+                globals()['_TRADING_WAS_ENABLED'] = True
 
             if not is_market_hours():
                 log.info(f"[{datetime.now():%H:%M}] Ausserhalb Markt-Oeffnungszeiten")
@@ -428,4 +494,5 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ]
     )
+    _ensure_trading_flag_initialized()  # v37cw boot-init
     scheduler_loop()

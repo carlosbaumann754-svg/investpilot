@@ -433,8 +433,11 @@ async function loadDashboard() {
                           </button>`
                         : '<span style="color:#666;font-size:11px;">--</span>';
                     const tr = document.createElement('tr');
+                    // v37cx: Alter-Spalte (age_days vom Backend, sonst trade_history-Lookup)
+                    const ageDays = pos.age_days != null ? pos.age_days.toFixed(1) + 'd' : '--';
                     tr.innerHTML = `
                         <td>${assetCell}</td>
+                        <td title="Tage seit Eroeffnung der Position">${ageDays}</td>
                         <td>${fmtUsd(pos.invested)}</td>
                         <td class="${pnlClass(pos.pnl)}">${fmtUsd(pos.pnl)}</td>
                         <td class="${pnlClass(pos.pnl_pct)}">${fmtPct(pos.pnl_pct)}</td>
@@ -699,7 +702,7 @@ async function loadBrain() {
         const scoreColor = s.score > 0 ? 'var(--green)' : 'var(--red)';
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td>#${iid}</td>
+            <td title="instrument_id=${iid}">${s.symbol || ("#" + iid)}</td>
             <td style="color:${scoreColor}; font-weight:700">${s.score}</td>
             <td>${fmtPct(s.avg_return_pct)}</td>
             <td>${s.consistency}%</td>
@@ -917,20 +920,42 @@ async function loadReports() {
         }
     } catch (e) { console.error('Report load:', e); }
 
-    // Lade Discovery Ergebnisse
+    // Lade Discovery Ergebnisse (v37cz: immer Freshness anzeigen, nicht nur bei new_found>0)
     try {
         const res = await apiFetch('/api/discovery');
         if (res) {
             const d = await res.json();
-            if (d.new_found > 0) {
-                document.getElementById('discovery-results').style.display = 'block';
-                document.getElementById('disc-found').textContent = d.new_found;
-                document.getElementById('disc-evaluated').textContent = d.evaluated;
-                document.getElementById('disc-added').textContent = d.added;
+            // Freshness-Header
+            let freshTxt = '';
+            if (d.last_run_at) {
+                const days = d.days_since_last_run;
+                let badge = '';
+                if (days != null) {
+                    if (days < 8) badge = '<span style="color:var(--green)">aktuell</span>';
+                    else if (days < 14) badge = '<span style="color:var(--orange,orange)">leicht stale</span>';
+                    else badge = '<span style="color:var(--red)">veraltet</span>';
+                }
+                const lastDate = new Date(d.last_run_at).toLocaleString('de-CH', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+                const nextDate = d.next_run_at ? new Date(d.next_run_at).toLocaleString('de-CH', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '--';
+                freshTxt = `Letzter Run: <strong>${lastDate}</strong> (vor ${days != null ? days + 'd' : '?'}) ${badge} · Naechster: ${nextDate} CEST`;
+            } else {
+                freshTxt = '<span style="color:var(--orange,orange)">Noch nie gelaufen</span>';
+            }
+            const fEl = document.getElementById('disc-freshness');
+            if (fEl) fEl.innerHTML = freshTxt;
 
-                const tbody = document.getElementById('disc-top-table');
-                tbody.innerHTML = '';
-                (d.top_10 || []).forEach(a => {
+            // Zahlen IMMER anzeigen (auch 0)
+            document.getElementById('disc-found').textContent = d.new_found ?? 0;
+            document.getElementById('disc-evaluated').textContent = d.evaluated ?? 0;
+            document.getElementById('disc-added').textContent = d.added ?? 0;
+
+            const tbody = document.getElementById('disc-top-table');
+            tbody.innerHTML = '';
+            const top = d.top_10 || [];
+            if (top.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-dim);font-style:italic;padding:12px;">Keine neuen Symbole gefunden im letzten Run</td></tr>';
+            } else {
+                top.forEach(a => {
                     const scoreColor = a.score >= 15 ? 'var(--green)' : a.score >= 0 ? 'var(--text)' : 'var(--red)';
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
@@ -1736,60 +1761,6 @@ async function loadV15Sizing() {
 }
 
 // === ASK (Q&A Chat) ===
-async function askQuestion() {
-    const input = document.getElementById('ask-input');
-    const question = input.value.trim();
-    if (!question) return;
-
-    const btn = document.getElementById('ask-btn');
-    btn.disabled = true;
-    btn.textContent = 'Denke...';
-    input.disabled = true;
-
-    // Frage anzeigen
-    const history = document.getElementById('ask-history');
-    const qCard = document.createElement('div');
-    qCard.className = 'card';
-    qCard.style.borderLeft = '3px solid var(--blue)';
-    qCard.innerHTML = '<div class="card-sub" style="color:var(--blue);margin-bottom:4px;">Deine Frage</div>' +
-        '<div>' + question.replace(/</g, '&lt;') + '</div>';
-    history.appendChild(qCard);
-
-    input.value = '';
-
-    try {
-        const res = await apiFetch('/api/ask', {
-            method: 'POST',
-            body: JSON.stringify({ question }),
-        });
-
-        const data = await res.json();
-        const aCard = document.createElement('div');
-        aCard.className = 'card';
-        aCard.style.borderLeft = '3px solid var(--green)';
-
-        if (data.error) {
-            aCard.style.borderLeftColor = 'var(--red)';
-            aCard.innerHTML = '<div class="card-sub" style="color:var(--red);margin-bottom:4px;">Fehler</div>' +
-                '<div>' + data.error + '</div>';
-        } else {
-            const answer = (data.answer || '').replace(/</g, '&lt;').replace(/\n/g, '<br>');
-            const tokens = data.tokens_used ? ' (' + data.tokens_used + ' Tokens)' : '';
-            aCard.innerHTML = '<div class="card-sub" style="color:var(--green);margin-bottom:4px;">Antwort' + tokens + '</div>' +
-                '<div style="line-height:1.6;">' + answer + '</div>';
-        }
-        history.appendChild(aCard);
-        aCard.scrollIntoView({ behavior: 'smooth' });
-    } catch (e) {
-        showToast('Fehler: ' + e.message);
-    }
-
-    btn.disabled = false;
-    btn.textContent = 'Fragen';
-    input.disabled = false;
-    input.focus();
-}
-
 // === INIT ===
 (function init() {
     if (!getToken()) {
@@ -1806,6 +1777,7 @@ async function askQuestion() {
     loadSurvivorship();
     loadCostModelStatus();
     loadCutoverReadiness();
+    loadSelfTest();  // v37cx
     loadEarningsWatchlist();
 
     // Auto-refresh
@@ -1815,6 +1787,7 @@ async function askQuestion() {
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
     setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
+    setInterval(loadSelfTest, 600000); // Self-Test-Card alle 10 Min refresh
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
     setInterval(loadCutoverReadiness, 300000); // Cutover-Readiness alle 5 Min
@@ -2989,4 +2962,56 @@ async function costModelCalibrate() {
         if (btn) btn.disabled = false;
         setTimeout(() => { if (msg) msg.textContent = ''; }, 8000);
     }
+}
+
+
+// v37cx: Anti-Regression Self-Test Card
+async function loadSelfTest() {
+    try {
+        const r = await apiFetch("/api/selftest/history");
+        if (!r) return;
+        const data = await r.json();
+        const last = (data.history || []).slice(-1)[0];
+        if (!last) {
+            document.getElementById("selftest-summary").textContent = "Noch keine Runs.";
+            return;
+        }
+        renderSelfTest(last);
+    } catch (e) {
+        document.getElementById("selftest-summary").textContent = "Fehler: " + e;
+    }
+}
+
+async function runSelfTest() {
+    document.getElementById("selftest-summary").textContent = "Pruefe…";
+    try {
+        const r = await apiFetch("/api/selftest");
+        if (!r) return;
+        const suite = await r.json();
+        renderSelfTest(suite);
+    } catch (e) {
+        document.getElementById("selftest-summary").textContent = "Fehler: " + e;
+    }
+}
+
+function renderSelfTest(suite) {
+    const badge = document.getElementById("selftest-status-badge");
+    const badgeMap = { ok: "badge-green", warning: "badge-orange", critical: "badge-red" };
+    badge.className = "badge " + (badgeMap[suite.overall_status] || "badge-blue");
+    badge.textContent = (suite.overall_status || "unknown").toUpperCase();
+    document.getElementById("selftest-summary").innerHTML =
+        `<strong>${suite.passed}/${suite.total}</strong> bestanden, ${suite.failed} fehlgeschlagen.`;
+    const tbody = document.getElementById("selftest-results");
+    tbody.innerHTML = (suite.results || []).map(r => {
+        const sevColor = r.passed ? "var(--green)" : (r.severity === "critical" ? "var(--red)" : "var(--orange,orange)");
+        const ico = r.passed ? "OK" : "FAIL";
+        return `<tr>
+            <td title="${r.category || ""}">${r.name}</td>
+            <td style="color:${sevColor};font-weight:700">${ico}</td>
+            <td style="font-size:11px;white-space:normal;word-break:break-word;">${(r.detail || "").slice(0,140)}</td>
+        </tr>`;
+    }).join("");
+    const finished = suite.finished_at ? new Date(suite.finished_at).toLocaleString("de-CH") : "--";
+    document.getElementById("selftest-meta").textContent =
+        `Letzter Run: ${finished} · Dauer: ${suite.duration_ms}ms`;
 }

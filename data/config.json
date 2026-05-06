@@ -11,11 +11,6 @@
     ],
     "seed_alignment_2026-04-20": "Seed stop_loss_pct von -2.5 auf -5 angeglichen (Live-Stand). Optimizer-Run 12.04. hat SL auf -5 angehoben (Grid-Search), Optimizer-Run 19.04. hat -5 mit OOS-Sharpe 7.14 / WinRate 58.5% / 359 OOS-Trades validiert als optimal. Seed war veraltet, Live war korrekt. Freeze bleibt fuer andere Keys wirksam."
   },
-  "etoro": {
-    "username": "carlosbaumann777",
-    "base_url": "https://public-api.etoro.com/api/v1",
-    "environment": "demo"
-  },
   "demo_trading": {
     "enabled": true,
     "strategy": "aggressive_day_trade",
@@ -25,20 +20,17 @@
     "max_single_trade_usd_hard_cap": null,
     "default_leverage": 2,
     "max_positions": 20,
-    "min_scanner_score": 40,
+    "min_scanner_score": 30,
     "scan_interval_cycles": 6,
     "enabled_asset_classes": [
       "stocks",
       "etf",
-      "crypto",
-      "commodities",
-      "forex",
-      "indices"
+      "commodities"
     ],
     "portfolio_targets": {},
-    "rebalance_threshold_pct": 2,
-    "stop_loss_pct": -5,
-    "take_profit_pct": 18,
+    "rebalance_threshold_pct": 2.0,
+    "stop_loss_pct": -3.0,
+    "take_profit_pct": 15,
     "use_ml_scoring": false
   },
   "leverage": {
@@ -74,34 +66,34 @@
   },
   "asset_class_params": {
     "stocks": {
-      "sl_pct": -3.0,
-      "tp_pct": 9.0,
-      "avg_volatility": 39.54
+      "sl_pct": -3.9,
+      "tp_pct": 7.8,
+      "avg_volatility": 40.94
     },
     "etf": {
-      "sl_pct": -2.0,
-      "tp_pct": 6.0,
-      "avg_volatility": 26.93
+      "sl_pct": -2.8,
+      "tp_pct": 5.6,
+      "avg_volatility": 29.68
     },
     "crypto": {
-      "sl_pct": -5.0,
-      "tp_pct": 15.0,
-      "avg_volatility": 61.93
+      "sl_pct": -4.1,
+      "tp_pct": 8.2,
+      "avg_volatility": 43.67
     },
     "commodities": {
-      "sl_pct": -6.0,
-      "tp_pct": 18.0,
-      "avg_volatility": 79.93
+      "sl_pct": -4.7,
+      "tp_pct": 9.4,
+      "avg_volatility": 49.93
     },
     "forex": {
-      "sl_pct": -1.5,
-      "tp_pct": 4.5,
-      "avg_volatility": 9.06
+      "sl_pct": -2,
+      "tp_pct": 4,
+      "avg_volatility": 8.28
     },
     "indices": {
-      "sl_pct": -1.5,
-      "tp_pct": 4.5,
-      "avg_volatility": 16.74
+      "sl_pct": -2,
+      "tp_pct": 4,
+      "avg_volatility": 18.19
     }
   },
   "risk_management": {
@@ -133,7 +125,7 @@
     "daily_loss_alert_percent": -2.0,
     "daily_gain_alert_percent": 5.0,
     "telegram": {
-      "enabled": true,
+      "enabled": false,
       "bot_token": "",
       "chat_id": "",
       "notify_trades": true,
@@ -142,6 +134,23 @@
       "notify_daily_summary": true,
       "notify_weekly_report": true,
       "notify_optimizer": true
+    },
+    "pushover": {
+      "enabled": true,
+      "user_key": "upmg4rxgdza2dukq6uravqx47snqth",
+      "api_token": "aonx9ba4dxvf5w2bp7zbrunj8d8vqk",
+      "priority_map": {
+        "INFO": 0,
+        "WARNING": 0,
+        "TRADE": 0,
+        "ERROR": 1,
+        "CRITICAL": 2
+      }
+    },
+    "fred": {
+      "api_key": "4dfff4f2b7e581a44ebd7e126e7a5c5e",
+      "enabled": false,
+      "_note": "Vorbereitung fuer E16 HMM-Regime-Detection (Q3 2026). API-Key registriert 2026-05-01, Free-Tier unlimited Calls fuer non-commercial Use."
     }
   },
   "market_indices": [
@@ -198,7 +207,8 @@
     "retrain_every_n_trades": 20,
     "backtest_min_score": 50,
     "backtest_max_volatility": 4.5,
-    "_backtest_comment": "Im Backtest approximiert: filtert Signal wenn score<min UND vola>max. Wird nur aktiv wenn shadow_mode=false."
+    "_backtest_comment": "Im Backtest approximiert: filtert Signal wenn score<min UND vola>max. Wird nur aktiv wenn shadow_mode=false.",
+    "auto_activate": false
   },
   "kelly_sizing": {
     "enabled": true,
@@ -294,7 +304,8 @@
     "insider_signal_enabled": true,
     "insider_min_score": -1,
     "insider_quality_filter": true,
-    "insider_detect_novelty": true
+    "insider_detect_novelty": true,
+    "min_scanner_score": 40
   },
   "broker": "ibkr",
   "ibkr": {
@@ -304,5 +315,57 @@
     "client_id": 1,
     "timeout": 15,
     "readonly": false
+  },
+  "_audit": {
+    "wfo_param_restores": [
+      {
+        "timestamp": "2026-04-29T14:38:43.477555+00:00",
+        "reason": "WFO-Werte (SL=-3.0, min_scanner_score=40) wurden offenbar zurueckgesetzt zwischen 28.04. und 30.04. \u2014 vermutlich von Optimizer/ML-Training-Auto-Run der Cloud-Backup zurueckspielte. Re-Apply manuell durch User-Catch.",
+        "changes": {
+          "stop_loss_pct": {
+            "from": -5,
+            "to": -3.0
+          },
+          "min_scanner_score": {
+            "from": null,
+            "to": 40
+          }
+        },
+        "wfo_source": "wfo_status.json (5/5 Windows konsistent)"
+      }
+    ],
+    "wfo_lock_enforcements": [
+      {
+        "timestamp": "2026-05-03T11:53:36.415878+00:00",
+        "changes": [
+          {
+            "param": "stop_loss_pct",
+            "path": "demo_trading.stop_loss_pct",
+            "old": -4.0,
+            "new": -3.0
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-05-03T17:04:21.690443+00:00",
+        "changes": [
+          {
+            "param": "take_profit_pct",
+            "path": "demo_trading.take_profit_pct",
+            "old": 18.0,
+            "new": 15
+          }
+        ]
+      }
+    ]
+  },
+  "_etoro_legacy_archived": {
+    "archived_at": "2026-05-05T19:30:00Z",
+    "reason": "v37cx: eToro-Pfad seit Cutover-Migration tot, sicheres Entfernen.",
+    "archived_keys": [
+      "username",
+      "base_url",
+      "environment"
+    ]
   }
 }
