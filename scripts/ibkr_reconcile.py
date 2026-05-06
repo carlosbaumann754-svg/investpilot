@@ -345,9 +345,15 @@ def reconcile(lookback_hours: int = 24,
             continue
         sym = t.get("symbol")
         if sym and (sym, ib_side) not in ibkr_exec_symbols:
-            # Akzeptabel falls Status=close_failed (already known)
+            # Akzeptabel falls Status bereits known als nicht-fill
+            # v37db (06.05.2026): "cancelled" + "rejected" hinzugefuegt — Bot-side
+            # Status-Update setzt diese, Reconcile soll dann nicht MISSED_FILL melden.
+            # Symbol-Mapping zwischen Bot-internal (z.B. "SILVER") und IBKR-Ticker
+            # ("SLV") macht ib.trades()-basierten Filter unzuverlaessig — der Bot's
+            # Status-Field ist der robustere Single-Source-of-Truth.
             if t.get("status") in ("close_failed", "skipped", "submitted",
-                                    "blocked", "failed"):
+                                    "blocked", "failed",
+                                    "cancelled", "rejected"):
                 continue
             # v37aa: Order pending bei IBKR? -> kein MISSED_FILL
             if (sym, ib_side) in pending_symbols:

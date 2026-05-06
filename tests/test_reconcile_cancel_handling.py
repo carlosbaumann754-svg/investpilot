@@ -178,6 +178,38 @@ def test_cancelled_and_rejected_combined():
     assert all(d["type"] != "MISSED_FILL" for d in result["drifts"])
 
 
+def test_bot_status_cancelled_filter():
+    """v37db Backup-Pfad: Bot's Status-Field auf 'cancelled' = Reconcile akzeptiert ohne MISSED_FILL.
+
+    Robusteste Variante weil Symbol-Mapping (Bot-internal 'SILVER' vs IBKR-Ticker 'SLV')
+    den ib.trades()-Filter unzuverlaessig macht. Bot-Status ist Single-Source-of-Truth.
+    """
+    from scripts.ibkr_reconcile import reconcile
+
+    bot_history = [make_bot_history_entry("SILVER", "SCANNER_BUY", minutes_ago=30, status="cancelled")]
+    ibkr = make_ibkr_state()  # IBKR sieht nichts — wuerde normalerweise MISSED_FILL ausloesen
+
+    with patch("scripts.ibkr_reconcile.load_bot_state", return_value=(bot_history, 1_000_000.0)), \
+         patch("scripts.ibkr_reconcile.get_ibkr_state", return_value=ibkr):
+        result = reconcile()
+
+    assert all(d["type"] != "MISSED_FILL" for d in result["drifts"]), \
+        "Bot-Status='cancelled' soll MISSED_FILL unterdruecken"
+
+
+def test_bot_status_rejected_filter():
+    from scripts.ibkr_reconcile import reconcile
+
+    bot_history = [make_bot_history_entry("AAPL", "SCANNER_BUY", minutes_ago=30, status="rejected")]
+    ibkr = make_ibkr_state()
+
+    with patch("scripts.ibkr_reconcile.load_bot_state", return_value=(bot_history, 1_000_000.0)), \
+         patch("scripts.ibkr_reconcile.get_ibkr_state", return_value=ibkr):
+        result = reconcile()
+
+    assert all(d["type"] != "MISSED_FILL" for d in result["drifts"])
+
+
 def test_partial_match_only_cancelled_side():
     """Side-Match muss exakt sein (BOT vs SLD)."""
     from scripts.ibkr_reconcile import reconcile
