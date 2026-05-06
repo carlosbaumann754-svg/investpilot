@@ -135,7 +135,10 @@ def get_ibkr_state(timeout: int = 15) -> dict:
         except Exception:
             pass
         open_orders = []
+        cancelled_orders = []  # v37db: Cancelled-Filter fuer MISSED_FILL
+        rejected_orders = []   # v37db: Rejected-Filter fuer MISSED_FILL
         try:
+            # ib.openTrades() = nur unfertige (Submitted, PreSubmitted, PendingSubmit, PendingCancel)
             for t in (ib.openTrades() or []):
                 if t.contract and t.order:
                     open_orders.append({
@@ -145,6 +148,29 @@ def get_ibkr_state(timeout: int = 15) -> dict:
                     })
         except Exception:
             pass
+        try:
+            # v37db (06.05.2026): ib.trades() = ALLE Session-Trades inkl. Cancelled/Rejected/Filled.
+            # Bug-Pattern davor: Bot schickt Limit-Order in Pre-Market, IBKR cancelled wenn
+            # Limit nicht erreicht, Bot's trade_history.json behaelt SCANNER_BUY-Eintrag.
+            # Reconcile-Cron sieht "Bot-Log + 0 Executions + nicht-mehr-pending" -> MISSED_FILL.
+            # Aber: cancelled != missed. Filter cancelled/rejected hier raus, damit kein
+            # False-Positive Pushover-Alert (Cry-Wolf gegen "Stille = OK"-Regel).
+            for t in (ib.trades() or []):
+                if not (t.contract and t.order and t.orderStatus):
+                    continue
+                status = t.orderStatus.status or ""
+                side = "BOT" if t.order.action == "BUY" else "SLD"
+                entry = {
+                    "symbol": t.contract.symbol,
+                    "side": side,
+                    "status": status,
+                }
+                if status in ("Cancelled", "ApiCancelled", "Inactive"):
+                    cancelled_orders.append(entry)
+                elif status == "Rejected":
+                    rejected_orders.append(entry)
+        except Exception as e:
+            log.debug(f"trades()-Sammlung fehlgeschlagen: {e}")
         cash = broker.get_available_cash() or 0.0
         equity = broker.get_equity() or 0.0
         return {
@@ -170,7 +196,9 @@ def get_ibkr_state(timeout: int = 15) -> dict:
             ],
             "cash": cash,
             "equity": equity,
-            "open_orders": open_orders,  # v37aa: fuer MISSED_FILL-Pending-Filter
+            "open_orders": open_orders,         # v37aa: fuer MISSED_FILL-Pending-Filter
+            "cancelled_orders": cancelled_orders,  # v37db: fuer MISSED_FILL-Cancelled-Filter
+            "rejected_orders": rejected_orders,    # v37db: fuer MISSED_FILL-Rejected-Filter
         }
     finally:
         broker.disconnect()
@@ -282,6 +310,16 @@ def reconcile(lookback_hours: int = 24,
     pending_symbols = {(o["symbol"], o["side"]) for o in ibkr.get("open_orders", [])
                        if o.get("status") in ("Submitted", "PreSubmitted",
                                               "PendingSubmit", "PendingCancel")}
+    # v37db (06.05.2026): Cancelled + Rejected Orders sind KEIN MISSED_FILL.
+    # Bug-Reproduktion 06.05.: Bot's SLV-Limit-Order (Pre-Market 13:10) wurde
+    # von IBKR cancelled (Limit 70.75 nicht erreicht). Reconcile sah Bot-Log +
+    # 0 Executions + nicht-mehr-pending -> meldete MISSED_FILL alle 30 Min.
+    # Cry-Wolf-Risk gegen "Stille = OK"-Regel. Fix: cancelled/rejected hier
+    # excluden (gleiche Approximation wie pending_symbols: Symbol+Side-Match).
+    cancelled_rejected_symbols = (
+        {(o["symbol"], o["side"]) for o in ibkr.get("cancelled_orders", [])}
+        | {(o["symbol"], o["side"]) for o in ibkr.get("rejected_orders", [])}
+    )
     # v37cd: Bot-interne Logging-Actions die NIE eine IBKR-Execution haben.
     # Wenn diese als MISSED_FILL gemeldet werden -> False-Positive.
     NON_EXECUTION_ACTIONS = {
@@ -313,6 +351,9 @@ def reconcile(lookback_hours: int = 24,
                 continue
             # v37aa: Order pending bei IBKR? -> kein MISSED_FILL
             if (sym, ib_side) in pending_symbols:
+                continue
+            # v37db: Order cancelled/rejected bei IBKR? -> kein MISSED_FILL
+            if (sym, ib_side) in cancelled_rejected_symbols:
                 continue
             drifts.append({
                 "type": "MISSED_FILL",
