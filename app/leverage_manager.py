@@ -90,7 +90,11 @@ def calculate_optimal_leverage(asset_class, symbol, volatility, signal_confidenc
     lev_cfg = config.get("leverage", {})
 
     max_lev = get_max_leverage(asset_class, symbol)
-    base_leverage = lev_cfg.get("default_leverage", 2)
+    # v37dc (06.05.2026): Default 2->1 angeglichen mit anderen default_leverage-
+    # Stellen (config_manager.py, trader.py, web/app.py = alle 1). Zudem ist
+    # IBKR-Realitaet 1x (siehe IbkrBroker.buy: leverage-Param wird ignoriert).
+    # Bot-side Konsistenz: intended-leverage = de-facto-leverage = 1x.
+    base_leverage = lev_cfg.get("default_leverage", 1)
 
     # Starte mit Basis-Hebel
     optimal = min(base_leverage, max_lev)

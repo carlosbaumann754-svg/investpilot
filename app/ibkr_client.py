@@ -736,19 +736,40 @@ class IbkrBroker(BrokerBase):
             stop_loss: % unter Entry-Price fuer Stop-Loss (0 = kein SL)
             take_profit: % ueber Entry-Price fuer Take-Profit (0 = kein TP)
         """
+        # v37dc (06.05.2026): Visibility-Fix. Bisher: warning + ignoriert silent
+        # weiter. Carlos hat 06.05. Inkonsistenz Trades-Tab(2x) vs Positionen-
+        # Tab(1x) entdeckt — Bot loggte intended-Leverage, IBKR-Realitaet war
+        # 1x. Result: Bot's Position-Sizing rechnete mit 2x Cash-Faktor, real
+        # 1x → Position 2x zu gross relativ zu Bot's Risk-Annahme.
+        # Fix: leverage explizit clampen + clearer warning. Plus Result-Dict
+        # bekommt 'leverage_actual: 1' damit trade_history.json korrekt loggt
+        # was der Bot WIRKLICH ausgefuehrt hat (Single-Source-of-Truth Reality).
         if leverage != 1:
-            log.warning("IbkrBroker.buy: leverage=%d ignoriert (Stock-Margin via IBKR-Account-Setup)",
-                        leverage)
-        return self._place_market_order(
+            log.warning(
+                "IbkrBroker.buy: intended leverage=%d wird auf 1x geclampt — "
+                "IBKR Stock-Trades nutzen Account-Margin, nicht Order-Param. "
+                "Position wird mit voller Cash-Belastung ausgefuehrt.",
+                leverage,
+            )
+        result = self._place_market_order(
             instrument_id, amount_usd, "BUY",
             stop_loss_pct=stop_loss, take_profit_pct=take_profit,
         )
+        if result is not None and isinstance(result, dict):
+            result["leverage_actual"] = 1  # v37dc: Reality-Marker
+        return result
 
     def sell(self, instrument_id, amount_usd, leverage=1):
         """Market-SELL by Amount USD (Short-Open)."""
         if leverage != 1:
-            log.warning("IbkrBroker.sell: leverage=%d ignoriert", leverage)
-        return self._place_market_order(instrument_id, amount_usd, "SELL")
+            log.warning(
+                "IbkrBroker.sell: intended leverage=%d wird auf 1x geclampt",
+                leverage,
+            )
+        result = self._place_market_order(instrument_id, amount_usd, "SELL")
+        if result is not None and isinstance(result, dict):
+            result["leverage_actual"] = 1
+        return result
 
     def close_position(self, position_id, instrument_id=None):
         """
