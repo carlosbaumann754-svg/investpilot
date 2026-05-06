@@ -777,19 +777,19 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     ts_min_days = ts_cfg.get("min_days_open", 2)
     ts_pnl_threshold = ts_cfg.get("stale_pnl_threshold_pct", 0.5)
 
-    # Age in days
+    # Age in days — v37dd: ueber _find_position_open_time mit Symbol-Fallback,
+    # damit Brain-Cache-Snapshots ohne open_time/position_id (alte Daten) auch
+    # ein age_days bekommen.
     age_days = None
-    if open_time:
-        try:
-            from datetime import datetime, timezone
-            # Normalize ISO format (eToro liefert manchmal mit Z, manchmal mit +00:00)
-            ts_clean = open_time.replace("Z", "+00:00") if isinstance(open_time, str) else None
-            if ts_clean:
-                dt = datetime.fromisoformat(ts_clean)
-                now = datetime.now(timezone.utc)
-                age_days = (now - dt).total_seconds() / 86400
-        except Exception:
-            age_days = None
+    try:
+        from app.trader import _find_position_open_time
+        _, age_days = _find_position_open_time(
+            position.get("position_id"),
+            open_time,
+            symbol=position.get("symbol"),
+        )
+    except Exception:
+        age_days = None
 
     triggers = []
 
