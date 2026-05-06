@@ -691,13 +691,16 @@ async def api_portfolio(user=Depends(require_auth)):
         enrich_with_asset_meta(parsed)
 
         # v37cx: Position-Alter berechnen (open_time -> age_days)
+        # v37dd: Symbol-Fallback fuer alte Brain-Cache-Snapshots (position_id=None)
         from app.trader import _find_position_open_time
         for _pos in parsed:
             try:
                 _, _age = _find_position_open_time(
-                    _pos.get("position_id"), _pos.get("open_time"))
-                if _age is not None:
-                    _pos["age_days"] = round(_age, 1)
+                    _pos.get("position_id"),
+                    _pos.get("open_time"),
+                    symbol=_pos.get("symbol"),
+                )
+                _pos["age_days"] = round(_age, 1) if _age is not None else None
             except Exception:
                 _pos["age_days"] = None
 

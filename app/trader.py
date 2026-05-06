@@ -271,12 +271,14 @@ def _log_close_failure(action_name: str, p: dict, alerts_mod=None, extra: dict |
             log.debug(f"Alert-Dispatch fehlgeschlagen: {e}")
 
 
-def _find_position_open_time(position_id, api_open_time=None):
+def _find_position_open_time(position_id, api_open_time=None, symbol=None):
     """Ermittle wie lange eine Position offen ist (in Tagen).
 
     Priority:
     1) api_open_time aus eToro API (wenn Feld vorhanden)
     2) trade_history.json Lookup nach position_id (erster BUY-Entry)
+    3) v37dd Fallback: trade_history.json Lookup nach symbol (letzter BUY)
+       fuer alte Brain-Cache-Snapshots ohne position_id
 
     Returns (open_datetime, age_days) oder (None, None) wenn unbekannt.
     """
@@ -321,6 +323,23 @@ def _find_position_open_time(position_id, api_open_time=None):
                 dt = _parse(entry.get("timestamp"))
                 if dt is not None:
                     break
+
+    # 3) v37dd Fallback: Symbol-basierter Lookup wenn position_id fehlt
+    # (z.B. brain_state-Snapshots vor v37dd droppten position_id beim Persist).
+    # Status-Filter: nur 'executed' (cancelled/rejected zaehlen nicht).
+    if dt is None and symbol:
+        history = load_json("trade_history.json") or []
+        latest_buy = None
+        for entry in history:
+            if (entry.get("symbol") == symbol
+                    and entry.get("action") in (
+                        "BUY", "OPEN", "buy", "open",
+                        "SCANNER_BUY", "MANUAL_BUY")
+                    and entry.get("status") in (None, "executed", "filled")):
+                ts = _parse(entry.get("timestamp"))
+                if ts is not None and (latest_buy is None or ts > latest_buy):
+                    latest_buy = ts
+        dt = latest_buy
 
     if dt is None:
         return None, None
@@ -773,7 +792,8 @@ def check_stop_loss_take_profit(client, config):
         # Schliesst Positionen die zu lange "stuck" sind und kaum P/L generieren.
         # Opportunitaetskosten-Schutz: gebundenes Kapital waere woanders besser.
         if ts_enabled:
-            _, age_days = _find_position_open_time(p["position_id"], p.get("open_time"))
+            _, age_days = _find_position_open_time(
+                p["position_id"], p.get("open_time"), symbol=p.get("symbol"))
             if age_days is not None and age_days >= ts_max_days \
                     and age_days >= ts_min_days \
                     and abs(p["pnl_pct"]) < ts_stale_thr:
