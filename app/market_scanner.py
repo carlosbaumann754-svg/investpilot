@@ -127,6 +127,80 @@ ASSET_UNIVERSE = {
 
 
 # ============================================================
+# SYMBOL-MAPPING — Bot-internal <-> IBKR-Ticker (v37de)
+# ============================================================
+# Bot's Universum nutzt eigene Symbol-Names (z.B. SILVER, GOLD, OIL).
+# IBKR-API nutzt ETF-Tickers (SLV, GLD, USO) via `ibkr_override`-Feld
+# in ASSET_UNIVERSE. Reconcile-Code, Position-Tracking und Trade-History
+# muessen zwischen beiden Welten transparent uebersetzen.
+#
+# Hintergrund: 06.05.2026 Pushover-Spam SLV PHANTOM_POSITION/MISSED_FILL
+# weil Bot-Log "SILVER" nicht mit IBKR-Position "SLV" matched. CRIT-
+# Cutover-Blocker behoben mit dieser zentralen Translation-Layer.
+
+def bot_symbol_to_ibkr_ticker(bot_symbol: str) -> str:
+    """Bot-internal Symbol -> IBKR-Ticker (z.B. SILVER -> SLV).
+
+    Wenn kein ibkr_override existiert: returnt Bot-Symbol unveraendert
+    (z.B. AAPL, TSLA — gleiche Sprache fuer Stocks/ETFs).
+    """
+    if not bot_symbol:
+        return bot_symbol
+    info = ASSET_UNIVERSE.get(bot_symbol)
+    if info:
+        override = info.get("ibkr_override") or {}
+        if override.get("symbol"):
+            return override["symbol"]
+    return bot_symbol
+
+
+def ibkr_ticker_to_bot_symbol(ibkr_ticker: str) -> str:
+    """IBKR-Ticker -> Bot-internal Symbol (z.B. SLV -> SILVER).
+
+    Reverse-Lookup ueber ibkr_override-Map. Wenn IBKR-Ticker = Bot-Symbol
+    (z.B. AAPL): returnt unveraendert.
+
+    Bei mehreren Bot-Symbols die auf gleichen IBKR-Ticker zeigen (sollte
+    nicht vorkommen): nimmt ersten Match.
+    """
+    if not ibkr_ticker:
+        return ibkr_ticker
+    # Erst direkter Match (Bot-Symbol = IBKR-Ticker)
+    if ibkr_ticker in ASSET_UNIVERSE:
+        return ibkr_ticker
+    # Reverse-Lookup ueber ibkr_override
+    for bot_sym, info in ASSET_UNIVERSE.items():
+        override = info.get("ibkr_override") or {}
+        if override.get("symbol") == ibkr_ticker:
+            return bot_sym
+    return ibkr_ticker  # Fallback: unmodifiziert
+
+
+def expand_symbol_for_match(symbol: str) -> set[str]:
+    """Liefert ALLE Symbol-Variants fuer Match-Sets (Bot + IBKR).
+
+    Beispiele:
+      'SILVER' -> {'SILVER', 'SLV'}     (SILVER hat ibkr_override.symbol=SLV)
+      'SLV'    -> {'SILVER', 'SLV'}     (Reverse: jemand zeigt mit Override hin)
+      'AAPL'   -> {'AAPL'}              (kein Override, kein Reverse)
+
+    Wird im Reconcile-Code genutzt um beide Symbol-Welten gleichzeitig
+    zu matchen (statt zu raten welche Seite die "richtige" ist).
+    """
+    if not symbol:
+        return set()
+    s = {symbol}
+    # Vorwaerts: wenn `symbol` ein Bot-Universum-Name mit ibkr_override ist
+    s.add(bot_symbol_to_ibkr_ticker(symbol))
+    # Rueckwaerts: alle Bot-Symbols deren ibkr_override auf `symbol` zeigt
+    for bot_sym, info in ASSET_UNIVERSE.items():
+        override = info.get("ibkr_override") or {}
+        if override.get("symbol") == symbol:
+            s.add(bot_sym)
+    return s
+
+
+# ============================================================
 # TECHNISCHE ANALYSE
 # ============================================================
 
