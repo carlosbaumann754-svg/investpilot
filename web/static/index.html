@@ -64,6 +64,7 @@
 <div class="tabs">
     <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab" onclick="switchTab('trades')">Trades</button>
+    <button class="tab" onclick="switchTab('order-audit')">Order-Status</button>
     <button class="tab" onclick="switchTab('brain')">Brain</button>
     <button class="tab" onclick="switchTab('reports')">Reports</button>
     <button class="tab" onclick="switchTab('backtest')">Backtest</button>
@@ -686,6 +687,60 @@
                 </table>
             </div>
             <button class="btn btn-primary" style="margin-top:12px" onclick="loadMoreTrades()">Mehr laden</button>
+        </div>
+    </div>
+
+    <!-- === ORDER-AUDIT TAB (v37e Tag 6) === -->
+    <div id="tab-order-audit" class="tab-content">
+        <div class="card">
+            <div class="card-title">Pending Orders (Live)<span class="tip" data-tip="Orders die der Bot an IBKR geschickt hat und die noch nicht final sind. Aelteste oben (laengste Wartezeit). Wenn eine Order >48h hier steht ohne IBKR-Match, wird sie automatisch als 'stale' markiert + Pushover-Alert. Normalfall: Liste leer oder sehr kurz (Sekunden bis Minuten).">?</span></div>
+            <div id="order-audit-pending-summary" style="font-size:13px;opacity:0.8;margin-bottom:8px;">Lade...</div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Registriert</th>
+                            <th>Symbol</th>
+                            <th>Aktion</th>
+                            <th>Menge</th>
+                            <th>Status</th>
+                            <th>Letztes Event</th>
+                            <th>Order-ID</th>
+                        </tr>
+                    </thead>
+                    <tbody id="order-audit-pending-table"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+            <div class="card-title">Failed Trades (cancelled / rejected / stale)<span class="tip" data-tip="Trades die NICHT erfolgreich ausgefuehrt wurden. cancelled = IBKR hat storniert (z.B. Day-TIF abgelaufen), rejected = IBKR hat abgelehnt (Margin/Trading-Hours), stale = Order verschollen >48h ohne IBKR-Match (Bot war wahrscheinlich offline). Pushover-Alert kommt automatisch bei stale-Markern.">?</span></div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+                <select id="order-audit-filter-status" onchange="renderOrderAudit()" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;font-size:13px;">
+                    <option value="">Alle (cancelled + rejected + stale)</option>
+                    <option value="cancelled">Nur cancelled</option>
+                    <option value="rejected">Nur rejected</option>
+                    <option value="stale">Nur stale</option>
+                </select>
+                <span id="order-audit-failed-count" style="font-size:12px;opacity:0.7;">--</span>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Zeit</th>
+                            <th>Aktion</th>
+                            <th>Symbol</th>
+                            <th>Betrag</th>
+                            <th>Status</th>
+                            <th>IBKR-Raw</th>
+                        </tr>
+                    </thead>
+                    <tbody id="order-audit-failed-table"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 

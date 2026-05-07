@@ -275,6 +275,91 @@ def test_recovery_pending_order_NOT_in_ibkr_history(stress_tracker):
     assert pending["999"].get("current_status") in (None, "Submitted", "submitted")
 
 
+def test_stale_marker_triggers_pushover(stress_tracker, monkeypatch):
+    """v37e Tag 6: _mark_stale soll send_pushover() aufrufen.
+
+    Visibility-Loch geschlossen — Stale ist eine echte Anomalie die manuelles
+    IBKR-Web-Login erfordert. Carlos's Watchdog-Disziplin verlangt Push,
+    nicht nur Log + trade_history-Update.
+
+    Erwartung:
+      - send_pushover wird genau 1x aufgerufen pro stale-Marker
+      - Message enthaelt Symbol + Order-ID + Aktions-Hinweis
+      - Priority=1 (HIGH, ueberbrueckt Quiet-Hours)
+    """
+    from datetime import datetime, timezone, timedelta
+
+    tracker, storage = stress_tracker
+    storage["trade_history.json"] = [{"symbol": "STALEX", "order_id": 555}]
+
+    # Order registrieren, dann registered_at auf 49h backdate (>48h Schwelle)
+    tracker.register(order_id=555, trade_entry={"symbol": "STALEX", "order_id": 555})
+    backdated = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
+    tracker._pending["555"]["registered_at"] = backdated
+    if storage.get("pending_orders.json", {}).get("pending", {}).get("555"):
+        storage["pending_orders.json"]["pending"]["555"]["registered_at"] = backdated
+
+    # Mock send_pushover
+    pushover_calls = []
+
+    def fake_pushover(message, *args, **kwargs):
+        pushover_calls.append({"message": message, "kwargs": kwargs})
+        return True
+
+    monkeypatch.setattr("app.alerts.send_pushover", fake_pushover)
+
+    # IBKR weiss nichts → stale-Marker triggert
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+
+    stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
+
+    assert stats["staled"] == 1, "Stale-Marker haette greifen muessen (>48h alt + kein IBKR-Match)"
+    assert len(pushover_calls) == 1, f"Erwartete genau 1 Pushover-Aufruf, bekam {len(pushover_calls)}"
+
+    call = pushover_calls[0]
+    msg = call["message"]
+    assert "STALEX" in msg, f"Symbol fehlt in message: {msg}"
+    assert "555" in msg, f"Order-ID fehlt in message: {msg}"
+    assert "IBKR" in msg, f"IBKR-Hinweis fehlt in message: {msg}"
+    assert call["kwargs"].get("priority") == 1, "Priority muss 1 (HIGH) sein"
+
+
+def test_stale_marker_pushover_failure_does_not_break(stress_tracker, monkeypatch):
+    """v37e Tag 6: Wenn Pushover failt, soll Stale-Marker trotzdem persistieren.
+
+    Resilience-Pattern: Pushover ist Best-Effort, nicht Required-Path.
+    Stale-Status MUSS in trade_history landen, auch wenn Push-API down.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    tracker, storage = stress_tracker
+    storage["trade_history.json"] = [{"symbol": "PUSHFAIL", "order_id": 777}]
+    tracker.register(order_id=777, trade_entry={"symbol": "PUSHFAIL", "order_id": 777})
+    backdated = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
+    tracker._pending["777"]["registered_at"] = backdated
+
+    # Pushover wirft Exception
+    def broken_pushover(*args, **kwargs):
+        raise RuntimeError("Pushover API down")
+
+    monkeypatch.setattr("app.alerts.send_pushover", broken_pushover)
+
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+
+    # Soll NICHT crashen
+    stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
+    assert stats["staled"] == 1
+
+    # trade_history.json wurde trotz Pushover-Fail aktualisiert
+    history = storage.get("trade_history.json", [])
+    assert any(t.get("status") == "stale" for t in history), \
+        "Stale-Status muss persistieren auch bei Pushover-Failure"
+
+
 def test_recovery_with_filled_order_in_ibkr(stress_tracker):
     """Happy-Path: Order war pending, beim Restart von IBKR als Filled."""
     tracker, storage = stress_tracker
