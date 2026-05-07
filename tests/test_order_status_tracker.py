@@ -278,14 +278,16 @@ def test_recover_from_ibkr_resolves_pending(fresh_tracker):
     ib.openTrades.return_value = []
     ib.trades.return_value = [_make_trade(555, "Cancelled")]
 
-    resolved = tracker.recover_from_ibkr(ib)
-    assert resolved == 1
+    stats = tracker.recover_from_ibkr(ib)
+    assert stats["resolved"] == 1
+    assert stats["staled"] == 0
     assert storage["trade_history.json"][0]["status"] == "cancelled"
 
 
-def test_recover_with_no_ib_returns_0(fresh_tracker):
+def test_recover_with_no_ib_returns_zero_stats(fresh_tracker):
     tracker, _ = fresh_tracker
-    assert tracker.recover_from_ibkr(None) == 0
+    stats = tracker.recover_from_ibkr(None)
+    assert stats == {"resolved": 0, "staled": 0, "still_pending": 0}
 
 
 def test_recover_skips_already_final(fresh_tracker):
@@ -298,6 +300,110 @@ def test_recover_skips_already_final(fresh_tracker):
     ib.openTrades.return_value = []
     ib.trades.return_value = [_make_trade(7, "Cancelled")]  # Sollte ignoriert werden
 
-    resolved = tracker.recover_from_ibkr(ib)
-    assert resolved == 0  # Final-Status wird nicht ueberschrieben
+    stats = tracker.recover_from_ibkr(ib)
+    assert stats["resolved"] == 0  # Final-Status wird nicht ueberschrieben
     assert storage["trade_history.json"][0]["status"] == "filled"
+
+
+# ============================================================
+# v37e Tag 3: Stale-Marker-Strategie B
+# ============================================================
+
+def test_recover_marks_old_pending_as_stale(fresh_tracker):
+    """Pending Order >48h ohne IBKR-Match -> status='stale'."""
+    from datetime import datetime, timezone, timedelta
+
+    tracker, storage = fresh_tracker
+    storage["trade_history.json"] = [
+        {"symbol": "SLV", "order_id": 888, "status": "submitted"}
+    ]
+    tracker.register(order_id=888, trade_entry={
+        "symbol": "SLV", "order_id": 888, "status": "submitted",
+    })
+
+    # Manipuliere registered_at auf 72h ago
+    pending = storage["pending_orders.json"]["pending"]
+    old_ts = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+    pending["888"]["registered_at"] = old_ts
+
+    # IBKR weiss nichts
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+
+    stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
+    assert stats["staled"] == 1
+    assert stats["resolved"] == 0
+
+    # trade_history hat status="stale"
+    assert storage["trade_history.json"][0]["status"] == "stale"
+    assert storage["trade_history.json"][0]["ibkr_status_raw"] == "STALE_NO_IBKR_HISTORY"
+
+    # pending-Eintrag hat resolved_at + stale_reason
+    assert "resolved_at" in pending["888"]
+    assert "stale_reason" in pending["888"]
+
+
+def test_recover_skips_recent_pending_without_ibkr_match(fresh_tracker):
+    """Junge pending Order (<48h) bleibt unveraendert, NICHT staled."""
+    tracker, storage = fresh_tracker
+    storage["trade_history.json"] = [{"symbol": "X", "order_id": 999}]
+    tracker.register(order_id=999, trade_entry={"symbol": "X", "order_id": 999})
+    # registered_at = "jetzt" (default)
+
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+
+    stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
+    assert stats["staled"] == 0
+    assert stats["still_pending"] == 1
+    # status unveraendert
+    assert storage["trade_history.json"][0].get("status") != "stale"
+
+
+def test_recover_stale_threshold_configurable(fresh_tracker):
+    """stale_after_hours=1 -> 2h-old order wird staled."""
+    from datetime import datetime, timezone, timedelta
+
+    tracker, storage = fresh_tracker
+    storage["trade_history.json"] = [{"symbol": "Y", "order_id": 777}]
+    tracker.register(order_id=777, trade_entry={"symbol": "Y", "order_id": 777})
+
+    pending = storage["pending_orders.json"]["pending"]
+    pending["777"]["registered_at"] = (
+        datetime.now(timezone.utc) - timedelta(hours=2)
+    ).isoformat()
+
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+
+    stats = tracker.recover_from_ibkr(ib, stale_after_hours=1)
+    assert stats["staled"] == 1
+
+
+def test_stale_status_in_final_statuses_for_cleanup(fresh_tracker):
+    """Stale-Eintrag wird vom cleanup_resolved erfasst (= als final behandelt)."""
+    from datetime import datetime, timezone, timedelta
+
+    tracker, storage = fresh_tracker
+    storage["trade_history.json"] = [{"symbol": "Z", "order_id": 555}]
+    tracker.register(order_id=555, trade_entry={"symbol": "Z", "order_id": 555})
+
+    # Mark als stale via IBKR-Recovery
+    pending = storage["pending_orders.json"]["pending"]
+    pending["555"]["registered_at"] = (
+        datetime.now(timezone.utc) - timedelta(hours=72)
+    ).isoformat()
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+    tracker.recover_from_ibkr(ib, stale_after_hours=48)
+
+    # resolved_at auf "alt" setzen (sonst cleanup nicht aktiviert)
+    pending["555"]["resolved_at"] = "2020-01-01T00:00:00+00:00"
+    tracker._pending = pending
+
+    deleted = tracker.cleanup_resolved(max_age_hours=24)
+    assert deleted == 1, "Stale-Eintrag sollte vom cleanup erfasst werden"

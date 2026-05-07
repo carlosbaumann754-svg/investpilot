@@ -38,6 +38,7 @@ IBKR_FINAL_STATUSES = {
     "ApiCancelled",
     "Inactive",
     "Rejected",
+    "Stale",  # v37e Tag 3: Custom-Status fuer no-match-after-bot-offline
 }
 
 # Fuer Tracking aktive Statuses (= weiter beobachten)
@@ -167,48 +168,135 @@ class OrderStatusTracker:
 
             self._save_state()
 
-    def recover_from_ibkr(self, ib) -> int:
+    def recover_from_ibkr(self, ib, stale_after_hours: int = 48) -> dict:
         """Nach Bot-Restart: pending Orders gegen IBKR sync.
 
         Findet alle pending_orders.json-Eintraege ohne Final-Status.
         Fragt IBKR's aktuelle openTrades + completedOrders ab.
         Updatet Status entsprechend.
 
+        v37e Tag 3 (Strategie B — stale-Marker):
+        Wenn pending Order aelter als stale_after_hours UND NICHT in IBKR's
+        History/openTrades: status='stale' setzen + resolved_at + Audit-Trail.
+        Cleanup-Cron raeumt das nach max_age_hours auf.
+
+        Hintergrund: Bot >24h offline -> IBKR Session-History gewiped.
+        Wir wissen nicht ob Order filled, cancelled oder noch active war.
+        'stale' macht den Unknown-Status explizit (Visibility > Optimization).
+
+        Args:
+            ib: ib_insync.IB-Instanz (oder None fuer Test-Skip)
+            stale_after_hours: Schwelle ab wann no-match-pending als 'stale'
+                              markiert wird. Default 48h (IBKR-Session-Cache
+                              ~24h plus Buffer).
+
         Returns:
-            Anzahl resolved entries.
+            {'resolved': int, 'staled': int, 'still_pending': int}
         """
         if not ib:
-            return 0
+            return {"resolved": 0, "staled": 0, "still_pending": 0}
 
         resolved_count = 0
+        staled_count = 0
+
         try:
-            # Aktive Orders aus IBKR fetchen
             ib.reqAllOpenOrders()
             ib.sleep(1.0)
             current_trades = list(ib.openTrades() or [])
-            current_trades += list(ib.trades() or [])  # Session-trades inkl. cancelled
+            current_trades += list(ib.trades() or [])
         except Exception as e:
             log.warning("E27 recover: IBKR fetch failed: %s", e)
-            return 0
+            return {"resolved": 0, "staled": 0, "still_pending": 0}
+
+        # Build IBKR-order-id-Set fuer schnellen Lookup
+        ibkr_order_ids: set[str] = set()
+        ibkr_trade_by_id: dict[str, Any] = {}
+        for trade in current_trades:
+            try:
+                oid = str(trade.order.orderId)
+                ibkr_order_ids.add(oid)
+                ibkr_trade_by_id[oid] = trade
+            except Exception:
+                continue
+
+        now = datetime.now(timezone.utc)
+        stale_threshold = now - timedelta(hours=stale_after_hours)
 
         with self._lock:
             for key, entry in list(self._pending.items()):
                 if entry.get("current_status") in IBKR_FINAL_STATUSES:
                     continue
-                # Such matching IBKR-Trade
-                for trade in current_trades:
+
+                # 1. IBKR-Match -> normal resolve
+                if key in ibkr_order_ids:
+                    matching_trade = ibkr_trade_by_id[key]
                     try:
-                        if str(trade.order.orderId) == key:
-                            new_status = trade.orderStatus.status
-                            if new_status != entry.get("current_status"):
-                                self.handle_status_event(trade)
-                                resolved_count += 1
-                            break
+                        new_status = matching_trade.orderStatus.status
+                        if new_status != entry.get("current_status"):
+                            self.handle_status_event(matching_trade)
+                            resolved_count += 1
                     except Exception:
                         continue
+                    continue
 
-        log.info("E27 recovery: %d pending orders synchronized", resolved_count)
-        return resolved_count
+                # 2. Kein IBKR-Match -> Stale-Check
+                registered_at_str = entry.get("registered_at")
+                if not registered_at_str:
+                    continue
+                try:
+                    registered_at = datetime.fromisoformat(
+                        registered_at_str.replace("Z", "+00:00")
+                    )
+                except Exception:
+                    continue
+
+                if registered_at < stale_threshold:
+                    # Pending Order ist alt + nicht in IBKR -> stale-Marker
+                    self._mark_stale(key, entry)
+                    staled_count += 1
+
+        still_pending = self.get_pending_count()
+        log.info(
+            "E27 recovery: %d resolved, %d staled (>%dh ohne IBKR-Match), %d still pending",
+            resolved_count, staled_count, stale_after_hours, still_pending,
+        )
+        return {
+            "resolved": resolved_count,
+            "staled": staled_count,
+            "still_pending": still_pending,
+        }
+
+    def _mark_stale(self, key: str, entry: dict) -> None:
+        """Markiere pending Order als 'stale' wenn nach Bot->24h-Offline kein IBKR-Match.
+
+        Caller hat bereits self._lock. Updatet pending-Eintrag UND trade_history.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        entry["current_status"] = "Stale"  # Custom-Status (nicht IBKR-Status)
+        entry["last_event_at"] = now_iso
+        entry["resolved_at"] = now_iso
+        entry["stale_reason"] = (
+            "Bot war wahrscheinlich >24h offline. IBKR-Session-History "
+            "enthaelt diese Order nicht mehr — final-Status nicht verifizierbar."
+        )
+
+        # trade_history.json updaten
+        try:
+            from app.config_manager import load_json, save_json
+            history = load_json("trade_history.json") or []
+            order_id_str = key
+            for t in reversed(history):
+                if str(t.get("order_id")) == order_id_str:
+                    t["status"] = "stale"
+                    t["ibkr_status_raw"] = "STALE_NO_IBKR_HISTORY"
+                    t["_e27_stale_marker"] = now_iso
+                    save_json("trade_history.json", history)
+                    break
+        except Exception as e:
+            log.warning("E27 _mark_stale: trade_history update failed: %s", e)
+
+        log.info("E27 STALE: order_id=%s symbol=%s — Bot war wahrscheinlich >24h offline",
+                 key, entry.get("symbol"))
 
     def cleanup_resolved(self, max_age_hours: int = 24) -> int:
         """Loesche Final-Status-Eintraege aelter als max_age_hours.

@@ -390,11 +390,20 @@ class IbkrBroker(BrokerBase):
             ib.orderStatusEvent += self._tracker.handle_status_event
             self._e27_subscribed = True
             log.info("E27 orderStatusEvent subscribed (Real-Time Status-Tracking aktiv)")
-            # Recovery: pending Orders gegen IBKR-Reality synchronisieren
+            # Recovery: pending Orders gegen IBKR-Reality synchronisieren.
+            # v37e Tag 3: returnt dict mit resolved/staled/still_pending.
             try:
-                resolved = self._tracker.recover_from_ibkr(ib)
-                if resolved:
-                    log.info("E27 Recovery: %d pending Orders nach (Re)Connect synchronisiert", resolved)
+                stats = self._tracker.recover_from_ibkr(ib)
+                if isinstance(stats, dict):
+                    if stats.get("resolved", 0) or stats.get("staled", 0):
+                        log.info(
+                            "E27 Recovery: %d resolved, %d staled (>48h offline), %d still pending",
+                            stats.get("resolved", 0),
+                            stats.get("staled", 0),
+                            stats.get("still_pending", 0),
+                        )
+                elif stats:  # Backward-Compat falls Tracker int returnt
+                    log.info("E27 Recovery: %d pending Orders synchronisiert", stats)
             except Exception as e:
                 log.warning("E27 Recovery failed (non-fatal): %s", e)
         except Exception as e:
