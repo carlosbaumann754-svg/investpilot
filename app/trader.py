@@ -949,7 +949,10 @@ def check_stop_loss_take_profit(client, config):
                             result = _close_position_safe(client, p["position_id"], p["instrument_id"], "PROFIT_LOCK")
                             if _is_skipped_idempotent(result):
                                 continue
-                            trade_status = "executed" if result else "failed"
+                            # v37dh-fix (07.05.2026): Status aus IBKR-Reality
+                            # statt 'executed if result'. PROFIT_LOCK kann auch
+                            # cancelled/rejected werden (z.B. Limit nicht erreicht).
+                            trade_status = _trade_status_from_result(result) if result else "failed"
                             if not result:
                                 log.warning(f"  PROFIT_LOCK_CLOSE FEHLGESCHLAGEN — "
                                             f"Tranche wird NICHT als erledigt markiert")

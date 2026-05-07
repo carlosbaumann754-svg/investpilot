@@ -2329,7 +2329,10 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
         is_short = p.get("invested", 0) < 0
         action_label = "MANUAL_COVER" if is_short else "MANUAL_SELL"
         try:
-            from app.trader import save_trade, _attach_fill_prices
+            from app.trader import (
+                save_trade, _attach_fill_prices,
+                _trade_status_from_result, _ibkr_status_raw_from_result,
+            )
             trade_entry = {
                 "timestamp": _dt.now().isoformat(),
                 "action": action_label,
@@ -2342,7 +2345,11 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
                 "user": username,
                 "reason": "manual-dashboard-sell" if not is_short else "manual-dashboard-cover-short",
                 "position_side": "SHORT" if is_short else "LONG",
-                "status": "executed",
+                # v37dh-fix (07.05.2026): Status aus IBKR-Reality. Manual-Sell
+                # kann theoretisch cancelled/rejected werden (z.B. Insufficient
+                # Funds bei Cover-Short). Nutze gleiche Helper wie trader.py.
+                "status": _trade_status_from_result(result),
+                "ibkr_status_raw": _ibkr_status_raw_from_result(result),
             }
             save_trade(_attach_fill_prices(trade_entry, result))
         except Exception:
