@@ -10,6 +10,11 @@ services:
     volumes:
       - /opt/investpilot/data:/app/data
       - /opt/investpilot/Bericht:/app/Bericht
+      # v37df (07.05.2026): Backup-Verzeichnis read-only mounten damit
+      # Cutover-Readiness-Card Hard-Gate #4 last_backup.json lesen kann.
+      # Vorher: Container sah weder /backups noch /var/backups/investpilot
+      # -> Card hardcoded yellow trotz erfolgreichem 04:00 UTC Backup-Cron.
+      - /var/backups/investpilot:/backups:ro
     env_file:
       - /opt/investpilot/.env
     environment:

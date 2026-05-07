@@ -23,6 +23,42 @@ def save_trade(trade_entry):
     save_json("trade_history.json", history)
 
 
+def _map_ibkr_status_to_bot_status(ibkr_status: str) -> str:
+    """v37df (07.05.2026): IBKR-Order-Status -> Bot-Trade-Status.
+
+    Behebt das 'intent vs reality'-Logging-Pattern (3 Bugs heute Mittag/Abend
+    gefunden: MISSED_FILL bei Cancelled, Leverage-Inkonsistenz, Position-Age).
+    Statt hardcoded 'executed' im Trade-Log nutzen wir IBKR's tatsaechlichen
+    Status. Reconcile-Code (v37db) skipt cancelled/rejected — damit greift
+    der Filter automatisch.
+
+    Mapping:
+      Filled, ApiPending          -> 'executed'  (echte Execution)
+      Submitted, PreSubmitted,
+      PendingSubmit, PendingCancel -> 'submitted' (pending, kein MissedFill)
+      Cancelled, ApiCancelled,
+      Inactive                     -> 'cancelled' (Order zurueckgezogen)
+      Rejected                     -> 'rejected'  (IBKR hat abgelehnt)
+      PartiallyFilled              -> 'partial'   (Teilfill)
+      Sonst                        -> 'executed'  (Backward-Compat eToro)
+    """
+    if not ibkr_status:
+        return "executed"  # Backward-Compat (eToro liefert keinen statusID)
+    s = str(ibkr_status).strip()
+    if s == "Filled":
+        return "executed"
+    if s in ("Submitted", "PreSubmitted", "PendingSubmit", "PendingCancel",
+             "ApiPending"):
+        return "submitted"
+    if s in ("Cancelled", "ApiCancelled", "Inactive"):
+        return "cancelled"
+    if s == "Rejected":
+        return "rejected"
+    if s == "PartiallyFilled":
+        return "partial"
+    return "executed"  # Default — unbekannter Status, eToro-Compat
+
+
 def _has_recent_earnings_close(symbol: str, hours: int = 24) -> bool:
     """v37aa: Prueft ob fuer dieses Symbol in den letzten N Stunden bereits
     ein EARNINGS_BLACKOUT_CLOSE in trade_history.json geschrieben wurde.
@@ -572,6 +608,13 @@ def build_initial_portfolio(client, config):
                 # die position_id (UUID).
                 contract_info = result.get("_contract") or {}
                 pid = contract_info.get("conId") or order.get("orderID")
+                # v37df: Status aus IBKR-Reality statt hardcoded "executed".
+                # IbkrBroker.buy() gibt orderForOpen.statusID zurueck = echtes
+                # IBKR-orderStatus.status. Mapping ueber _map_ibkr_status_to_bot_status.
+                # Wenn Order pending/cancelled/rejected wird, Reconcile-Code v37db
+                # filtert cancelled/rejected raus -> kein MissedFill-False-Positive.
+                ibkr_status_id = order.get("statusID")
+                bot_status = _map_ibkr_status_to_bot_status(ibkr_status_id)
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "action": "BUY",
@@ -583,8 +626,15 @@ def build_initial_portfolio(client, config):
                     "amount_usd": round(amount, 2),
                     "leverage": leverage,
                     "order_id": order.get("orderID"),
-                    "status": "executed",
+                    "status": bot_status,             # v37df: Reality-Aware
+                    "ibkr_status_raw": ibkr_status_id, # v37df: Audit-Trail
                 }
+                # v37df: Wenn Order nicht erfolgreich, im Log klar machen
+                if bot_status not in ("executed", "partial"):
+                    log.warning(
+                        "    Order NICHT ausgefuehrt: status=%s (IBKR-statusID=%s) "
+                        "— Trade-Log mit korrektem Status, Position wird NICHT "
+                        "weiterverfolgt", bot_status, ibkr_status_id)
 
                 # Leverage logging
                 if lm:
