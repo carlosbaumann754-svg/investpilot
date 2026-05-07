@@ -1231,7 +1231,24 @@ def execute_scanner_trades(client, config, scan_results):
             # Auto-Deleverage bei kritischem Margin
             rm.auto_deleverage(client, parsed_positions, total_value, config)
 
+    # v37dg (07.05.2026): instrument_id-Mismatch zwischen Bot-Universum
+    # (etoro_id, z.B. 5003 fuer SILVER) und IBKR-Layer (conId, z.B. 1316487
+    # fuer SLV). Frueher: existing_ids = {conIds} -> Match mit Scanner's
+    # etoro_id schlaegt fehl -> Bot kauft trotz existierender Position
+    # (07.05. SLV: 3 Buy-Attempts in 24h, davon 1 filled + 2 rejected).
+    # Fix: zusaetzliches existing_symbols-Set mit Symbol-Translation
+    # (v37de expand_symbol_for_match — matched bidirektional SILVER<->SLV).
     existing_ids = {p["instrument_id"] for p in parsed_positions}
+    try:
+        from app.market_scanner import expand_symbol_for_match
+        existing_symbols = set()
+        for p in parsed_positions:
+            sym = p.get("symbol")
+            if sym:
+                existing_symbols.update(expand_symbol_for_match(sym))
+    except Exception as e:
+        log.debug(f"existing_symbols-Build skipped: {e}")
+        existing_symbols = set()
 
     log.info(
         f"  Cash: ${credit:,.2f} (deploy-bar ${effective_cash:,.2f}) | "
@@ -1242,7 +1259,8 @@ def execute_scanner_trades(client, config, scan_results):
     # --- VERKAUFEN: Positionen mit SELL-Signal ---
     sell_candidates = [r for r in scan_results
                        if r["signal"] in ("SELL", "STRONG_SELL")
-                       and r["etoro_id"] in existing_ids]
+                       and (r["etoro_id"] in existing_ids
+                            or r.get("symbol") in existing_symbols)]  # v37dg
 
     trades_executed = []
     for candidate in sell_candidates:
@@ -1354,7 +1372,8 @@ def execute_scanner_trades(client, config, scan_results):
     buy_candidates = [r for r in scan_results
                       if r["signal"] in ("BUY", "STRONG_BUY")
                       and r["score"] >= min_score
-                      and r["etoro_id"] not in existing_ids]
+                      and r["etoro_id"] not in existing_ids
+                      and r.get("symbol") not in existing_symbols]  # v37dg
 
     # Cooldown-Filter
     blocked_by_cooldown = []
