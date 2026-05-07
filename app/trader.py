@@ -23,6 +23,39 @@ def save_trade(trade_entry):
     save_json("trade_history.json", history)
 
 
+def _trade_status_from_result(result) -> str:
+    """v37dh (07.05.2026): Trade-Status aus IBKR-Result-Dict ableiten.
+
+    Helper fuer alle 8 trade_entry-Stellen in trader.py. Vorher: hardcoded
+    'executed'. Bug: heute morgen 10:13 COPPER-MISSED_FILL trotz v37df —
+    Fix war nur in einem Code-Pfad (Portfolio-Aufbau). Scanner-Buy +
+    SL/TP/Trailing/Earnings/Recovery-Pfade hatten weiter hardcoded 'executed'.
+
+    Returns:
+        'executed' wenn Result mit Filled-Status,
+        'submitted' bei Pending,
+        'cancelled' wenn IBKR Order zurueckgezogen,
+        'rejected' wenn IBKR abgelehnt,
+        'partial' bei Teilfill,
+        'failed' wenn result is None (Order konnte nicht placed werden),
+        'executed' Default fuer eToro/Backward-Compat.
+    """
+    if result is None:
+        return "failed"
+    if not isinstance(result, dict):
+        return "executed"
+    order = result.get("orderForOpen") or {}
+    return _map_ibkr_status_to_bot_status(order.get("statusID"))
+
+
+def _ibkr_status_raw_from_result(result) -> str:
+    """v37dh: Audit-Trail-Helper. Returnt original IBKR-statusID oder None."""
+    if not isinstance(result, dict):
+        return None
+    order = result.get("orderForOpen") or {}
+    return order.get("statusID")
+
+
 def _map_ibkr_status_to_bot_status(ibkr_status: str) -> str:
     """v37df (07.05.2026): IBKR-Order-Status -> Bot-Trade-Status.
 
@@ -762,7 +795,8 @@ def check_stop_loss_take_profit(client, config):
                                 "pnl_usd": p["pnl"],
                                 "leverage": p["leverage"],
                                 "earnings_reason": reason,
-                                "status": "executed",
+                                "status": _trade_status_from_result(result),  # v37dh
+                                "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                             }
                             save_trade(_attach_fill_prices(trade_entry, result))
                             actions.append("EARNINGS_BLACKOUT_CLOSE")
@@ -827,7 +861,8 @@ def check_stop_loss_take_profit(client, config):
                         "pnl_usd": p["pnl"],
                         "leverage": p["leverage"],
                         "trailing_sl_level": triggered[0]["sl_level"],
-                        "status": "executed",
+                        "status": _trade_status_from_result(result),  # v37dh
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                     }
                     save_trade(_attach_fill_prices(trade_entry, result))
                     actions.append("TRAILING_SL_CLOSE")
@@ -865,7 +900,8 @@ def check_stop_loss_take_profit(client, config):
                         "pnl_usd": p["pnl"],
                         "leverage": p["leverage"],
                         "age_days": round(age_days, 2),
-                        "status": "executed",
+                        "status": _trade_status_from_result(result),  # v37dh
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                     }
                     save_trade(_attach_fill_prices(trade_entry, result))
                     actions.append("TIME_STOP_CLOSE")
@@ -976,7 +1012,8 @@ def check_stop_loss_take_profit(client, config):
                     "pnl_pct": p["pnl_pct"],
                     "pnl_usd": p["pnl"],
                     "leverage": p["leverage"],
-                    "status": "executed",
+                    "status": _trade_status_from_result(result),  # v37dh
+                    "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                 }
                 save_trade(_attach_fill_prices(trade_entry, result))
                 actions.append("STOP_LOSS_CLOSE")
@@ -1008,7 +1045,8 @@ def check_stop_loss_take_profit(client, config):
                     "pnl_pct": p["pnl_pct"],
                     "pnl_usd": p["pnl"],
                     "leverage": p["leverage"],
-                    "status": "executed",
+                    "status": _trade_status_from_result(result),  # v37dh
+                    "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                 }
                 save_trade(_attach_fill_prices(trade_entry, result))
                 actions.append("TAKE_PROFIT_CLOSE")
@@ -1297,7 +1335,8 @@ def execute_scanner_trades(client, config, scan_results):
                         "pnl_pct": p["pnl_pct"],
                         "scanner_score": candidate["score"],
                         "signal": candidate["signal"],
-                        "status": "executed",
+                        "status": _trade_status_from_result(result),  # v37dh
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                     }
                     save_trade(_attach_fill_prices(trade_entry, result))
                     trades_executed.append(trade_entry)
@@ -1778,7 +1817,8 @@ def execute_scanner_trades(client, config, scan_results):
                         "market_regime": market_regime,
                         "vix_level": mc.get_current_context().get("vix_level") if mc else None,
                         "ctx_multiplier": ctx_multiplier,
-                        "status": "executed",
+                        "status": _trade_status_from_result(result),  # v37dh
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                     }
 
                     if lm:
@@ -1940,7 +1980,8 @@ def check_overnight_positions(client, config):
                 "position_id": pos["position_id"],
                 "pnl_pct": pos.get("pnl_pct", 0),
                 "reason": pos.get("reason", "Overnight-Risiko"),
-                "status": "executed",
+                "status": _trade_status_from_result(result),  # v37dh
+                "ibkr_status_raw": _ibkr_status_raw_from_result(result),
             }
             save_trade(_attach_fill_prices(trade_entry, result))
             closed.append(trade_entry)
