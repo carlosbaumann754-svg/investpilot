@@ -288,3 +288,67 @@ def test_recovery_with_filled_order_in_ibkr(stress_tracker):
     stats = tracker.recover_from_ibkr(ib)
     assert stats["resolved"] == 1
     assert storage["trade_history.json"][0]["status"] == "filled"
+
+
+# ============================================================
+# Tag 4: run_periodic_maintenance Helper (Scheduler-Hook)
+# ============================================================
+
+def test_maintenance_skipped_when_feature_disabled(stress_tracker):
+    """Wenn _e27_enabled=False, run_periodic_maintenance macht nichts."""
+    from app.order_status_tracker import run_periodic_maintenance
+
+    broker = MagicMock()
+    broker._e27_enabled = False
+    broker._tracker = MagicMock()
+
+    result = run_periodic_maintenance(broker)
+    assert result == {"enabled": False, "recovery": None, "cleanup_deleted": None}
+    broker._tracker.recover_from_ibkr.assert_not_called()
+    broker._tracker.cleanup_resolved.assert_not_called()
+
+
+def test_maintenance_calls_recovery_and_cleanup(stress_tracker):
+    """Wenn enabled=True: Recovery + Cleanup beide aufgerufen."""
+    from app.order_status_tracker import run_periodic_maintenance
+
+    tracker, _ = stress_tracker
+    broker = MagicMock()
+    broker._e27_enabled = True
+    broker._tracker = tracker
+    broker._get_ib.return_value = MagicMock(
+        openTrades=lambda: [], trades=lambda: [],
+    )
+
+    result = run_periodic_maintenance(broker, max_age_hours=24, stale_after_hours=48)
+    assert result["enabled"] is True
+    assert isinstance(result["recovery"], dict)
+    assert isinstance(result["cleanup_deleted"], int)
+
+
+def test_maintenance_resilient_to_recovery_failure(stress_tracker):
+    """Wenn Recovery crasht: Cleanup wird trotzdem versucht."""
+    from app.order_status_tracker import run_periodic_maintenance
+
+    broker = MagicMock()
+    broker._e27_enabled = True
+    broker._tracker = MagicMock()
+    broker._tracker.recover_from_ibkr.side_effect = Exception("IBKR boom")
+    broker._tracker.cleanup_resolved.return_value = 5
+
+    result = run_periodic_maintenance(broker)
+    assert result["enabled"] is True
+    assert result["recovery"] is None  # failed
+    assert result["cleanup_deleted"] == 5  # ran trotzdem
+
+
+def test_maintenance_resilient_to_no_tracker(stress_tracker):
+    """Wenn _tracker is None: enabled=False, kein Crash."""
+    from app.order_status_tracker import run_periodic_maintenance
+
+    broker = MagicMock()
+    broker._e27_enabled = True
+    broker._tracker = None
+
+    result = run_periodic_maintenance(broker)
+    assert result["enabled"] is False

@@ -424,3 +424,58 @@ class OrderStatusTracker:
             })
         except Exception as e:
             log.warning("E27 _save_state failed: %s", e)
+
+
+# ============================================================
+# Public Helper: daily maintenance fuer scheduler.py
+# ============================================================
+
+def run_periodic_maintenance(broker, max_age_hours: int = 24,
+                              stale_after_hours: int = 48) -> dict:
+    """Daily Maintenance — cleanup + recovery in einem.
+
+    Wird einmal taeglich vom Scheduler aufgerufen (nach 04:30 UTC, kurz nach
+    Backup-Cron, vor Markt-Open).
+
+    Args:
+        broker: IbkrBroker-Instanz (Tracker via broker._tracker)
+        max_age_hours: cleanup-Threshold fuer resolved Eintraege
+        stale_after_hours: Threshold ab wann pending Order als 'stale' markiert
+                          wird (siehe v37e Tag 3 Strategie B)
+
+    Returns:
+        {'enabled': bool, 'recovery': dict | None, 'cleanup_deleted': int | None}
+        Bei feature-flag OFF: enabled=False, andere Keys None.
+    """
+    result = {"enabled": False, "recovery": None, "cleanup_deleted": None}
+
+    if not getattr(broker, "_e27_enabled", False):
+        return result
+
+    tracker = getattr(broker, "_tracker", None)
+    if tracker is None:
+        log.debug("E27 maintenance skipped: tracker is None")
+        return result
+
+    result["enabled"] = True
+
+    # 1. Recovery (synchronisiert pending vs IBKR + setzt stale-Marker)
+    try:
+        ib = broker._get_ib() if hasattr(broker, "_get_ib") else None
+        if ib is not None:
+            stats = tracker.recover_from_ibkr(ib, stale_after_hours=stale_after_hours)
+            result["recovery"] = stats
+            log.info("E27 daily maintenance — recovery: %s", stats)
+    except Exception as e:
+        log.warning("E27 daily maintenance — recovery failed (non-fatal): %s", e)
+
+    # 2. Cleanup (entfernt resolved + stale Eintraege > max_age_hours)
+    try:
+        deleted = tracker.cleanup_resolved(max_age_hours=max_age_hours)
+        result["cleanup_deleted"] = deleted
+        if deleted:
+            log.info("E27 daily maintenance — cleanup: %d resolved entries removed", deleted)
+    except Exception as e:
+        log.warning("E27 daily maintenance — cleanup failed (non-fatal): %s", e)
+
+    return result
