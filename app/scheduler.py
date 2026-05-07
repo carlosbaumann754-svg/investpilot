@@ -380,6 +380,39 @@ def scheduler_loop():
                         except Exception:
                             pass
 
+            # --- E27 Daily Maintenance: 04:30 UTC (= 06:30 CEST) ---
+            # Nach Backup-Cron (04:00 UTC), vor Markt-Open (15:30 CEST).
+            # Cleanup resolved Eintraege + Recovery synchronisiert pending vs
+            # IBKR-Reality + setzt stale-Marker (Strategie B v37e Tag 3).
+            # Feature-Flag-geschuetzt: nur aktiv wenn config.realtime_status_tracker.enabled.
+            # Day-Key-Guard verhindert Mehrfach-Lauf in 5-Min-Cycles.
+            try:
+                _utc_now = datetime.now(timezone.utc)
+                if _utc_now.hour == 4 and 30 <= _utc_now.minute < 35:
+                    e27_guard = get_data_path("e27_last_maintenance.flag")
+                    e27_today_key = _utc_now.strftime("%Y-%m-%d")
+                    e27_already = False
+                    try:
+                        if e27_guard.exists() and e27_guard.read_text().strip() == e27_today_key:
+                            e27_already = True
+                    except Exception:
+                        pass
+                    if not e27_already:
+                        try:
+                            e27_guard.write_text(e27_today_key)
+                        except Exception:
+                            pass
+                        try:
+                            from app.broker_base import get_broker
+                            from app.order_status_tracker import run_periodic_maintenance
+                            broker = get_broker()
+                            stats = run_periodic_maintenance(broker)
+                            log.info(f"E27 Daily Maintenance @ 04:30 UTC: {stats}")
+                        except Exception as e:
+                            log.warning(f"E27 Daily Maintenance Fehler (non-fatal): {e}", exc_info=True)
+            except Exception:
+                pass
+
             # --- Freitag 18:00: Weekly Report ---
             from app.weekly_report import is_friday_evening
             if is_friday_evening():

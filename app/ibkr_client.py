@@ -239,6 +239,23 @@ class IbkrBroker(BrokerBase):
         self._ib = None  # ib_insync.IB instance, lazy
         self.configured = True  # IBKR braucht keine API-Keys, nur Container-Reachability
 
+        # E27 (07.05.2026): OrderStatusTracker fuer Reality-Aware-Trade-Logging.
+        # Feature-Flag-geschuetzt — instantiiert immer (kein Risiko) aber
+        # subscription erst aktiv wenn config.realtime_status_tracker.enabled=true.
+        # Vorteile: Branch deploybar mit Flag OFF, jederzeit aktivierbar via API.
+        self._e27_enabled = bool(
+            config.get("realtime_status_tracker", {}).get("enabled", False)
+        )
+        try:
+            from app.order_status_tracker import OrderStatusTracker
+            self._tracker = OrderStatusTracker()
+            log.info("E27 OrderStatusTracker instantiiert (enabled=%s, pending=%d)",
+                     self._e27_enabled, self._tracker.get_pending_count())
+        except Exception as e:
+            log.warning("E27 Tracker-Init failed (non-fatal): %s", e)
+            self._tracker = None
+        self._e27_subscribed = False
+
     @property
     def broker_name(self) -> str:
         return "ibkr"
@@ -353,7 +370,44 @@ class IbkrBroker(BrokerBase):
 
         _pool_set(key, ib)
         self._ib = ib  # backwards-compat fuer test-mocks die ._ib direkt setzen
+
+        # E27: Subscribe orderStatusEvent fuer Real-Time Status-Updates
+        # Idempotent (subscribe nur einmal pro Connection). Feature-Flag
+        # entscheidet ob Tracker aktiv reagiert oder no-op macht.
+        self._maybe_subscribe_e27_events(ib)
+
         return ib
+
+    def _maybe_subscribe_e27_events(self, ib):
+        """E27: subscribe orderStatusEvent wenn Feature-Flag + Tracker da.
+
+        Idempotent — wird mehrfach aufgerufen (jeder _get_ib-Call), aber
+        subscribed nur einmal pro Tracker-Instanz.
+        """
+        if not self._e27_enabled or self._tracker is None or self._e27_subscribed:
+            return
+        try:
+            ib.orderStatusEvent += self._tracker.handle_status_event
+            self._e27_subscribed = True
+            log.info("E27 orderStatusEvent subscribed (Real-Time Status-Tracking aktiv)")
+            # Recovery: pending Orders gegen IBKR-Reality synchronisieren.
+            # v37e Tag 3: returnt dict mit resolved/staled/still_pending.
+            try:
+                stats = self._tracker.recover_from_ibkr(ib)
+                if isinstance(stats, dict):
+                    if stats.get("resolved", 0) or stats.get("staled", 0):
+                        log.info(
+                            "E27 Recovery: %d resolved, %d staled (>48h offline), %d still pending",
+                            stats.get("resolved", 0),
+                            stats.get("staled", 0),
+                            stats.get("still_pending", 0),
+                        )
+                elif stats:  # Backward-Compat falls Tracker int returnt
+                    log.info("E27 Recovery: %d pending Orders synchronisiert", stats)
+            except Exception as e:
+                log.warning("E27 Recovery failed (non-fatal): %s", e)
+        except Exception as e:
+            log.warning("E27 Subscription failed (non-fatal): %s", e)
 
     def disconnect(self) -> None:
         """Im Singleton-Pattern KEIN echter disconnect.
@@ -638,6 +692,27 @@ class IbkrBroker(BrokerBase):
 
             order.transmit = (stop_loss_pct == 0 and take_profit_pct == 0)
             trade = ib.placeOrder(contract, order)
+
+            # E27: Tracker registriert die Order fuer Real-Time Status-Updates.
+            # Feature-Flag-geschuetzt (no-op wenn disabled). Single-Point-of-
+            # Integration: alle 8 Trader-Pfade (Scanner-Buy/SL/TP/...) gehen
+            # durch _place_market_order, daher ein Hook genuegt.
+            if self._e27_enabled and self._tracker is not None:
+                try:
+                    self._tracker.register(
+                        order_id=trade.order.orderId,
+                        trade_entry={
+                            "symbol": contract.symbol,
+                            "action": action,
+                            "amount_usd": amount_usd,
+                            "order_id": str(trade.order.orderId),
+                            "instrument_id": instrument_id,
+                            "status": "submitted",
+                            "ibkr_status_raw": trade.orderStatus.status if trade.orderStatus else "",
+                        },
+                    )
+                except Exception as e:
+                    log.warning("E27 register failed (non-fatal): %s", e)
 
             # 2. Bracket-Orders (SL/TP) wenn gewuenscht
             child_trades = []
