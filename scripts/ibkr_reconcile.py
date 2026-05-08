@@ -406,12 +406,58 @@ def reconcile(lookback_hours: int = 24,
     }
 
 
+def _format_drift_for_alert(d: dict) -> str:
+    """Type-spezifischer Push-Body fuer Drift-Alerts.
+
+    v37f (08.05.2026): vorher generisches `{type}: {symbol} {comment}` —
+    bei CASH_DRIFT (kein symbol/comment) entstand der leere Push-Body
+    "• CASH_DRIFT: " der gestern Abend Carlos verwirrt hat. Jetzt zeigt
+    jeder Drift-Type seine relevanten Felder.
+    """
+    t = d.get("type", "?")
+    if t == "CASH_DRIFT":
+        return (
+            f"• CASH_DRIFT: Bot ${d.get('bot_cash', 0):,.0f} vs "
+            f"IBKR ${d.get('ibkr_cash', 0):,.0f} "
+            f"(diff ${d.get('diff_usd', 0):,.0f} = {d.get('diff_pct', 0):.2f}%)"
+        )
+    if t == "PHANTOM_POSITION":
+        return (
+            f"• PHANTOM: {d.get('symbol', '?')} "
+            f"qty={d.get('qty', '?')} "
+            f"({d.get('comment', '')[:60]})"
+        )
+    if t == "MISSED_FILL":
+        return (
+            f"• MISSED_FILL: {d.get('symbol', '?')} "
+            f"{d.get('comment', '')[:80]}"
+        )
+    if t == "POSITION_MISMATCH":
+        return (
+            f"• POSITION_MISMATCH: {d.get('symbol', '?')} "
+            f"Bot={d.get('bot_qty', '?')} IBKR={d.get('ibkr_qty', '?')}"
+        )
+    # Fallback fuer unbekannte Types — wenigstens type + alle non-empty
+    # Felder mitschicken (statt leerem Body).
+    # v37f-review-fix: Filter NICHT auf `0` — qty=0 oder diff=0 koennte
+    # selbst die Anomalie sein (z.B. POSITION_WIPED). Nur None/"" raus.
+    extras = " ".join(
+        f"{k}={v}" for k, v in d.items()
+        if k != "type" and v not in (None, "")
+    )
+    return f"• {t}: {extras}"[:160]
+
+
 def maybe_alert(report: dict) -> None:
     """Multi-Channel-Alert (Pushover/Telegram/Discord) wenn Drift gefunden.
 
     v37k: vorher Telegram-only (send_telegram direkt), jetzt via send_alert()
     Dispatcher → routet automatisch ueber alle aktivierten Channels (Pushover
     + Telegram + Discord). Drift = WARNING-Level (rotes Banner in Pushover).
+
+    v37f (08.05.2026): Format-Strings via _format_drift_for_alert() — vorher
+    waren CASH_DRIFT/POSITION_MISMATCH/etc. push-bodies leer (kein symbol +
+    kein comment im Drift-Dict).
     """
     if report["status"] == "OK":
         return
@@ -419,7 +465,7 @@ def maybe_alert(report: dict) -> None:
         from app.alerts import send_alert
         msg = f"IBKR Reconciliation Drift — {len(report['drifts'])} Probleme:"
         for d in report["drifts"][:5]:
-            msg += f"\n• {d['type']}: {d.get('symbol', '')} {d.get('comment', '')[:80]}"
+            msg += "\n" + _format_drift_for_alert(d)
         send_alert(msg, level="WARNING")
         log.info("Reconciliation-Alert versendet (Multi-Channel)")
     except Exception as e:

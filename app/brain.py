@@ -75,15 +75,27 @@ def record_snapshot(portfolio):
         # eToro-Pfad: traditionelle Berechnung
         total_value = credit + total_invested + unrealized
 
+    # v37f (08.05.2026): Snapshot-Schema-Erweiterung — Defense vs.
+    # Schema-Mismatch zwischen Brain (writer) und Reconcile (reader).
+    # Reconcile sucht 'cash', 'timestamp', 'equity', 'positions_count'.
+    # Brain schreibt jetzt BEIDE Naming-Varianten. Reconcile-or-Chain
+    # auf 'credit' funktionierte zufaellig — bei Schema-Drift waere Cash-
+    # Drift-Detection silent kaputt gegangen.
+    from datetime import timezone
+    _now = datetime.now(timezone.utc)
     snapshot = {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "time": datetime.now().strftime("%H:%M"),
+        "timestamp": _now.isoformat(),  # v37f: ISO-Timestamp fuer Reconcile
         "run_number": brain["total_runs"],
         "credit": round(credit, 2),
+        "cash": round(credit, 2),       # v37f: Reconcile-Alias
         "invested": round(total_invested, 2),
         "unrealized_pnl": round(unrealized, 2),
         "total_value": round(total_value, 2),
+        "equity": round(total_value, 2),  # v37f: Reconcile-Alias
         "num_positions": len(positions),
+        "positions_count": len(positions),  # v37f: Reconcile-Alias
         # v36e: symbol + entry_price + current_price mit in den Snapshot,
         # damit Dashboard nicht "#null" zeigen muss (vorher war nur conId/iid
         # gespeichert, was im Frontend unleserlich ist).
