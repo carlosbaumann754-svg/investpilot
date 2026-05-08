@@ -188,10 +188,14 @@
             <div class="card-sub" id="benchmark-meta" style="margin-top:8px;font-size:11px;">--</div>
         </div>
 
-        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) -->
-        <div class="card">
+        <!-- Equity-History (Bot vs. Benchmarks im Zeitverlauf) — v37db: collapsible -->
+        <div class="card" id="equity-history-card">
             <div class="card-title">Equity-Verlauf (monatlich)<span class="tip" data-tip="Zeigt deine Portfolio-Performance Monat fuer Monat im direkten Vergleich zu SPY, QQQ und 60/40. Der Bot speichert taeglich nach Boersenschluss einen Schnappschuss vom Portfolio-Wert und allen Benchmark-Kursen, daraus wird die Tabelle gebaut. Sinnvoll wird das ab ~30 gesammelten Tagen (erste Monatszeile) und richtig aussagekraeftig ab 90 Tagen.">?</span></div>
-            <div id="equity-history-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">Daten werden noch gesammelt...</div>
+            <div id="equity-history-status" style="margin-bottom:6px;font-size:12px;color:var(--muted);">Daten werden noch gesammelt...</div>
+            <details id="equity-history-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                Details (Monatstabelle Bot vs. Benchmarks) — klicken zum Ausklappen
+            </summary>
             <div id="equity-history-table-wrap" style="overflow:visible;">
                 <table class="data-table" id="equity-history-table" style="display:none;">
                     <thead>
@@ -210,6 +214,7 @@
                 </table>
             </div>
             <div class="card-sub" id="equity-history-meta" style="margin-top:8px;font-size:11px;">--</div>
+            </details>
         </div>
 
         <!-- Exit-Forecast: Abstand jeder offenen Position zum naechsten Exit-Trigger -->
@@ -343,7 +348,11 @@
         <!-- SURVIVORSHIP-BIAS-AUDIT (E4, Q1 Foundation) -->
         <div class="card" id="survivorship-card">
             <div class="card-title">Ueberlebenden-Verzerrung-Check<span class="tip" data-tip="Pruefung ob unsere Backtest-Ergebnisse zu optimistisch sind. Hintergrund: Wenn man heute auf historische Kurse schaut, fehlen dort alle Firmen die in den letzten Jahren pleite gegangen oder von der Boerse genommen wurden — der Backtest sieht so kuenstlich gut aus weil nur die Gewinner ueberlebt haben. Dieser Check rechnet die Verzerrung heraus und liefert eine ehrlichere Rendite-Erwartung.">?</span></div>
-            <div id="surv-state-summary" class="card-sub" style="margin-bottom:10px;">Lade...</div>
+            <div id="surv-state-summary" class="card-sub" style="margin-bottom:6px;">Lade...</div>
+            <details id="surv-card-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                Details (Live-Check + Sharpe-Korrektur + Trend) — klicken zum Ausklappen
+            </summary>
 
             <div id="surv-content" style="display:none;">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;">
@@ -399,12 +408,17 @@
                     <tbody id="surv-hist-tbody"></tbody>
                 </table>
             </details>
+            </details>
         </div>
 
         <!-- WALK-FORWARD-OPTIMIZATION (E1, vorgezogen) -->
         <div class="card" id="wfo-card">
             <div class="card-title">Walk-Forward-Validation<span class="tip" data-tip="Ehrlichkeits-Test der Bot-Strategie: Statt einmal auf der gesamten Historie zu optimieren (das fuehrt zu 'Auswendig-Lernen' und schlechten Live-Ergebnissen), wird die Vergangenheit in mehrere Zeit-Fenster geschnitten. Der Bot lernt jeweils auf einem Teil und wird dann ehrlich auf dem naechsten unbekannten Teil getestet. Wenn die Ergebnisse ueber alle Fenster aehnlich gut sind, hat die Strategie eine echte Kante. Zerfallen sie, war es nur Zufall.">?</span></div>
-            <div id="wfo-state-summary" class="card-sub" style="margin-bottom:10px;">Lade Status...</div>
+            <div id="wfo-state-summary" class="card-sub" style="margin-bottom:6px;">Lade Status...</div>
+            <details id="wfo-card-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                Details (Windows-Tabelle + Empfohlene Parameter + Trend + Trigger) — klicken zum Ausklappen
+            </summary>
 
             <!-- Status-spezifische Inhalte -->
             <div id="wfo-idle-block" style="display:none;">
@@ -545,11 +559,16 @@
                 <div class="badge badge-blue" id="watchdog-badge">Prüfe...</div>
             </div>
             <div id="watchdog-details" class="card-sub" style="margin-top:8px;">--</div>
+            </details>
         </div>
 
         <!-- v15 SIZING + CASH-DCA -->
         <div class="card" id="v15-sizing-card">
             <div class="card-title">Position Sizing (v15)<span class="tip" data-tip="Prozent-basierte Groessen-Caps, skalieren automatisch mit dem Portfolio-Wert. Max Positionen = Tier-Map aus portfolio_sizing, max Trade = % vom Gesamtwert (mit Floor/Cap).">?</span></div>
+            <details id="v15-sizing-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin:6px 0 8px;list-style:revert;">
+                Details (Max-Positionen, Trade-Cap, Tier) — klicken zum Ausklappen
+            </summary>
             <div class="regime-detail-grid">
                 <div class="regime-detail-item">
                     <span class="card-sub">Max Positionen</span>
@@ -576,13 +595,18 @@
                     <span id="v15-tier" style="font-weight:700;font-size:14px;">--</span>
                 </div>
             </div>
+            </details>
         </div>
 
         <div class="card" id="v15-dca-card">
             <div class="card-title">Cash-DCA Status (v15)<span class="tip" data-tip="Staffelt neue Einzahlungen (>500 USD Trigger) ueber 5 Scheduler-Zyklen, um Timing-Risiko zu reduzieren. Inaktiv wenn keine neue Einzahlung erkannt wurde.">?</span></div>
-            <div id="v15-dca-status" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+            <div id="v15-dca-status" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
                 <div class="badge badge-blue" id="v15-dca-badge">--</div>
             </div>
+            <details id="v15-dca-details">
+            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                Details (Budget, Zyklen, Fortschritt) — klicken zum Ausklappen
+            </summary>
             <div class="regime-detail-grid">
                 <div class="regime-detail-item">
                     <span class="card-sub">Verfuegbares Budget</span>
@@ -602,6 +626,7 @@
                 </div>
             </div>
             <div id="v15-dca-plan" class="card-sub" style="margin-top:8px;">--</div>
+            </details>
         </div>
 
         <!-- v37z: EARNINGS-WATCHLIST -->
