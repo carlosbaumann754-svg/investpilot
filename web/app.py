@@ -35,6 +35,17 @@ from web import auth_2fa
 
 log = logging.getLogger("WebApp")
 
+# v37g (08.05.2026): Sentry-Init MUSS vor FastAPI-Init kommen, damit die
+# FastApi-Integration Routes wrappen kann. setup_sentry() ist No-Op wenn
+# Feature-Flag aus oder SENTRY_DSN env var fehlt — Bot crasht nicht.
+try:
+    from app.sentry_setup import setup_sentry
+    _sentry_active = setup_sentry()
+except Exception as _e:
+    # Defense-in-Depth: niemals Bot wegen Sentry-Init crashen
+    log.warning("Sentry-Init Top-Level-Failure: %s", _e)
+    _sentry_active = False
+
 # Async-Lock um Read-Modify-Write Races auf config.json zu verhindern.
 # save_config() schreibt zwar atomar, aber zwei concurrent Requests koennen
 # beide die alte Version laden, eigene Aenderung mergen und zurueckspeichern —
