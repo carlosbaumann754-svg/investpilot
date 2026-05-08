@@ -27,4 +27,9 @@ statsmodels>=0.14.0
 # slim-python-images haben /usr/share/zoneinfo nicht; entweder apt-tzdata
 # (siehe Dockerfile) ODER PyPI-tzdata reichen einzeln, beide=Belt+Suspenders.
 tzdata>=2024.1
+# Error-Tracking (v37g, 08.05.2026) — Sentry fuer Real-Money-Phase Visibility.
+# Stack-Traces + Context fuer ib_insync-Drifts, Order-Reject-Edge-Cases, etc.
+# Pushover bleibt fuer Trading-Alerts. Feature-Flag: config.json sentry.enabled.
+# DSN via env var SENTRY_DSN (nicht im Repo, nicht in Logs).
+sentry-sdk[fastapi]>=2.0.0
 
