@@ -439,9 +439,11 @@ def _format_drift_for_alert(d: dict) -> str:
         )
     # Fallback fuer unbekannte Types — wenigstens type + alle non-empty
     # Felder mitschicken (statt leerem Body).
+    # v37f-review-fix: Filter NICHT auf `0` — qty=0 oder diff=0 koennte
+    # selbst die Anomalie sein (z.B. POSITION_WIPED). Nur None/"" raus.
     extras = " ".join(
         f"{k}={v}" for k, v in d.items()
-        if k != "type" and v not in (None, "", 0)
+        if k != "type" and v not in (None, "")
     )
     return f"• {t}: {extras}"[:160]
 

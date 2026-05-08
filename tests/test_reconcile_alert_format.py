@@ -97,6 +97,17 @@ def test_format_unknown_type_fallback_not_empty():
         f"Fallback-Format hat keine Drift-Felder mitgenommen: {msg!r}"
 
 
+def test_format_unknown_type_keeps_zero_values():
+    """Code-Review-Fix MED: 0 darf NICHT rausgefiltert werden — z.B. eine
+    zukuenftige POSITION_WIPED-Drift mit qty=0 wuerde sonst den
+    eigentlichen Anomalie-Wert verlieren."""
+    drift = {"type": "POSITION_WIPED", "symbol": "AAPL", "qty": 0, "expected_qty": 100}
+    msg = _format_drift_for_alert(drift)
+    assert "POSITION_WIPED" in msg
+    assert "qty=0" in msg, f"qty=0 wurde rausgefiltert: {msg!r}"
+    assert "100" in msg
+
+
 def test_format_truncates_long_messages():
     """Sehr lange comments sollen den Push-Body nicht aufblaehen."""
     drift = {
