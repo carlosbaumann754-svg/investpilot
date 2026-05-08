@@ -103,6 +103,25 @@ docker exec investpilot python -m scripts.ibkr_reconcile --accept-phantom SYMBOL
 ```
 Effekt: Symbole werden in `data/reconcile_accepted_phantoms.json` whitelisted. Reconcile meldet sie nicht mehr.
 
+### H. .env-Variable hinzufügen/ändern — v37g (08.05.2026)
+**Wann:** Neue Variable, oder bestehende ersetzen.
+
+**Korrekt (Auto-Backup + Verify):**
+```bash
+bash /opt/investpilot/scripts/safe_env_update.sh "KEY=value"
+```
+
+**❌ NIEMALS:** `cat > .env <<EOF` oder `echo "X=y" > .env` — überschreibt ALLE existierenden Variables.
+
+**Lehre 08.05.2026**: `cat >` für `.env` hat alle Login-Credentials, JWT-Secret, GitHub-Token, SMTP-Vars gelöscht — Bot war 4h nicht login-fähig. Wrapper-Script verhindert das strukturell. Plus daily Backup-Cron 04:30 UTC sichert `.env` nach `/var/backups/investpilot/env/` mit 30d Retention.
+
+**Manueller .env-Restore (falls je nötig):**
+```bash
+ls /var/backups/investpilot/env/    # Liste der Backups
+cp /var/backups/investpilot/env/.env.20260508 /opt/investpilot/.env
+docker compose -f /opt/investpilot/docker-compose.vps.yml --env-file /opt/investpilot/.env up -d investpilot
+```
+
 ---
 
 ## Schritt 4 — Wann was nutzen?
