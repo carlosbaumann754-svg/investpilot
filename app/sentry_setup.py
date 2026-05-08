@@ -64,11 +64,16 @@ def _get_dsn() -> Optional[str]:
 # Patterns die in Event-Bodies redacted werden (= Backup-Layer falls
 # Sentry-SDK's eigene Filter durchrutschen).
 _REDACT_PATTERNS = [
-    # IBKR-Account-IDs:
+    # IBKR-Account-IDs (case-insensitive — falls jemand die IDs lowercased):
     # Paper: DU<letter><digits> (z.B. DUP108015), DU<digits>, DF<digits>
     # Real:  U<digits> (mind. 7) — "U" am Wortanfang plus 7+ Ziffern
-    (re.compile(r"\bD[UF][A-Z]?\d{5,}\b"), "[REDACTED_IBKR_ACCT]"),
-    (re.compile(r"\bU\d{7,}\b"), "[REDACTED_IBKR_ACCT]"),
+    (re.compile(r"\bD[UF][A-Z]?\d{5,}\b", re.IGNORECASE), "[REDACTED_IBKR_ACCT]"),
+    (re.compile(r"\bU\d{7,}\b", re.IGNORECASE), "[REDACTED_IBKR_ACCT]"),
+    # Cash/Equity-Values mit Währungs-Suffix (CRIT für Real-Money-Phase)
+    # Pattern: 12500.50 USD, $1,234.56, €100.00, 50,000 CHF, etc.
+    (re.compile(r"\$?\s?\d{1,3}(?:[,]\d{3})*\.?\d*\s*(?:USD|EUR|CHF|GBP)\b", re.IGNORECASE),
+     "[REDACTED_AMOUNT]"),
+    (re.compile(r"\$\s?\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?\b"), "[REDACTED_AMOUNT]"),
     # Pushover/API-Tokens (30+ Zeichen alphanumerisch)
     (re.compile(r"\b[a-zA-Z0-9]{30,}\b"), lambda m: m.group(0)[:8] + "[REDACTED]"),
     # Email-Adressen
@@ -76,25 +81,53 @@ _REDACT_PATTERNS = [
 ]
 
 # Felder die komplett rausgeworfen werden (auch wenn key existiert)
+# Lowercase-vergleich (siehe _scrub_dict). v37g-review: erweitert um
+# Cash/Position/Order-Felder + breitere Auth/Secret-Coverage.
 _DROP_FIELDS = {
-    "user_key",
-    "api_token",
-    "pushover_user_key",
-    "pushover_api_token",
-    "telegram_token",
-    "anthropic_api_key",
-    "ibkr_password",
-    "session_token",
-    "jwt_secret",
+    # Auth/Secrets
+    "user_key", "api_token", "pushover_user_key", "pushover_api_token",
+    "telegram_token", "anthropic_api_key", "ibkr_password", "session_token",
+    "jwt_secret", "password", "passwd", "pw", "secret", "private_key",
+    "client_secret", "auth_header", "cookie", "authorization", "auth", "token",
+    "key", "bearer",
+    # Account-IDs (numerisch oder als String)
+    "account", "acct", "account_id", "accountid", "ibkr_account",
+    # Cash/Position/Trade-Werte (CRIT vor Real-Money)
+    "cash", "nlv", "equity", "credit", "available_funds", "buying_power",
+    "balance", "portfolio_value", "total_value", "unrealized_pnl",
+    "realized_pnl", "position_value", "market_value", "cost_basis",
+    "amount_usd",
+    # Order/Trade-Identifiers
+    "order_id", "orderid", "perm_id", "permid", "exec_id", "execid",
+    "trade_id", "tradeid", "client_id", "clientid",
 }
 
 
-def _redact_string(s: str) -> str:
-    """Redacted PII aus String."""
-    if not isinstance(s, str):
+def _redact_string(s: Any) -> Any:
+    """Redacted PII aus String. Konvertiert non-string types (int, bytes)
+    zu String + check, damit numerische Account-IDs nicht durchsickern.
+
+    v37g-review-fix LOW 7: int/bytes/etc. waren vorher unscanned.
+    """
+    if isinstance(s, str):
+        for pat, repl in _REDACT_PATTERNS:
+            s = pat.sub(repl, s)
         return s
-    for pat, repl in _REDACT_PATTERNS:
-        s = pat.sub(repl, s)
+    if isinstance(s, bytes):
+        try:
+            decoded = s.decode("utf-8", errors="replace")
+            redacted = _redact_string(decoded)
+            return redacted if redacted != decoded else s
+        except Exception:
+            return s
+    if isinstance(s, int) and len(str(s)) >= 7:
+        # Numerische IDs ab 7 Stellen koennten Account-IDs sein
+        as_str = str(s)
+        for pat, repl in _REDACT_PATTERNS:
+            redacted = pat.sub(repl, as_str)
+            if redacted != as_str:
+                return redacted
+        return s
     return s
 
 
@@ -128,6 +161,10 @@ def _before_send(event: dict, hint: dict) -> Optional[dict]:
     """Sentry before_send-Hook: PII-Scrub vor jeder Event-Sendung.
 
     Returns None → Event wird verworfen.
+
+    v37g-review-fix HIGH 1: Bei Filter-Crash WIRD Event GEDROPPED (None
+    statt unscrubbed Event durchlassen). Vor Real-Money-Phase ist das
+    konservativ-default — lieber Visibility-Verlust als PII-Leak.
     """
     try:
         # Scrub message
@@ -147,10 +184,12 @@ def _before_send(event: dict, hint: dict) -> Optional[dict]:
             for frame in (exc.get("stacktrace", {}) or {}).get("frames", []):
                 if isinstance(frame.get("vars"), dict):
                     frame["vars"] = _scrub_dict(frame["vars"])
+        return event
     except Exception as e:
-        # Nicht crashen wegen Filter-Bug — lieber Event durchlassen
-        log.warning("Sentry before_send filter error: %s", e)
-    return event
+        # v37g-review HIGH 1: Filter-Crash → Event DROPPEN, NICHT durchlassen.
+        # Lieber Visibility-Verlust als Risk dass IBKR-IDs/Cash/Tokens leaken.
+        log.error("Sentry before_send filter crashed: %s — event DROPPED for safety.", e)
+        return None
 
 
 # ============================================================
