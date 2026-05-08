@@ -38,6 +38,7 @@ function switchTab(name) {
     event.target.classList.add('active');
 
     if (name === 'trades') loadTrades(true);
+    if (name === 'order-audit') loadOrderAudit();
     if (name === 'brain') loadBrain();
     if (name === 'reports') { loadReports(); loadLastRunTimestamps(); }
     if (name === 'backtest') { loadBacktest(); loadOptimizer(); loadKellySweep(); loadLastRunTimestamps(); }
@@ -677,6 +678,126 @@ function sortTrades(field) {
 }
 
 function loadMoreTrades() { loadTrades(false); }
+
+// === ORDER-AUDIT (v37e Tag 6) ===
+let _orderAuditData = { pending: [], failed: [] };
+
+async function loadOrderAudit() {
+    const res = await apiFetch('/api/order-audit?limit=100');
+    if (!res) return;
+    const data = await res.json();
+    _orderAuditData = { pending: data.pending || [], failed: data.failed || [] };
+    renderOrderAudit();
+}
+
+function renderOrderAudit() {
+    // === Pending Orders ===
+    const pending = _orderAuditData.pending || [];
+    const summary = document.getElementById('order-audit-pending-summary');
+    if (summary) {
+        if (pending.length === 0) {
+            summary.innerHTML = '✅ Keine pending Orders. Alles bei IBKR final-statussiert oder Bot tradet gerade nicht.';
+            summary.style.color = 'var(--green, #4ade80)';
+        } else {
+            summary.innerHTML = `⏳ <b>${pending.length}</b> Pending Order${pending.length === 1 ? '' : 's'} — Tracker arbeitet. Aelteste oben.`;
+            summary.style.color = '';
+        }
+    }
+
+    const ptbody = document.getElementById('order-audit-pending-table');
+    if (ptbody) {
+        ptbody.innerHTML = '';
+        if (pending.length === 0) {
+            ptbody.innerHTML = '<tr><td colspan="7" style="text-align:center;opacity:0.6;padding:20px;">— keine —</td></tr>';
+        } else {
+            pending.forEach(p => {
+                const reg = p.registered_at ? new Date(p.registered_at).toLocaleString('de-CH') : '--';
+                const last = p.last_event_at ? new Date(p.last_event_at).toLocaleString('de-CH') : '--';
+                const sym = p.symbol || '--';
+                const action = p.action || '--';
+                const qty = p.quantity != null ? p.quantity : '--';
+                const status = p.current_status || 'Unknown';
+                const oid = p.order_id || '--';
+
+                let statusColor = '';
+                if (status === 'Submitted' || status === 'PendingSubmit') statusColor = 'color:var(--blue, #60a5fa);';
+                else if (status === 'PreSubmitted') statusColor = 'color:var(--orange, #fbbf24);';
+                else if (status === 'PartiallyFilled') statusColor = 'color:var(--orange, #fbbf24);';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${reg}</td>
+                    <td><b>${sym}</b></td>
+                    <td>${action}</td>
+                    <td>${qty}</td>
+                    <td style="${statusColor}font-weight:600;">${status}</td>
+                    <td>${last}</td>
+                    <td style="font-family:monospace;font-size:11px;opacity:0.7;">${oid}</td>
+                `;
+                ptbody.appendChild(tr);
+            });
+        }
+    }
+
+    // === Failed Trades (Filter anwenden) ===
+    const filter = document.getElementById('order-audit-filter-status')?.value || '';
+    const allFailed = _orderAuditData.failed || [];
+    const filtered = filter
+        ? allFailed.filter(t => String(t.status || '').toLowerCase() === filter)
+        : allFailed;
+
+    const fcount = document.getElementById('order-audit-failed-count');
+    if (fcount) {
+        if (allFailed.length === 0) {
+            fcount.textContent = '0 Failed Trades — sauber!';
+            fcount.style.color = 'var(--green, #4ade80)';
+        } else {
+            fcount.textContent = `${filtered.length} von ${allFailed.length} Failed Trades`;
+            fcount.style.color = '';
+        }
+    }
+
+    const ftbody = document.getElementById('order-audit-failed-table');
+    if (ftbody) {
+        ftbody.innerHTML = '';
+        if (filtered.length === 0) {
+            ftbody.innerHTML = '<tr><td colspan="6" style="text-align:center;opacity:0.6;padding:20px;">— keine Failed Trades —</td></tr>';
+        } else {
+            filtered.forEach(t => {
+                const ts = t.timestamp ? new Date(t.timestamp).toLocaleString('de-CH') : '--';
+                const action = t.action || '--';
+                const sym = t.symbol || '--';
+                const amt = t.amount_usd != null ? fmtUsd(t.amount_usd) : '--';
+                const status = String(t.status || '').toLowerCase();
+                const raw = t.ibkr_status_raw || '--';
+
+                let statusColor = '';
+                let statusBadge = status;
+                if (status === 'stale') {
+                    statusColor = 'background:rgba(251, 191, 36, 0.15);color:#fbbf24;';
+                    statusBadge = '⚠️ stale';
+                } else if (status === 'cancelled') {
+                    statusColor = 'background:rgba(251, 146, 60, 0.15);color:#fb923c;';
+                    statusBadge = '🚫 cancelled';
+                } else if (status === 'rejected') {
+                    statusColor = 'background:rgba(248, 113, 113, 0.15);color:#f87171;';
+                    statusBadge = '❌ rejected';
+                }
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${ts}</td>
+                    <td>${action}</td>
+                    <td><b>${sym}</b></td>
+                    <td>${amt}</td>
+                    <td><span style="${statusColor}padding:2px 8px;border-radius:4px;font-weight:600;font-size:11px;">${statusBadge}</span></td>
+                    <td style="font-family:monospace;font-size:11px;opacity:0.7;">${raw}</td>
+                `;
+                ftbody.appendChild(tr);
+            });
+        }
+    }
+}
 
 // === BRAIN ===
 async function loadBrain() {

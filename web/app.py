@@ -1395,6 +1395,67 @@ async def api_trades(limit: int = 50, offset: int = 0, user=Depends(require_auth
     return {"total": total, "offset": offset, "limit": limit, "trades": page}
 
 
+@app.get("/api/order-audit")
+async def api_order_audit(limit: int = 100, user=Depends(require_auth)):
+    """Order-Audit (v37e Tag 6): Diagnose-Sicht fuer Order-Lifecycle-Issues.
+
+    Liefert zwei Sektionen:
+      - pending: Live aus E27-Tracker (pending_orders.json). Orders die
+        aktuell auf IBKR-Status-Event warten oder noch nicht final sind.
+      - failed: Aus trade_history.json gefiltert auf nicht-erfolgreiche
+        Status (cancelled/rejected/stale). Letzte `limit` Eintraege
+        rueckwaerts chronologisch.
+
+    Klar abgegrenzt vom /api/trades-Endpoint:
+      - /api/trades = chronologische Erfolgs-Bilanz aller Trades
+      - /api/order-audit = Diagnose-Sicht "was lief schief / steckt fest"
+    """
+    # 1. Pending Orders (E27 Live-Sicht)
+    pending_raw = read_json_safe("pending_orders.json") or {}
+    pending_list: list = []
+    if isinstance(pending_raw, dict):
+        for order_id, entry in pending_raw.items():
+            if not isinstance(entry, dict):
+                continue
+            current_status = entry.get("current_status", "Unknown")
+            # Final-Status nicht als "pending" anzeigen (executed Orders
+            # gehoeren in /api/trades, nicht hier)
+            if current_status in ("Filled", "Cancelled", "ApiCancelled",
+                                   "Inactive", "Rejected", "Stale"):
+                continue
+            pending_list.append({
+                "order_id": order_id,
+                "symbol": entry.get("symbol"),
+                "instrument_id": entry.get("instrument_id"),
+                "action": entry.get("action"),
+                "quantity": entry.get("quantity"),
+                "current_status": current_status,
+                "registered_at": entry.get("registered_at"),
+                "last_event_at": entry.get("last_event_at"),
+            })
+    enrich_with_asset_meta(pending_list)
+    # Aelteste pending-Order zuerst (= laengste Wartezeit)
+    pending_list.sort(key=lambda x: x.get("registered_at") or "")
+
+    # 2. Failed Trades (cancelled/rejected/stale aus History)
+    history = read_json_safe("trade_history.json") or []
+    failed_statuses = {"cancelled", "rejected", "stale"}
+    failed_list = [t for t in history
+                   if isinstance(t, dict)
+                   and str(t.get("status", "")).lower() in failed_statuses]
+    failed_list.reverse()  # Neueste zuerst
+    failed_list = failed_list[:limit]
+    enrich_with_asset_meta(failed_list)
+
+    return {
+        "pending": pending_list,
+        "pending_count": len(pending_list),
+        "failed": failed_list,
+        "failed_count": len(failed_list),
+        "limit": limit,
+    }
+
+
 @app.get("/api/brain")
 async def api_brain(user=Depends(require_auth)):
     """Brain State: Scores, Regime, Regeln.
