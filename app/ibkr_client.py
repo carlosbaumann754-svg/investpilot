@@ -249,6 +249,15 @@ class IbkrBroker(BrokerBase):
         self._e27_enabled = bool(
             (config or {}).get("realtime_status_tracker", {}).get("enabled", False)
         )
+        # v37h Task 1 (09.05.2026): Asset-Class-Order-Settings.
+        # Stress-Test-Befund 08.05.: Commodity-ETFs (CPER, SLV) failen in
+        # Pre-Market wegen duenner Liquiditaet. Per-Asset-Class Slippage +
+        # Trading-Hours sind sauberer Architektur-Default.
+        # Format: {"stocks": {"slippage_pct": 0.5, "trading_hours": "extended"},
+        #          "commodities": {"slippage_pct": 1.5, "trading_hours": "rth_only"}, ...}
+        self._asset_class_order_settings = (config or {}).get(
+            "asset_class_order_settings", {}
+        )
         try:
             from app.order_status_tracker import OrderStatusTracker
             self._tracker = OrderStatusTracker()
@@ -622,6 +631,48 @@ class IbkrBroker(BrokerBase):
     #   False = Order bleibt im IBKR-Order-Book (z.B. Limit fuer After-Hours)
     CANCEL_ON_TIMEOUT = True
 
+    def _resolve_order_settings(self, instrument_id, limit_slippage_pct=None):
+        """v37h Task 1 (09.05.2026): Asset-Class-aware Order-Settings.
+
+        Resolution-Reihenfolge fuer slippage_pct:
+          1. Per-call limit_slippage_pct (wenn explizit gesetzt)
+          2. asset_class_order_settings[asset_class].slippage_pct
+          3. asset_class_order_settings._default.slippage_pct
+          4. self.limit_slippage_pct (instance default)
+
+        Resolution fuer outsideRth:
+          - asset_class_order_settings[asset_class].trading_hours
+          - "rth_only" -> outsideRth=False (NUR NYSE-RTH 09:30-16:00 EST)
+          - "extended" -> outsideRth=True (Pre-Market + After-Hours OK)
+
+        Returns: dict mit slippage_pct, outside_rth, asset_class
+
+        Diese Helper ist isoliert von ib_insync damit Unit-Tests ohne
+        broker-connection moeglich sind.
+        """
+        from app.market_scanner import get_asset_class_for_instrument_id
+        asset_class = get_asset_class_for_instrument_id(instrument_id)
+        ac_settings = self._asset_class_order_settings.get(asset_class) if asset_class else None
+        if ac_settings is None:
+            ac_settings = self._asset_class_order_settings.get("_default", {})
+        # slippage
+        if limit_slippage_pct is not None:
+            slippage = limit_slippage_pct
+        elif ac_settings.get("slippage_pct") is not None:
+            slippage = float(ac_settings["slippage_pct"])
+        else:
+            slippage = self.limit_slippage_pct
+        # outsideRth
+        trading_hours_mode = ac_settings.get("trading_hours", "extended")
+        outside_rth = (trading_hours_mode != "rth_only")
+        return {
+            "slippage_pct": slippage,
+            "outside_rth": outside_rth,
+            "asset_class": asset_class,
+            "trading_hours_mode": trading_hours_mode,
+        }
+
+
     def _place_market_order(
         self,
         instrument_id: int,
@@ -660,7 +711,15 @@ class IbkrBroker(BrokerBase):
         # Resolve effective config (per-call override > instance config > class default)
         eff_timeout = fill_timeout if fill_timeout is not None else self.fill_timeout_s
         eff_order_type = (order_type if order_type is not None else self.default_order_type).upper()
-        eff_slippage = limit_slippage_pct if limit_slippage_pct is not None else self.limit_slippage_pct
+
+        # v37h Task 1 (09.05.2026): Asset-Class-aware Slippage + Trading-Hours.
+        # Resolution via _resolve_order_settings helper (isoliert testbar).
+        order_settings = self._resolve_order_settings(instrument_id, limit_slippage_pct)
+        eff_slippage = order_settings["slippage_pct"]
+        outside_rth = order_settings["outside_rth"]
+        asset_class = order_settings["asset_class"]
+        log.debug("Order-Settings: asset=%s, slippage=%s%%, outsideRth=%s",
+                  asset_class or "?", eff_slippage, outside_rth)
 
         try:
             ib = self._get_ib()
@@ -690,8 +749,15 @@ class IbkrBroker(BrokerBase):
                 limit_price_log = f"limit ${limit_price:.2f} (slip {eff_slippage}%)"
                 intended_price = float(limit_price)
 
-            log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f)",
-                     action, qty, contract.symbol, limit_price_log, amount_usd, price)
+            # v37h Task 1 (09.05.2026): outsideRth aus Asset-Class-Settings.
+            # rth_only -> Order fuellt nur in NYSE-RTH 09:30-16:00 EST.
+            # Pre-Market/After-Hours wird die Order zwar submitted aber NICHT
+            # gefuellt = saubere "warte-auf-RTH"-Semantik.
+            order.outsideRth = outside_rth
+
+            log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f, asset=%s, outsideRth=%s)",
+                     action, qty, contract.symbol, limit_price_log, amount_usd, price,
+                     asset_class or "?", outside_rth)
 
             order.transmit = (stop_loss_pct == 0 and take_profit_pct == 0)
             trade = ib.placeOrder(contract, order)
