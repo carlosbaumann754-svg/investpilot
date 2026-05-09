@@ -59,6 +59,13 @@ def test_get_asset_class_for_instrument_id_invalid():
     assert get_asset_class_for_instrument_id(None) is None
 
 
+def test_get_asset_class_for_instrument_id_float_input():
+    """v37h Review-Fix #4 (09.05.2026): float-input wird via int() konvertiert."""
+    from app.market_scanner import get_asset_class_for_instrument_id
+    assert get_asset_class_for_instrument_id(5003.0) == "commodities"
+    assert get_asset_class_for_instrument_id(6408.7) == "stocks"  # truncates
+
+
 def test_get_asset_class_for_symbol_known():
     from app.market_scanner import get_asset_class_for_symbol
     assert get_asset_class_for_symbol("AAPL") == "stocks"
@@ -208,3 +215,30 @@ def test_resolve_order_settings_explicit_zero_override_works():
     broker = _make_broker(settings)
     result = broker._resolve_order_settings(instrument_id=5003, limit_slippage_pct=0.0)
     assert result["slippage_pct"] == 0.0  # 0.0 ist intentionaler Override
+
+
+def test_resolve_order_settings_known_class_but_no_settings_falls_back_to_default():
+    """v37h Review-Fix #5 (09.05.2026): instrument_id ist in ASSET_UNIVERSE
+    (z.B. SILVER=commodities) aber config hat keinen "commodities"-Eintrag.
+    Soll dann _default greifen, NICHT instance-default."""
+    settings = {
+        "_default": {"slippage_pct": 0.9, "trading_hours": "rth_only"},
+        # ABSICHTLICH kein "commodities"-key
+    }
+    broker = _make_broker(settings, instance_slippage=0.5)
+    result = broker._resolve_order_settings(instrument_id=5003)  # SILVER
+    assert result["slippage_pct"] == 0.9  # _default, NICHT instance-default 0.5
+    assert result["outside_rth"] is False  # _default rth_only
+    assert result["asset_class"] == "commodities"  # asset_class trotzdem aufgeloest
+
+
+def test_resolve_order_settings_empty_dict_class_falls_back_to_default():
+    """v37h Review-Fix #3 (09.05.2026): config-Typo wo "commodities": {}
+    explizit leerer dict ist. `not ac_settings` faengt das ab."""
+    settings = {
+        "commodities": {},  # leerer dict (Config-Typo)
+        "_default": {"slippage_pct": 0.9, "trading_hours": "rth_only"},
+    }
+    broker = _make_broker(settings)
+    result = broker._resolve_order_settings(instrument_id=5003)
+    assert result["slippage_pct"] == 0.9  # _default, weil ac_settings={} -> falsy

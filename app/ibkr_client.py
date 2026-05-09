@@ -653,7 +653,11 @@ class IbkrBroker(BrokerBase):
         from app.market_scanner import get_asset_class_for_instrument_id
         asset_class = get_asset_class_for_instrument_id(instrument_id)
         ac_settings = self._asset_class_order_settings.get(asset_class) if asset_class else None
-        if ac_settings is None:
+        # Review-Fix #3 (09.05.2026): `not ac_settings` faengt None UND {} —
+        # der empty-dict-Fall passiert wenn Config explizit `"bonds": {}` setzt
+        # (Typo) oder eine neue Asset-Class in ASSET_UNIVERSE ohne Settings-
+        # Eintrag bleibt. Dann _default als Safety-Net.
+        if not ac_settings:
             ac_settings = self._asset_class_order_settings.get("_default", {})
         # slippage
         if limit_slippage_pct is not None:
@@ -755,9 +759,10 @@ class IbkrBroker(BrokerBase):
             # gefuellt = saubere "warte-auf-RTH"-Semantik.
             order.outsideRth = outside_rth
 
-            log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f, asset=%s, outsideRth=%s)",
+            log.info("ORDER %s %d %s @ %s (target $%.2f, quote $%.2f, asset=%s, mode=%s, outsideRth=%s)",
                      action, qty, contract.symbol, limit_price_log, amount_usd, price,
-                     asset_class or "?", outside_rth)
+                     asset_class or "?", order_settings.get("trading_hours_mode", "?"),
+                     outside_rth)
 
             order.transmit = (stop_loss_pct == 0 and take_profit_pct == 0)
             trade = ib.placeOrder(contract, order)
@@ -795,6 +800,11 @@ class IbkrBroker(BrokerBase):
                     sl_order = StopOrder(opposite, qty, sl_price)
                     sl_order.parentId = trade.order.orderId
                     sl_order.transmit = (take_profit_pct == 0)
+                    # v37h Task 1 Review-Fix #1 (09.05.2026): SL muss in selber
+                    # Trading-Hours-Window aktiv sein wie Parent. Sonst: bei
+                    # extended-Stocks fuellt Entry pre-market, aber StopOrder
+                    # bleibt RTH-only und triggert nicht bei Pre-Market-Crash.
+                    sl_order.outsideRth = outside_rth
                     child_trades.append(ib.placeOrder(contract, sl_order))
 
                 if take_profit_pct > 0:
@@ -802,6 +812,10 @@ class IbkrBroker(BrokerBase):
                     tp_order = LimitOrder(opposite, qty, tp_price)
                     tp_order.parentId = trade.order.orderId
                     tp_order.transmit = True
+                    # v37h Task 1 Review-Fix #1 (09.05.2026): TP folgt selber
+                    # Hours-Logik wie Parent (Konsistenz; weniger relevant aber
+                    # vermeidet missed-fill bei Pre-Market-Spike).
+                    tp_order.outsideRth = outside_rth
                     child_trades.append(ib.placeOrder(contract, tp_order))
 
             # 3. Auf Fill warten
