@@ -243,8 +243,11 @@ class IbkrBroker(BrokerBase):
         # Feature-Flag-geschuetzt — instantiiert immer (kein Risiko) aber
         # subscription erst aktiv wenn config.realtime_status_tracker.enabled=true.
         # Vorteile: Branch deploybar mit Flag OFF, jederzeit aktivierbar via API.
+        # v37h Task 2c (09.05.2026): None-safe — IbkrBroker() ohne config-Arg
+        # (z.B. von cancel_all_pending_orders) crashte vorher mit
+        # AttributeError: 'NoneType' has no attribute 'get'.
         self._e27_enabled = bool(
-            config.get("realtime_status_tracker", {}).get("enabled", False)
+            (config or {}).get("realtime_status_tracker", {}).get("enabled", False)
         )
         try:
             from app.order_status_tracker import OrderStatusTracker
