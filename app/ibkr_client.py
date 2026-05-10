@@ -676,6 +676,196 @@ class IbkrBroker(BrokerBase):
             "trading_hours_mode": trading_hours_mode,
         }
 
+    # Status-Werte die einen Brain-Snapshot ausloesen (Cash/Positions haben
+    # sich tatsaechlich veraendert). Zentrale Liste damit Tests + Implementierung
+    # konsistent bleiben.
+    _SNAPSHOTTABLE_STATUSES = frozenset({"Filled", "PartiallyFilled"})
+
+    def _ensure_connected(
+        self,
+        max_retries: int = 3,
+        backoff_base_s: float = 5.0,
+    ) -> bool:
+        """v37h Task 2d (10.05.2026): IB-Gateway-Resilience mit Auto-Reconnect.
+
+        HINTERGRUND
+        Daily-Restart-Cron (03:00 UTC) handhabt geplante Restarts. Mid-day
+        Socket-Drops (Network-Blip, IBG-GC-Pause, IBKR-Server-Restarts in
+        Quiet-Hours) sind aber nicht abgefangen — Trader-Cycle crasht oder
+        haengt. _get_ib() macht bereits einen einzigen Retry bei clientId-
+        Conflict, aber kein Backoff bei Connection-Errors.
+
+        Diese Methode wraps _get_ib() mit exponential backoff:
+            Versuch 0: sofort
+            Versuch 1: nach backoff_base * 3^0 Sekunden
+            Versuch 2: nach backoff_base * 3^1 Sekunden
+            Versuch 3: nach backoff_base * 3^2 Sekunden
+        Default-Werte (5s base, 3 retries): 5s + 15s + 45s = max 65s Wait.
+
+        Args:
+            max_retries: Anzahl Wiederholversuche NACH dem ersten (default 3).
+            backoff_base_s: Basis fuer exponential backoff (default 5.0).
+
+        Returns:
+            True  = Connection lebt (initial OK ODER nach Retry wiederhergestellt).
+            False = Final-Failure nach allen Versuchen — log.error -> Sentry.
+                    Caller sollte Safe-Mode (no new orders, cancel pending).
+
+        DEFENSIVE
+        Diese Methode ist OPT-IN. Public Methods koennen sie vorab aufrufen
+        wenn sie Resilience brauchen. Bestehende Methoden bleiben unveraendert
+        (backwards-compat).
+
+        SYNC-ONLY (Review-Fix #2, 10.05.2026)
+        Diese Methode nutzt time.sleep — blockiert den callenden Thread bis
+        65s. NICHT aus async/FastAPI-Handlern aufrufen — sonst Event-Loop-
+        Starvation. Andere Stellen in diesem Modul nutzen ib.sleep (asyncio-
+        aware via ib_insync). Wenn async-wiring noetig wird, sleep_fn als
+        Argument injizieren.
+
+        client_id-MUTATION (Review-Fix #3, 10.05.2026)
+        _get_ib() macht intern bereits einen Single-Retry bei clientId-
+        Conflict und mutiert dabei self.client_id. Diese Wrapper-Schicht
+        retryt OBENDREIN. D.h. ein Final-Fail kann bedeuten:
+        max_retries * 2 echte Connect-Versuche und ein zufaellig gewaehlter
+        Pool-Key. Fuer Cutover-Phase OK weil Final-Fail = Sentry + Safe-Mode,
+        aber post-cutover ggf. die zwei Retry-Layer entkoppeln.
+        """
+        last_error: Optional[Exception] = None
+        total_attempts = max_retries + 1
+        for attempt in range(total_attempts):
+            try:
+                ib = self._get_ib()
+                if ib is not None and ib.isConnected():
+                    if attempt > 0:
+                        log.info(
+                            "IB-Reconnect erfolgreich nach %d Versuch(en)",
+                            attempt + 1,
+                        )
+                    return True
+                log.warning(
+                    "IB-Connect Versuch %d/%d: _get_ib lieferte disconnected ib",
+                    attempt + 1, total_attempts,
+                )
+            except Exception as e:
+                last_error = e
+                log.warning(
+                    "IB-Connect Versuch %d/%d failed: %s: %s",
+                    attempt + 1, total_attempts, type(e).__name__, e,
+                )
+
+            # Backoff zwischen Versuchen — nicht nach letztem Versuch
+            if attempt < max_retries:
+                backoff = backoff_base_s * (3 ** attempt)
+                time.sleep(backoff)
+
+        log.error(
+            "IB-Connect FINAL-FAILED nach %d Versuchen — Safe-Mode aktiv. "
+            "Letzter Fehler: %s",
+            total_attempts, last_error,
+        )
+        return False
+
+    def _snapshot_after_fill_safely(
+        self,
+        status: str,
+        symbol: str,
+        async_persist: bool = True,
+    ) -> bool:
+        """v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill.
+
+        HINTERGRUND
+        Vor dieser Aenderung wurde Brain-Snapshot nur im Trader-Cycle (alle 5-15
+        Min) geschrieben. Reconcile-Cron laeuft alle 30 Min. Wenn ein Fill
+        zwischen Cycle-Tick und naechstem Reconcile-Run passiert, sieht
+        Reconcile veraltete Cash-Werte -> Phantom-Drift-Alert (siehe
+        08.05.2026-Vorfall: 12 Pushover-Alerts ueber Nacht mit 'CASH_DRIFT:').
+
+        v37f hat das Schema-Mismatch (cash vs credit) gefixt aber NICHT den
+        Timing-Gap. Diese Methode schliesst den Gap.
+
+        Args:
+            status: Order-Status nach _place_market_order Wartephase.
+                Snapshot wird nur bei Filled/PartiallyFilled getriggert.
+            symbol: Fuer Audit-Log (Postmortem-Debugging).
+            async_persist: True (default) -> record_snapshot laeuft in
+                daemon-thread, _place_market_order kehrt sofort zurueck.
+                False -> synchron persistieren (nur fuer Tests, damit
+                MagicMock-Assertions stabil sind).
+
+        Returns:
+            True  = Snapshot getriggert (im async-Modus: Thread gestartet,
+                    Persistenz noch nicht garantiert; im sync-Modus: persisted).
+            False = Snapshot uebersprungen (status nicht-fuellend) ODER
+                    Fehler aufgetreten (defensiv gefangen, Order-Flow geht
+                    weiter).
+
+        DEFENSIVE
+        Diese Methode darf NIE eine Exception hochwerfen — der Call-Site
+        in _place_market_order rechnet damit dass eine fehlgeschlagene
+        Snapshot-Persistierung den Order-Result nicht beeinflusst.
+
+        REVIEW-FIX #1 (Code-Review 10.05.2026): record_snapshot ruft
+        save_json(BRAIN_FILE) unter threading.Lock auf. Synchroner Aufruf
+        wuerde Order-Confirmation-Return durch Lock-Wait + 365-Snapshot-
+        Serialization verzoegern. Daher async_persist=True default —
+        save_json laeuft im daemon-thread, der Order-Path returnt sofort.
+        Defensiveness bleibt: Errors in Thread werden geloggt, nicht
+        propagiert.
+        """
+        if status not in self._SNAPSHOTTABLE_STATUSES:
+            return False
+        try:
+            portfolio = self.get_portfolio()
+        except Exception as e:
+            log.warning(
+                "Snapshot-After-Fill: get_portfolio raised for %s — non-fatal: %s",
+                symbol, e,
+            )
+            return False
+        if portfolio is None:
+            log.warning(
+                "Snapshot-After-Fill skipped for %s: get_portfolio returned None",
+                symbol,
+            )
+            return False
+
+        def _do_persist():
+            """Roher Persist-Call ohne Error-Handling — Caller faengt."""
+            from app.brain import record_snapshot  # lazy: Circular avoidance
+            record_snapshot(portfolio)
+
+        if async_persist:
+            # Async: Thread schluckt + loggt Fehler intern (Caller bekommt
+            # immer True = "Thread gestartet"). So bleibt Order-Path schnell.
+            def _persist_swallow():
+                try:
+                    _do_persist()
+                    log.info("Snapshot-After-Fill OK: %s persisted (async)", symbol)
+                except Exception as e:
+                    log.warning(
+                        "Snapshot-After-Fill: record_snapshot raised for %s — "
+                        "non-fatal: %s", symbol, e,
+                    )
+            t = threading.Thread(
+                target=_persist_swallow,
+                name=f"snapshot-after-fill-{symbol}",
+                daemon=True,
+            )
+            t.start()
+            return True
+
+        # Sync: Caller will klare True/False-Antwort fuer Persist-Erfolg.
+        try:
+            _do_persist()
+            log.info("Snapshot-After-Fill OK: %s persisted (sync)", symbol)
+            return True
+        except Exception as e:
+            log.warning(
+                "Snapshot-After-Fill: record_snapshot raised for %s — "
+                "non-fatal: %s", symbol, e,
+            )
+            return False
 
     def _place_market_order(
         self,
@@ -849,6 +1039,12 @@ class IbkrBroker(BrokerBase):
 
             log.info("Order %s status=%s filled=%d avgPrice=%.4f",
                      trade.order.orderId, status, fill_qty, avg_fill_price)
+
+            # v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill —
+            # schliesst Timing-Gap zwischen Fill und naechstem Trader-Cycle.
+            # Reconcile-Cron sieht damit immer aktuelles Cash + Positions.
+            # Defensive: Helper faengt alle Errors (Order-Result unbeeinflusst).
+            self._snapshot_after_fill_safely(status, contract.symbol)
 
             # 4. eToro-kompatibles Response
             return {
