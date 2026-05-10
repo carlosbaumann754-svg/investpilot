@@ -80,6 +80,25 @@ def test_get_asset_class_for_symbol_unknown():
     assert get_asset_class_for_symbol(None) is None
 
 
+def test_get_asset_class_for_symbol_reverse_lookup_via_ibkr_override():
+    """v37h Fix (10.05.2026): IBKR-Override-Symbols ohne eigenen Key
+    sollen via Reverse-Lookup ihre Asset-Class finden.
+
+    Vorher: CPER -> None (CPER ist nur ibkr_override von COPPER)
+    Folge: events_calendar Earnings-Pre-Filter griff nicht ->
+    yfinance 404 'No fundamentals data found for symbol: CPER'
+    Nachher: CPER -> 'commodities' (gefunden via reverse-lookup)
+    """
+    from app.market_scanner import get_asset_class_for_symbol
+    # Symbole OHNE eigenen Key in ASSET_UNIVERSE — reverse-lookup nötig
+    assert get_asset_class_for_symbol("CPER") == "commodities"  # COPPER-override
+    assert get_asset_class_for_symbol("USO") == "commodities"   # OIL-override
+    assert get_asset_class_for_symbol("UNG") == "commodities"   # NGAS-override
+    # Symbole MIT eigenem Key haben Vorrang — direkter Lookup
+    assert get_asset_class_for_symbol("SLV") == "etf"
+    assert get_asset_class_for_symbol("GLD") == "etf"
+
+
 # ============================================================
 # IbkrBroker config-Loading Tests
 # ============================================================

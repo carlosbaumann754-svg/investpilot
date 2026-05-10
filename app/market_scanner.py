@@ -206,11 +206,25 @@ def get_asset_class_for_symbol(bot_symbol: str) -> Optional[str]:
     """Asset-Class-Lookup via Bot-Symbol (Pendant zu instrument_id-Variante).
 
     Nuetzlich fuer Pfade die Symbol-basiert arbeiten (z.B. Strategy-Code).
+
+    v37h Fix (10.05.2026): Reverse-Lookup ueber ibkr_override.symbol falls
+    direkter Key nicht gefunden. Beispiel: 'CPER' ist kein ASSET_UNIVERSE-
+    Key, sondern ibkr_override.symbol von 'COPPER'. Vorher returnte das
+    None -> Earnings-Filter griff nicht -> yfinance 404 ERROR-Spam fuer
+    Commodity-ETF-Tickers. Jetzt: 'CPER' -> COPPER's class = 'commodities'.
     """
     if not bot_symbol:
         return None
+    # Direkter Lookup
     info = ASSET_UNIVERSE.get(bot_symbol)
-    return info.get("class") if info else None
+    if info:
+        return info.get("class")
+    # Reverse-Lookup: ist symbol ein ibkr_override.symbol?
+    for meta in ASSET_UNIVERSE.values():
+        override = meta.get("ibkr_override") or {}
+        if override.get("symbol") == bot_symbol:
+            return meta.get("class")
+    return None
 
 
 def expand_symbol_for_match(symbol: str) -> set[str]:

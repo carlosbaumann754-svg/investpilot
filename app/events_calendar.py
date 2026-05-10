@@ -44,10 +44,17 @@ def _fetch_earnings_date(symbol):
 
     # v37cr: Pre-Filter — keine Earnings fuer Non-Stocks-Asset-Klassen.
     # Spart yfinance-404-ERROR-Spam fuer ETFs/Crypto/Commodities/Forex/Indices.
+    #
+    # v37h Fix (10.05.2026): get_asset_class_for_symbol nutzen statt direktem
+    # ASSET_UNIVERSE-Lookup. Vorher wurde z.B. 'CPER' (IBKR-Ticker fuer
+    # COPPER-ibkr_override) in ASSET_UNIVERSE gesucht und nicht gefunden,
+    # weil der Key 'COPPER' ist. Folge: Pre-Filter griff nicht, yfinance
+    # wurde angerufen, 404 'No fundamentals data found for symbol: CPER'
+    # landete als ERROR im Log. Carlos meldete das 10.05.2026 abend.
+    # get_asset_class_for_symbol macht Reverse-Lookup ueber ibkr_override.
     try:
-        from app.market_scanner import ASSET_UNIVERSE
-        info = ASSET_UNIVERSE.get(symbol) or {}
-        asset_class = info.get("class")
+        from app.market_scanner import get_asset_class_for_symbol
+        asset_class = get_asset_class_for_symbol(symbol)
         if asset_class and asset_class != "stocks":
             # Cache permanent (24h) — Asset-Class aendert sich nicht
             _earnings_cache[symbol] = {"earnings_date": None, "fetched_at": now}
