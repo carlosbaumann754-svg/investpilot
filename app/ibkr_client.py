@@ -624,6 +624,76 @@ class IbkrBroker(BrokerBase):
     # konsistent bleiben.
     _SNAPSHOTTABLE_STATUSES = frozenset({"Filled", "PartiallyFilled"})
 
+    def _ensure_connected(
+        self,
+        max_retries: int = 3,
+        backoff_base_s: float = 5.0,
+    ) -> bool:
+        """v37h Task 2d (10.05.2026): IB-Gateway-Resilience mit Auto-Reconnect.
+
+        HINTERGRUND
+        Daily-Restart-Cron (03:00 UTC) handhabt geplante Restarts. Mid-day
+        Socket-Drops (Network-Blip, IBG-GC-Pause, IBKR-Server-Restarts in
+        Quiet-Hours) sind aber nicht abgefangen — Trader-Cycle crasht oder
+        haengt. _get_ib() macht bereits einen einzigen Retry bei clientId-
+        Conflict, aber kein Backoff bei Connection-Errors.
+
+        Diese Methode wraps _get_ib() mit exponential backoff:
+            Versuch 0: sofort
+            Versuch 1: nach backoff_base * 3^0 Sekunden
+            Versuch 2: nach backoff_base * 3^1 Sekunden
+            Versuch 3: nach backoff_base * 3^2 Sekunden
+        Default-Werte (5s base, 3 retries): 5s + 15s + 45s = max 65s Wait.
+
+        Args:
+            max_retries: Anzahl Wiederholversuche NACH dem ersten (default 3).
+            backoff_base_s: Basis fuer exponential backoff (default 5.0).
+
+        Returns:
+            True  = Connection lebt (initial OK ODER nach Retry wiederhergestellt).
+            False = Final-Failure nach allen Versuchen — log.error -> Sentry.
+                    Caller sollte Safe-Mode (no new orders, cancel pending).
+
+        DEFENSIVE
+        Diese Methode ist OPT-IN. Public Methods koennen sie vorab aufrufen
+        wenn sie Resilience brauchen. Bestehende Methoden bleiben unveraendert
+        (backwards-compat).
+        """
+        last_error: Optional[Exception] = None
+        total_attempts = max_retries + 1
+        for attempt in range(total_attempts):
+            try:
+                ib = self._get_ib()
+                if ib is not None and ib.isConnected():
+                    if attempt > 0:
+                        log.info(
+                            "IB-Reconnect erfolgreich nach %d Versuch(en)",
+                            attempt + 1,
+                        )
+                    return True
+                log.warning(
+                    "IB-Connect Versuch %d/%d: _get_ib lieferte disconnected ib",
+                    attempt + 1, total_attempts,
+                )
+            except Exception as e:
+                last_error = e
+                log.warning(
+                    "IB-Connect Versuch %d/%d failed: %s: %s",
+                    attempt + 1, total_attempts, type(e).__name__, e,
+                )
+
+            # Backoff zwischen Versuchen — nicht nach letztem Versuch
+            if attempt < max_retries:
+                backoff = backoff_base_s * (3 ** attempt)
+                time.sleep(backoff)
+
+        log.error(
+            "IB-Connect FINAL-FAILED nach %d Versuchen — Safe-Mode aktiv. "
+            "Letzter Fehler: %s",
+            total_attempts, last_error,
+        )
+        return False
+
     def _snapshot_after_fill_safely(self, status: str, symbol: str) -> bool:
         """v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill.
 
