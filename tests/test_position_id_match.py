@@ -105,3 +105,157 @@ def test_sell_filter_finds_position_via_symbol_match():
              or scanner_result.get("symbol") in existing_symbols)
     )
     assert is_sell_candidate is True, "SELL muss SLV-Position via Symbol-Match finden"
+
+
+# ============================================================
+# v37h Task 2b Defensive-Regression-Tests (10.05.2026)
+# ============================================================
+# Carlos's "Position-Sync-Bug" am 07.05. war Hypothese-driven (08.05.
+# widerlegt). Aber v37dg fixte einen ECHTEN Wurzel-Bug. Diese Tests
+# locken das v37dg-Verhalten gegen silent-regression — falls jemand
+# spaeter expand_symbol_for_match oder den Filter-Code refactored.
+# Cutover-Restzeit war Argument fuer billige Defense-in-Depth.
+
+def test_all_commodity_overrides_bidirectional():
+    """v37dg-Schutz: ALLE 5 Commodity-Overrides muessen bidirektional
+    matchen (GOLD/GLD, SILVER/SLV, OIL/USO, NATGAS/UNG, COPPER/CPER).
+
+    Wenn jemand spaeter ein neues Commodity in ASSET_UNIVERSE eintraegt
+    aber `expand_symbol_for_match` versehentlich kaputtmacht, faengt
+    dieser Test alle 5 sofort.
+    """
+    from app.market_scanner import expand_symbol_for_match
+
+    pairs = [
+        ("GOLD", "GLD"),
+        ("SILVER", "SLV"),
+        ("OIL", "USO"),
+        ("NGAS", "UNG"),
+        ("COPPER", "CPER"),
+    ]
+    for bot_name, ibkr_ticker in pairs:
+        # Vorwaerts: Bot-Universum-Name -> beide
+        forward = expand_symbol_for_match(bot_name)
+        assert bot_name in forward and ibkr_ticker in forward, \
+            f"Forward {bot_name}: {forward}"
+        # Rueckwaerts: IBKR-Ticker -> beide
+        reverse = expand_symbol_for_match(ibkr_ticker)
+        assert bot_name in reverse and ibkr_ticker in reverse, \
+            f"Reverse {ibkr_ticker}: {reverse}"
+
+
+def test_filter_no_crash_on_missing_symbol():
+    """v37dg-Schutz: scanner_result ohne 'symbol'-Key (defensive Fallback)
+    darf den Filter nicht crashen. .get('symbol') returnt None, None ist
+    nicht in existing_symbols-Set (any non-empty Set), Filter bleibt sauber.
+    """
+    from app.market_scanner import expand_symbol_for_match
+
+    parsed_positions = [{"instrument_id": 1316487, "symbol": "SLV", "invested": 1}]
+    existing_symbols = set()
+    for p in parsed_positions:
+        existing_symbols.update(expand_symbol_for_match(p["symbol"]))
+    existing_ids = {p["instrument_id"] for p in parsed_positions}
+
+    # Scanner-Result ohne 'symbol'-Key (defekte Pipeline)
+    broken_result = {"etoro_id": 9999, "signal": "STRONG_BUY", "score": 50}
+
+    # Filter darf nicht crashen
+    is_buy_candidate = (
+        broken_result["signal"] in ("BUY", "STRONG_BUY")
+        and broken_result["score"] >= 40
+        and broken_result["etoro_id"] not in existing_ids
+        and broken_result.get("symbol") not in existing_symbols  # None not in set -> True
+    )
+    # Verhalten: defektes Result OHNE Symbol kann nicht durch Symbol-Match
+    # blockiert werden — geht durch (etoro_id-Check muss ausreichen).
+    assert is_buy_candidate is True
+
+
+def test_filter_blocks_reverse_direction():
+    """v37dg-Schutz: Bot hat SILVER-Position (etoro_id=5003 + symbol='SILVER'
+    aus ASSET_UNIVERSE). Scanner liefert SLV-Buy-Signal (z.B. von externer
+    Source). Symbol-Match muss greifen — bidirektional, nicht nur SLV->SILVER.
+    """
+    from app.market_scanner import expand_symbol_for_match
+
+    # Bot-Position mit Bot-Universum-Symbol (statt IBKR-Ticker)
+    parsed_positions = [
+        {"instrument_id": 5003, "symbol": "SILVER", "invested": 41890.0},
+    ]
+    existing_ids = {p["instrument_id"] for p in parsed_positions}
+    existing_symbols = set()
+    for p in parsed_positions:
+        existing_symbols.update(expand_symbol_for_match(p["symbol"]))
+
+    # Scanner-Resultat mit IBKR-Ticker (SLV) statt Bot-Name
+    scanner_result = {"symbol": "SLV", "etoro_id": 9999, "signal": "STRONG_BUY", "score": 50}
+
+    is_buy_candidate = (
+        scanner_result["signal"] in ("BUY", "STRONG_BUY")
+        and scanner_result["score"] >= 40
+        and scanner_result["etoro_id"] not in existing_ids
+        and scanner_result.get("symbol") not in existing_symbols
+    )
+    assert is_buy_candidate is False, \
+        "Filter muss SLV-Buy blocken wenn SILVER-Position existiert (reverse direction)"
+
+
+def test_filter_with_empty_positions_passes_through():
+    """v37dg-Schutz: Fresh-Start-Szenario. existing_symbols + existing_ids
+    sind leer. Filter darf BUYs nicht versehentlich blocken."""
+    from app.market_scanner import expand_symbol_for_match
+
+    parsed_positions = []  # Bot hat keine Positionen
+    existing_ids = {p["instrument_id"] for p in parsed_positions}
+    existing_symbols = set()
+    for p in parsed_positions:
+        existing_symbols.update(expand_symbol_for_match(p["symbol"]))
+
+    # Beliebiges BUY-Signal
+    scanner_result = {"symbol": "SILVER", "etoro_id": 5003, "signal": "STRONG_BUY", "score": 60}
+
+    is_buy_candidate = (
+        scanner_result["signal"] in ("BUY", "STRONG_BUY")
+        and scanner_result["score"] >= 40
+        and scanner_result["etoro_id"] not in existing_ids
+        and scanner_result.get("symbol") not in existing_symbols
+    )
+    assert is_buy_candidate is True, "Empty-Portfolio darf neue BUYs nicht blocken"
+
+
+def test_filter_multi_position_silver_blocked_nvda_passes():
+    """v37dg-Schutz: Multi-Position-Szenario. Bot hat SLV + AAPL. Scanner
+    liefert mehrere Buy-Kandidaten. Genau die mit existierendem Match
+    werden geblockt, andere passieren.
+    """
+    from app.market_scanner import expand_symbol_for_match
+
+    parsed_positions = [
+        {"instrument_id": 1316487, "symbol": "SLV",  "invested": 41890},
+        {"instrument_id": 265598,  "symbol": "AAPL", "invested": 50000},
+    ]
+    existing_ids = {p["instrument_id"] for p in parsed_positions}
+    existing_symbols = set()
+    for p in parsed_positions:
+        existing_symbols.update(expand_symbol_for_match(p["symbol"]))
+
+    scanner_results = [
+        {"symbol": "SILVER", "etoro_id": 5003, "signal": "STRONG_BUY", "score": 50},  # blocked
+        {"symbol": "AAPL",   "etoro_id": 6408, "signal": "STRONG_BUY", "score": 50},  # blocked
+        {"symbol": "NVDA",   "etoro_id": 7777, "signal": "STRONG_BUY", "score": 50},  # passes
+        {"symbol": "GOLD",   "etoro_id": 5001, "signal": "STRONG_BUY", "score": 50},  # passes (no GLD)
+    ]
+
+    decisions = []
+    for r in scanner_results:
+        is_buy = (
+            r["signal"] in ("BUY", "STRONG_BUY")
+            and r["score"] >= 40
+            and r["etoro_id"] not in existing_ids
+            and r.get("symbol") not in existing_symbols
+        )
+        decisions.append((r["symbol"], is_buy))
+
+    expected = [("SILVER", False), ("AAPL", False), ("NVDA", True), ("GOLD", True)]
+    assert decisions == expected, f"Multi-Position-Filter falsch: {decisions}"
