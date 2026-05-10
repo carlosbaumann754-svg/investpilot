@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 log = logging.getLogger("Polygon")
@@ -167,7 +167,7 @@ def fetch_daily_bars(symbol: str, days: int = 30) -> list[dict]:
     if cached and now - cached["fetched_at"] < _BARS_CACHE_TTL:
         return cached["data"]
 
-    end_date = datetime.utcnow().date()
+    end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=days)
     path = (
         f"/v2/aggs/ticker/{symbol.upper()}/range/1/day/"
@@ -182,7 +182,7 @@ def fetch_daily_bars(symbol: str, days: int = 30) -> list[dict]:
         try:
             # Polygon liefert timestamps als ms-since-epoch
             ts_ms = r.get("t", 0)
-            date_str = datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d")
+            date_str = datetime.fromtimestamp(ts_ms / 1000, timezone.utc).strftime("%Y-%m-%d")
             bars.append({
                 "date": date_str,
                 "open": float(r.get("o", 0)),

@@ -38,6 +38,26 @@ from typing import Optional
 log = logging.getLogger("DataFallback")
 
 
+def _is_valid_price(value) -> bool:
+    """Defensiv: yfinance kann nan / inf / negative liefern (delisted/halted).
+
+    Code-Review-Fix #2 (Pre-Cutover-Sprint 10.05.2026): explizit gegen
+    nan absichern weil fast_info bei delisted-Symbolen nan returnt
+    statt None. Ohne diese Pruefung wuerde nan durch float() durchgehen
+    und die Fallback-Chain ueberspringen.
+    """
+    import math
+    if value is None:
+        return False
+    try:
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return False
+        return v > 0
+    except (ValueError, TypeError):
+        return False
+
+
 def _try_yfinance(symbol: str) -> Optional[float]:
     """yfinance-Quote (primary path)."""
     try:
@@ -50,7 +70,7 @@ def _try_yfinance(symbol: str) -> Optional[float]:
             if price is None:
                 # fast_info wirft KeyError statt None — defensiv
                 price = info["lastPrice"]
-            if price and price > 0:
+            if _is_valid_price(price):
                 return float(price)
         except (KeyError, AttributeError, TypeError):
             pass
@@ -58,7 +78,7 @@ def _try_yfinance(symbol: str) -> Optional[float]:
         h = ticker.history(period="1d")
         if h is not None and len(h) > 0:
             close = h["Close"].iloc[-1]
-            if close and close > 0:
+            if _is_valid_price(close):
                 return float(close)
     except Exception as e:
         log.debug("yfinance quote failed for %s: %s", symbol, e)

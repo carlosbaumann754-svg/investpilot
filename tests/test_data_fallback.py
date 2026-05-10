@@ -126,6 +126,51 @@ def test_zero_or_negative_quote_treated_as_invalid():
     av.assert_called_once()
 
 
+def test_is_valid_price_rejects_nan_inf_negative():
+    """Code-Review-Fix #2: yfinance fast_info kann nan/inf liefern bei
+    delisted/halted Symbolen. Ohne Guard wuerde nan durch float() durchgehen."""
+    import math
+    from app.data_fallback import _is_valid_price
+
+    # Valid
+    assert _is_valid_price(100.5) is True
+    assert _is_valid_price(0.001) is True
+
+    # Invalid
+    assert _is_valid_price(None) is False
+    assert _is_valid_price(0) is False
+    assert _is_valid_price(0.0) is False
+    assert _is_valid_price(-5.0) is False
+    assert _is_valid_price(float("nan")) is False
+    assert _is_valid_price(math.nan) is False
+    assert _is_valid_price(float("inf")) is False
+    assert _is_valid_price(float("-inf")) is False
+    assert _is_valid_price("not_a_number") is False
+
+
+def test_yfinance_nan_falls_to_av(monkeypatch):
+    """yfinance liefert nan (delisted symbol) -> AV-Fallback aktiv."""
+    import math
+    from app.data_fallback import fetch_quote_with_fallback
+
+    fake_yf = type("FakeYF", (), {})()
+    fake_ticker = type("FakeTicker", (), {})()
+    fake_info = {"lastPrice": math.nan}
+    fake_ticker.fast_info = fake_info
+    # history liefert leeres DataFrame
+    class FakeHist:
+        def __len__(self): return 0
+    fake_ticker.history = lambda **kw: FakeHist()
+    fake_yf.Ticker = lambda sym: fake_ticker
+
+    with patch.dict("sys.modules", {"yfinance": fake_yf}), \
+         patch("app.data_fallback._try_alpha_vantage", return_value=150.5) as av:
+        result = fetch_quote_with_fallback("DELISTED")
+
+    assert result == 150.5
+    av.assert_called_once()
+
+
 def test_fallback_logs_warning_on_trigger(caplog):
     import logging
     from app.data_fallback import fetch_quote_with_fallback
