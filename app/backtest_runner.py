@@ -128,16 +128,59 @@ def _apply_overrides(overrides):
     return applied
 
 
+def _load_symbols_from_file(path):
+    """Load symbol list from a text file (one symbol per line, # for comments)."""
+    syms = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                syms.append(line)
+    return syms
+
+
+def _extract_kwarg(args, flag, default=None):
+    """Extract --flag VALUE from args list (returns VALUE or default)."""
+    if flag in args:
+        idx = args.index(flag)
+        if idx + 1 < len(args):
+            return args[idx + 1]
+    return default
+
+
 def main():
-    # Erstes Positional-Arg ist triggered_by; alles nach '--override' sind
-    # KEY=VAL Pfade die die Config in-Memory patchen (vor run_full_backtest).
+    # Positional[0]: triggered_by (label fuer logging/status).
+    # Optional flags:
+    #   --override KEY=VAL [KEY=VAL ...]   in-memory config patches
+    #   --start YYYY-MM-DD                  stress-test mode start
+    #   --end YYYY-MM-DD                    stress-test mode end
+    #   --symbols-from <file>               load symbol list from text file
     args = sys.argv[1:]
     triggered_by = args[0] if args and not args[0].startswith("--") else "manual"
 
     overrides = []
     if "--override" in args:
         idx = args.index("--override")
-        overrides = [a for a in args[idx + 1:] if not a.startswith("--")]
+        # Sammle alle Args nach --override bis zum naechsten --flag
+        for a in args[idx + 1:]:
+            if a.startswith("--"):
+                break
+            overrides.append(a)
+
+    start_date = _extract_kwarg(args, "--start")
+    end_date = _extract_kwarg(args, "--end")
+    symbols_file = _extract_kwarg(args, "--symbols-from")
+
+    custom_symbols = None
+    if symbols_file:
+        try:
+            custom_symbols = _load_symbols_from_file(symbols_file)
+            log.info(f"Symbol-File geladen: {symbols_file} ({len(custom_symbols)} symbole)")
+        except Exception as e:
+            log.error(f"Symbol-File konnte nicht geladen werden: {e}")
+            custom_symbols = None
+
+    stress_test_mode = bool(start_date and end_date)
 
     started_at = datetime.now().isoformat()
 
@@ -145,6 +188,10 @@ def main():
     log.info(f"BACKTEST-RUNNER START (triggered_by={triggered_by})")
     if overrides:
         log.info(f"Overrides: {overrides}")
+    if stress_test_mode:
+        log.info(f"STRESS-TEST-MODUS: {start_date}..{end_date}")
+        if custom_symbols:
+            log.info(f"Custom symbols: {len(custom_symbols)} aus {symbols_file}")
     log.info("=" * 55)
 
     _write_status(
@@ -155,6 +202,9 @@ def main():
         error=None,
         mode="github-action-running",
         overrides=overrides or None,
+        stress_test=stress_test_mode,
+        start_date=start_date,
+        end_date=end_date,
     )
     _push_results()  # Early push so Dashboard sees "running" state
 
@@ -177,7 +227,11 @@ def main():
     # 2) Run the backtest
     try:
         from app.backtester import run_full_backtest
-        result = run_full_backtest()
+        result = run_full_backtest(
+            symbols=custom_symbols,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
         if result and "error" in result:
             raise RuntimeError(result["error"])

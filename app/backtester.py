@@ -61,12 +61,17 @@ _EMPIRICAL_OVERRIDES_LOADED = False
 # HISTORY DOWNLOAD
 # ============================================================
 
-def download_history(symbols=None, years=5):
+def download_history(symbols=None, years=5, start_date=None, end_date=None):
     """Download historical OHLCV data via yfinance.
 
     Args:
         symbols: list of ASSET_UNIVERSE keys, or None for a representative subset
-        years: how many years of history
+        years: how many years of history (used if start_date/end_date are None)
+        start_date: ISO date "YYYY-MM-DD" — historical stress-test mode
+        end_date: ISO date "YYYY-MM-DD" — historical stress-test mode
+
+    When start_date AND end_date are provided, they take precedence over `years`
+    (allows precise crisis-period backtests like 2008 Lehman or 2020 Corona).
 
     Returns:
         dict {symbol: DataFrame with columns [Open, High, Low, Close, Volume]}
@@ -90,7 +95,15 @@ def download_history(symbols=None, years=5):
     except Exception as _e:
         log.debug(f"Universe-Filter skipped: {_e}")
 
-    period = f"{years}y"
+    # Date-range mode (stress-test) takes precedence over years-period mode
+    use_date_range = bool(start_date and end_date)
+    if use_date_range:
+        period_str = f"{start_date}..{end_date}"
+        period = None
+    else:
+        period_str = f"{years}y"
+        period = period_str
+
     histories = {}
     errors = 0
     batch_size = 10
@@ -98,7 +111,7 @@ def download_history(symbols=None, years=5):
     # Track which symbols failed for universe-health report
     health_report: dict[str, dict] = {}
 
-    log.info(f"Downloading {len(symbols)} assets, period={period}...")
+    log.info(f"Downloading {len(symbols)} assets, period={period_str}...")
 
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
@@ -110,7 +123,10 @@ def download_history(symbols=None, years=5):
             yf_sym = info["yf"]
             try:
                 ticker = yf.Ticker(yf_sym)
-                hist = ticker.history(period=period, interval="1d")
+                if use_date_range:
+                    hist = ticker.history(start=start_date, end=end_date, interval="1d")
+                else:
+                    hist = ticker.history(period=period, interval="1d")
                 if hist.empty or len(hist) < 100:
                     log.debug(f"  {sym}: zu wenig Daten ({len(hist)} Tage)")
                     errors += 1
@@ -160,8 +176,13 @@ def download_history(symbols=None, years=5):
 # VIX HISTORY DOWNLOAD (for regime filter in backtest)
 # ============================================================
 
-def download_vix_history(years=5):
+def download_vix_history(years=5, start_date=None, end_date=None):
     """Download VIX history for backtesting regime filter.
+
+    Args:
+        years: how many years of history (used if start_date/end_date are None)
+        start_date: ISO date "YYYY-MM-DD" — historical stress-test mode
+        end_date: ISO date "YYYY-MM-DD" — historical stress-test mode
 
     Returns:
         dict {date -> vix_close} mapping trading dates to VIX closing values,
@@ -172,9 +193,12 @@ def download_vix_history(years=5):
         return {}
 
     try:
-        period = f"{years}y"
         ticker = yf.Ticker("^VIX")
-        hist = ticker.history(period=period, interval="1d")
+        if start_date and end_date:
+            hist = ticker.history(start=start_date, end=end_date, interval="1d")
+        else:
+            period = f"{years}y"
+            hist = ticker.history(period=period, interval="1d")
         if hist.empty:
             log.warning("VIX-History leer")
             return {}
@@ -1802,7 +1826,8 @@ def quick_walk_forward(histories, config, use_realistic_filters=True,
 
 
 def run_full_backtest(config=None, symbols=None, years=5,
-                      use_realistic_filters=True):
+                      use_realistic_filters=True,
+                      start_date=None, end_date=None):
     """Full backtest pipeline: download -> simulate -> metrics -> walk-forward.
 
     Saves results to backtest_results.json.
@@ -1810,9 +1835,14 @@ def run_full_backtest(config=None, symbols=None, years=5,
     Args:
         config: strategy config dict
         symbols: list of symbols to test
-        years: years of history to download
+        years: years of history to download (used if start_date/end_date are None)
         use_realistic_filters: apply VIX regime, earnings blackout,
                                and sector concentration filters
+        start_date: ISO date "YYYY-MM-DD" — historical stress-test mode
+        end_date: ISO date "YYYY-MM-DD" — historical stress-test mode
+
+    When start_date AND end_date are provided, they take precedence over `years`
+    (for crisis-period backtests like 2008 Lehman or 2020 Corona).
 
     Returns:
         dict with all results
@@ -1820,13 +1850,20 @@ def run_full_backtest(config=None, symbols=None, years=5,
     log.info("=" * 55)
     log.info("FULL BACKTEST START")
     log.info(f"  Realistic Filters: {'ON' if use_realistic_filters else 'OFF'}")
+    if start_date and end_date:
+        log.info(f"  Date-Range (stress-test): {start_date}..{end_date}")
+    else:
+        log.info(f"  Period: {years}y")
     log.info("=" * 55)
 
     if config is None:
         config = load_config()
 
     # 1. Download history
-    histories = download_history(symbols=symbols, years=years)
+    histories = download_history(
+        symbols=symbols, years=years,
+        start_date=start_date, end_date=end_date,
+    )
     if not histories:
         log.error("Keine historischen Daten verfuegbar")
         return {"error": "Keine historischen Daten"}
@@ -1836,7 +1873,9 @@ def run_full_backtest(config=None, symbols=None, years=5,
     earnings_blackouts = {}
     if use_realistic_filters:
         log.info("Downloading realistic filter data...")
-        vix_history = download_vix_history(years=years)
+        vix_history = download_vix_history(
+            years=years, start_date=start_date, end_date=end_date,
+        )
 
         # Fetch earnings dates for all stock/ETF symbols
         mc_cfg = config.get("market_context", {})
