@@ -658,6 +658,21 @@ class IbkrBroker(BrokerBase):
         Diese Methode ist OPT-IN. Public Methods koennen sie vorab aufrufen
         wenn sie Resilience brauchen. Bestehende Methoden bleiben unveraendert
         (backwards-compat).
+
+        SYNC-ONLY (Review-Fix #2, 10.05.2026)
+        Diese Methode nutzt time.sleep — blockiert den callenden Thread bis
+        65s. NICHT aus async/FastAPI-Handlern aufrufen — sonst Event-Loop-
+        Starvation. Andere Stellen in diesem Modul nutzen ib.sleep (asyncio-
+        aware via ib_insync). Wenn async-wiring noetig wird, sleep_fn als
+        Argument injizieren.
+
+        client_id-MUTATION (Review-Fix #3, 10.05.2026)
+        _get_ib() macht intern bereits einen Single-Retry bei clientId-
+        Conflict und mutiert dabei self.client_id. Diese Wrapper-Schicht
+        retryt OBENDREIN. D.h. ein Final-Fail kann bedeuten:
+        max_retries * 2 echte Connect-Versuche und ein zufaellig gewaehlter
+        Pool-Key. Fuer Cutover-Phase OK weil Final-Fail = Sentry + Safe-Mode,
+        aber post-cutover ggf. die zwei Retry-Layer entkoppeln.
         """
         last_error: Optional[Exception] = None
         total_attempts = max_retries + 1
@@ -694,7 +709,12 @@ class IbkrBroker(BrokerBase):
         )
         return False
 
-    def _snapshot_after_fill_safely(self, status: str, symbol: str) -> bool:
+    def _snapshot_after_fill_safely(
+        self,
+        status: str,
+        symbol: str,
+        async_persist: bool = True,
+    ) -> bool:
         """v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill.
 
         HINTERGRUND
@@ -711,9 +731,14 @@ class IbkrBroker(BrokerBase):
             status: Order-Status nach _place_market_order Wartephase.
                 Snapshot wird nur bei Filled/PartiallyFilled getriggert.
             symbol: Fuer Audit-Log (Postmortem-Debugging).
+            async_persist: True (default) -> record_snapshot laeuft in
+                daemon-thread, _place_market_order kehrt sofort zurueck.
+                False -> synchron persistieren (nur fuer Tests, damit
+                MagicMock-Assertions stabil sind).
 
         Returns:
-            True  = Snapshot erfolgreich persisted.
+            True  = Snapshot getriggert (im async-Modus: Thread gestartet,
+                    Persistenz noch nicht garantiert; im sync-Modus: persisted).
             False = Snapshot uebersprungen (status nicht-fuellend) ODER
                     Fehler aufgetreten (defensiv gefangen, Order-Flow geht
                     weiter).
@@ -722,6 +747,14 @@ class IbkrBroker(BrokerBase):
         Diese Methode darf NIE eine Exception hochwerfen — der Call-Site
         in _place_market_order rechnet damit dass eine fehlgeschlagene
         Snapshot-Persistierung den Order-Result nicht beeinflusst.
+
+        REVIEW-FIX #1 (Code-Review 10.05.2026): record_snapshot ruft
+        save_json(BRAIN_FILE) unter threading.Lock auf. Synchroner Aufruf
+        wuerde Order-Confirmation-Return durch Lock-Wait + 365-Snapshot-
+        Serialization verzoegern. Daher async_persist=True default —
+        save_json laeuft im daemon-thread, der Order-Path returnt sofort.
+        Defensiveness bleibt: Errors in Thread werden geloggt, nicht
+        propagiert.
         """
         if status not in self._SNAPSHOTTABLE_STATUSES:
             return False
@@ -739,15 +772,41 @@ class IbkrBroker(BrokerBase):
                 symbol,
             )
             return False
-        try:
-            from app.brain import record_snapshot  # lazy import vermeidet Circular
+
+        def _do_persist():
+            """Roher Persist-Call ohne Error-Handling — Caller faengt."""
+            from app.brain import record_snapshot  # lazy: Circular avoidance
             record_snapshot(portfolio)
-            log.info("Snapshot-After-Fill OK: %s persisted to brain", symbol)
+
+        if async_persist:
+            # Async: Thread schluckt + loggt Fehler intern (Caller bekommt
+            # immer True = "Thread gestartet"). So bleibt Order-Path schnell.
+            def _persist_swallow():
+                try:
+                    _do_persist()
+                    log.info("Snapshot-After-Fill OK: %s persisted (async)", symbol)
+                except Exception as e:
+                    log.warning(
+                        "Snapshot-After-Fill: record_snapshot raised for %s — "
+                        "non-fatal: %s", symbol, e,
+                    )
+            t = threading.Thread(
+                target=_persist_swallow,
+                name=f"snapshot-after-fill-{symbol}",
+                daemon=True,
+            )
+            t.start()
+            return True
+
+        # Sync: Caller will klare True/False-Antwort fuer Persist-Erfolg.
+        try:
+            _do_persist()
+            log.info("Snapshot-After-Fill OK: %s persisted (sync)", symbol)
             return True
         except Exception as e:
             log.warning(
-                "Snapshot-After-Fill: record_snapshot raised for %s — non-fatal: %s",
-                symbol, e,
+                "Snapshot-After-Fill: record_snapshot raised for %s — "
+                "non-fatal: %s", symbol, e,
             )
             return False
 

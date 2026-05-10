@@ -42,7 +42,9 @@ def test_filled_triggers_snapshot():
     broker.get_portfolio = MagicMock(return_value=fake_portfolio)
 
     with patch("app.brain.record_snapshot") as mock_record:
-        result = broker._snapshot_after_fill_safely("Filled", "AAPL")
+        # async_persist=False fuer deterministische Mock-Assertions
+        result = broker._snapshot_after_fill_safely("Filled", "AAPL",
+                                                    async_persist=False)
 
     assert result is True
     broker.get_portfolio.assert_called_once()
@@ -55,7 +57,7 @@ def test_cancelled_does_not_trigger_snapshot():
     broker.get_portfolio = MagicMock()
 
     with patch("app.brain.record_snapshot") as mock_record:
-        result = broker._snapshot_after_fill_safely("Cancelled", "AAPL")
+        result = broker._snapshot_after_fill_safely("Cancelled", "AAPL", async_persist=False)
 
     assert result is False
     broker.get_portfolio.assert_not_called()
@@ -87,7 +89,8 @@ def test_partially_filled_triggers():
     fake_portfolio = {"credit": 95000, "positions": [{"x": 1}]}
     broker.get_portfolio = MagicMock(return_value=fake_portfolio)
     with patch("app.brain.record_snapshot") as mock_record:
-        result = broker._snapshot_after_fill_safely("PartiallyFilled", "AAPL")
+        result = broker._snapshot_after_fill_safely("PartiallyFilled", "AAPL",
+                                                    async_persist=False)
     assert result is True
     mock_record.assert_called_once_with(fake_portfolio)
 
@@ -111,7 +114,7 @@ def test_get_portfolio_returns_none_no_crash():
     broker.get_portfolio = MagicMock(return_value=None)
 
     with patch("app.brain.record_snapshot") as mock_record:
-        result = broker._snapshot_after_fill_safely("Filled", "AAPL")
+        result = broker._snapshot_after_fill_safely("Filled", "AAPL", async_persist=False)
 
     assert result is False
     mock_record.assert_not_called()
@@ -124,7 +127,7 @@ def test_record_snapshot_raises_no_crash():
 
     with patch("app.brain.record_snapshot", side_effect=RuntimeError("disk full")):
         # WICHTIG: Test darf KEIN raise hochkommen
-        result = broker._snapshot_after_fill_safely("Filled", "AAPL")
+        result = broker._snapshot_after_fill_safely("Filled", "AAPL", async_persist=False)
 
     assert result is False  # Failure-Mode aber kein Crash
 
@@ -135,7 +138,7 @@ def test_get_portfolio_raises_no_crash():
     broker.get_portfolio = MagicMock(side_effect=ConnectionError("ib disconnected"))
 
     with patch("app.brain.record_snapshot") as mock_record:
-        result = broker._snapshot_after_fill_safely("Filled", "AAPL")
+        result = broker._snapshot_after_fill_safely("Filled", "AAPL", async_persist=False)
 
     assert result is False
     mock_record.assert_not_called()
@@ -151,8 +154,8 @@ def test_two_fills_two_snapshots():
     broker.get_portfolio = MagicMock(return_value={"credit": 1, "positions": []})
 
     with patch("app.brain.record_snapshot") as mock_record:
-        broker._snapshot_after_fill_safely("Filled", "AAPL")
-        broker._snapshot_after_fill_safely("Filled", "TSLA")
+        broker._snapshot_after_fill_safely("Filled", "AAPL", async_persist=False)
+        broker._snapshot_after_fill_safely("Filled", "TSLA", async_persist=False)
 
     assert mock_record.call_count == 2
 
@@ -169,7 +172,7 @@ def test_logs_symbol_on_success(caplog):
 
     with patch("app.brain.record_snapshot"):
         with caplog.at_level(logging.INFO, logger="app.ibkr_client"):
-            broker._snapshot_after_fill_safely("Filled", "AAPL")
+            broker._snapshot_after_fill_safely("Filled", "AAPL", async_persist=False)
 
     assert any("AAPL" in r.message for r in caplog.records)
 
@@ -182,6 +185,61 @@ def test_logs_symbol_on_failure(caplog):
 
     with patch("app.brain.record_snapshot", side_effect=RuntimeError("boom")):
         with caplog.at_level(logging.WARNING, logger="app.ibkr_client"):
-            broker._snapshot_after_fill_safely("Filled", "TSLA")
+            broker._snapshot_after_fill_safely("Filled", "TSLA", async_persist=False)
 
     assert any("TSLA" in r.message for r in caplog.records)
+
+
+# ============================================================
+# Review-Fix #1: async_persist=True nutzt daemon-thread (nicht-blockierend)
+# ============================================================
+
+def test_async_persist_does_not_block_caller():
+    """async_persist=True (default): record_snapshot laeuft im Background-
+    Thread, Helper kehrt sofort zurueck. Verifiziert dass Order-
+    Confirmation-Path NICHT durch save_json-Lock-Wait blockiert wird.
+    Cutover-Block-Risk per Code-Review 10.05.2026.
+    """
+    import threading
+    import time as _time
+    broker = _make_broker()
+    broker.get_portfolio = MagicMock(return_value={"credit": 1, "positions": []})
+
+    persist_started = threading.Event()
+    persist_complete = threading.Event()
+
+    def slow_record(_portfolio):
+        persist_started.set()
+        _time.sleep(0.5)  # simuliert save_json mit lock-contention
+        persist_complete.set()
+
+    with patch("app.brain.record_snapshot", side_effect=slow_record):
+        t0 = _time.time()
+        result = broker._snapshot_after_fill_safely("Filled", "AAPL")  # default async
+        elapsed = _time.time() - t0
+
+    # Helper kehrt sofort zurueck (max 200ms fuer Thread-Spawn-Overhead)
+    assert elapsed < 0.2, f"Helper blockierte {elapsed:.2f}s — async-Pfad kaputt"
+    assert result is True
+    # Thread laeuft tatsaechlich
+    assert persist_started.wait(1.0), "Persist-Thread wurde nicht gestartet"
+    assert persist_complete.wait(2.0), "Persist-Thread hat nicht abgeschlossen"
+
+
+def test_async_thread_swallows_exceptions(caplog):
+    """Exception im async-thread darf Caller nicht erreichen, wird aber geloggt."""
+    import logging
+    import time as _time
+    broker = _make_broker()
+    broker.get_portfolio = MagicMock(return_value={"credit": 1, "positions": []})
+
+    with patch("app.brain.record_snapshot", side_effect=RuntimeError("disk full")):
+        with caplog.at_level(logging.WARNING, logger="app.ibkr_client"):
+            result = broker._snapshot_after_fill_safely("Filled", "MSFT")
+            _time.sleep(0.15)  # warte dass Thread durchlaeuft
+
+    # Caller bekommt True (Thread gestartet), nicht False — Order-Path unbeeinflusst
+    assert result is True
+    warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("MSFT" in m and "disk full" in m for m in warn_msgs), \
+        f"Erwarteter WARN nicht gefunden in: {warn_msgs}"
