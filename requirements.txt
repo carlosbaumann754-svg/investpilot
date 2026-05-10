@@ -1,5 +1,12 @@
 requests>=2.31.0
 yfinance>=0.2.36
+# v37h (10.05.2026): lxml ist optional-dep von yfinance fuer earnings_dates
+# HTML-Parsing. Ohne lxml -> ticker.earnings_dates raised ModuleNotFoundError
+# -> Backtester's _fetch_historical_earnings_dates returnt [] silent ->
+# earnings_blackouts leer -> Earnings-Filter wirkungslos (Bot tradet
+# durch Earnings-Tage). Carlos hat das via earnings_symbols_covered=0
+# im Backtest-Output entdeckt 10.05.2026.
+lxml>=5.0.0
 reportlab>=4.1.0
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0

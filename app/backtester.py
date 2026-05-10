@@ -43,7 +43,11 @@ from app.market_scanner import (
 # data/cost_model_calibration.json beruecksichtigt.
 SPREAD_PCT = 0.0015          # 0.15% per trade (spread) - LEGACY-FALLBACK
 OVERNIGHT_FEE_PCT = 0.0001   # 0.01% per night (leveraged)
-SLIPPAGE_PCT = 0.0005        # 0.05% estimated slippage - LEGACY-FALLBACK
+# v37h (10.05.2026): Legacy-Slippage von 0.05% auf 0.30% — der Backtester
+# hat diesen Wert nur als Fallback wenn ASSET_UNIVERSE-Lookup fehlschlaegt
+# (= Asset nicht im Bot-Universum). Konservativ-realistisch statt
+# best-case (frueher 5 bps war wishful-thinking).
+SLIPPAGE_PCT = 0.0030        # 0.30% estimated slippage - LEGACY-FALLBACK
 
 try:
     from app import cost_model as _cost_model  # type: ignore

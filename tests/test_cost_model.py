@@ -47,10 +47,16 @@ def test_almgren_chriss_zero_volume_safe():
 # ---------- total_cost_pct ----------
 
 @pytest.mark.parametrize("asset_class,expected_min,expected_max", [
-    ("stocks", 0.0010, 0.0050),
-    ("etf", 0.0005, 0.0030),
-    ("crypto", 0.0020, 0.0100),
-    ("forex", 0.0002, 0.0030),
+    # v37h Cost-Model-Calibration 10.05.2026 (Backtest-Reality-Check):
+    # Bandbreiten erweitert nachdem PER_CLASS_SLIPPAGE_BUFFER_PCT auf
+    # realistische Production-Werte gesetzt wurde (vorher 10-60x zu
+    # niedrig -> +3128% unrealistic Backtest-Returns).
+    ("stocks",      0.0030, 0.0100),  # 30-100 bps Round-Trip
+    ("etf",         0.0030, 0.0100),  # 30-100 bps Round-Trip
+    ("crypto",      0.0050, 0.0200),  # 50-200 bps (Wochenend-Liquidity)
+    ("forex",       0.0020, 0.0080),  # 20-80 bps (Major-Pairs)
+    ("commodities", 0.0100, 0.0250),  # 100-250 bps (ETF-Proxies, Pre-Market sensitiv)
+    ("indices",     0.0030, 0.0100),  # 30-100 bps (CFD/synthetic)
 ])
 def test_total_cost_per_class_in_realistic_range(asset_class, expected_min, expected_max):
     breakdown = cost_model.total_cost_pct(
@@ -96,11 +102,16 @@ def test_backtester_calc_costs_with_known_symbol():
 
 
 def test_backtester_calc_costs_unknown_symbol_uses_stocks_default():
-    """Unbekanntes Symbol -> cost_model mit Asset-Klasse 'stocks' als Default."""
+    """Unbekanntes Symbol -> cost_model mit Asset-Klasse 'stocks' als Default.
+
+    v37h Cost-Model-Calibration 10.05.2026: Range erweitert nachdem
+    Stocks-Default-Slippage von 0.030% auf 0.250% angehoben wurde
+    (Production-Reality-Match).
+    """
     from app.backtester import _calc_costs
     cost = _calc_costs(150.0, 5, symbol="UNKNOWN_XYZ_999", amount_usd=5000)
-    # Stocks-Default: ~0.21% Round-Trip
-    assert 0.0010 < cost < 0.0050
+    # Stocks-Default: ~0.65% Round-Trip (war ~0.21% bei alten Werten)
+    assert 0.0030 < cost < 0.0100
 
 
 # ---------- Calibrator ----------

@@ -50,19 +50,32 @@ log = logging.getLogger(__name__)
 ALMGREN_CHRISS_GAMMA = 1.0
 
 # Slippage-Buffer pro Side (entry/exit) — was zwischen Order-Submit und
-# Fill verloren geht durch Markt-Bewegung. Konservativ.
+# Fill verloren geht durch Markt-Bewegung.
+#
+# v37h Cost-Model-Calibration (10.05.2026 nach Backtest-Reality-Check):
+# Vorher waren die Werte 10-60x zu niedrig (3 bps fuer stocks etc.) was
+# unrealistische +3128%-Backtest-Returns produzierte. Production (Sa-
+# Task-1) nutzt Limit-Slippage-Buffers von 0.5-1.5% pro Side. Ein
+# Backtest soll die EXPECTED-Fill-Slippage modellieren, was typisch
+# ~50% des Limit-Buffers ist (Order fillt selten auf Limit, oft tighter,
+# manchmal nicht und wird re-priced).
+#
+# Neue Werte = Production-Buffer * 0.5 (konservativ-realistisch):
 PER_CLASS_SLIPPAGE_BUFFER_PCT = {
     # Asset-Class -> Slippage-Buffer pro Side in % (wird verdoppelt fuer Round-Trip)
-    "stocks":      0.030,   # 3 bps - Mid/Large-Cap-US-Stocks
-    "etf":         0.015,   # 1.5 bps - Broad-ETFs sehr eng
-    "crypto":      0.080,   # 8 bps - 24/7-Markt aber volatil
-    "forex":       0.010,   # 1 bp - Major-Pairs interbank-eng
-    "commodities": 0.025,   # 2.5 bps - via ETF-Proxies (CPER etc.)
-    "indices":     0.015,   # 1.5 bps - synthetic/CFD, sehr eng
+    # Werte spiegeln REAL-MONEY-erwartete Slippage wider, nicht "best case".
+    "stocks":      0.250,   # 25 bps - Production-Buffer 0.5% * 0.5
+    "etf":         0.250,   # 25 bps - Broad-ETFs ~ stocks-aehnlich
+    "crypto":      0.500,   # 50 bps - 24/7-Markt aber Wochenend-Liquiditaet duenn
+    "forex":       0.150,   # 15 bps - Major-Pairs eng aber nicht 0
+    "commodities": 0.750,   # 75 bps - via ETF-Proxies (CPER/SLV/etc.)
+                            #   reagiert besonders sensibel in Pre-Market
+                            #   (siehe 08.05.-Stresstest-Findings)
+    "indices":     0.250,   # 25 bps - CFD/synthetic, mid-bracket
 }
 
-# Fallback wenn Asset-Class unbekannt
-DEFAULT_SLIPPAGE_BUFFER_PCT = 0.040
+# Fallback wenn Asset-Class unbekannt — defensiv hoch (nicht optimistic)
+DEFAULT_SLIPPAGE_BUFFER_PCT = 0.300
 
 # Minimum-Spread floor — Corwin-Schultz kann negativ werden bei Daten-Noise.
 # Wir clampen auf realistic-tight (1 bp).
