@@ -357,6 +357,13 @@
           }
         ]
       }
+    ],
+    "e27_activations": [
+      {
+        "timestamp": "2026-05-10T10:30:00Z",
+        "action": "re-restored",
+        "reason": "git-pull lost the VPS-only activation from 07.05."
+      }
     ]
   },
   "_etoro_legacy_archived": {
@@ -399,5 +406,12 @@
       "slippage_pct": 0.5,
       "trading_hours": "extended"
     }
+  },
+  "realtime_status_tracker": {
+    "_comment": "E27 Reality-Aware-Trade-Logging. Re-aktiviert 10.05.2026 nach Deploy-Lueke (07.05. nur VPS-side aktiviert, nie zu master gepusht).",
+    "_added": "2026-05-10 v37h re-restored",
+    "enabled": true,
+    "stale_after_hours": 48,
+    "cleanup_max_age_hours": 24
   }
 }
