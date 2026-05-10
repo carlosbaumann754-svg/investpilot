@@ -237,6 +237,73 @@ def _keep_alive():
         time.sleep(600)  # alle 10 Minuten
 
 
+# v37h Pre-Cutover-Task 2+3 (10.05.2026): Background-Maintenance-State.
+# Throttling damit GitHub-API nicht ueberstrapaziert wird (Rate-Limit
+# 5000 Requests/h, jeder Watchdog macht 1-2 Calls).
+_BG_MAINT_LAST_RUN: dict[str, float] = {}
+_BG_WATCHDOG_INTERVAL_S = 1800   # 30 Min — Optimizer pusht Sonntags, andere
+                                 # GH-Actions oefter; 30 Min ist sweet spot
+_BG_HEARTBEAT_SNAPSHOT_S = 3600  # 1 Std — Brain-Snapshot heartbeat damit
+                                 # performance_snapshots nicht explodieren
+                                 # (365-Eintrag-Limit + tagliche Backups OK)
+
+
+def _run_background_maintenance() -> None:
+    """v37h Pre-Cutover-Task 2+3 (10.05.2026): Hintergrund-Maintenance die
+    NICHT von market-hours/trading-flag abhaengig ist.
+
+    Ruft die 5 GH-Action-Watchdogs auf alle 30 Min und persistiert einen
+    Brain-Snapshot-Heartbeat alle 60 Min. So funktioniert es auch wenn:
+      - Markt zu (Wochenende, Feiertag, ausserhalb 09:30-16:00 EST)
+      - Trading-Flag temporaer false
+      - Bot war kurz offline (Container-Restart)
+
+    Defensive: alle Aufrufe in eigenem try/except — Fehler hier duerfen
+    den Trader-Cycle nicht beeinflussen.
+    """
+    import time as _t
+    now = _t.time()
+
+    # ----- Watchdog-Block: alle 30 Min -----
+    if now - _BG_MAINT_LAST_RUN.get("watchdogs", 0) >= _BG_WATCHDOG_INTERVAL_S:
+        _BG_MAINT_LAST_RUN["watchdogs"] = now
+        for name, fn_name in [
+            ("optimizer", "check_and_reload_optimizer_output"),
+            ("backtest", "check_and_reload_backtest_output"),
+            ("ml_training", "check_and_reload_ml_training_output"),
+            ("discovery", "check_and_reload_discovery_output"),
+            ("wfo", "check_and_reload_wfo_output"),
+        ]:
+            try:
+                from app import persistence as _p
+                fn = getattr(_p, fn_name, None)
+                if fn:
+                    if fn():
+                        log.info(f"BG-Watchdog {name}: neue Werte uebernommen")
+            except Exception as e:
+                log.warning(f"BG-Watchdog {name} Fehler (non-fatal): {e}")
+
+    # ----- Heartbeat-Snapshot: alle 60 Min, nur wenn Markt zu -----
+    # Bei offenem Markt macht der Trader-Cycle eh Snapshots ueber record_snapshot
+    # nach jedem Trade. Heartbeat brauchen wir nur wenn Cycle pausiert.
+    if (not is_market_hours()
+            and now - _BG_MAINT_LAST_RUN.get("heartbeat", 0) >= _BG_HEARTBEAT_SNAPSHOT_S):
+        _BG_MAINT_LAST_RUN["heartbeat"] = now
+        try:
+            from app.broker_base import get_broker
+            from app.brain import record_snapshot
+            broker = get_broker()
+            portfolio = broker.get_portfolio()
+            if portfolio is not None:
+                snap = record_snapshot(portfolio)
+                log.info(
+                    f"BG-Heartbeat-Snapshot: cash=${snap.get('cash',0):.0f} "
+                    f"pos={snap.get('num_positions', 0)}"
+                )
+        except Exception as e:
+            log.warning(f"BG-Heartbeat-Snapshot Fehler (non-fatal): {e}")
+
+
 def scheduler_loop():
     """Endlos-Loop: prueft stuendlich ob getradet werden soll."""
     log.info("=" * 55)
@@ -309,6 +376,19 @@ def scheduler_loop():
                 update_heartbeat()
             except Exception as e:
                 log.debug(f"Heartbeat-Update fehlgeschlagen (non-fatal): {e}")
+
+            # v37h (10.05.2026) Pre-Cutover-Task 2+3: Background-Maintenance
+            # die NICHT von market-hours/trading-flag abhaengig ist. Vorher
+            # liefen Watchdogs + Snapshot erst NACH market-hours-Check, was
+            # zur Folge hatte:
+            #   - GH-Action-Optimizer-Pushes (Sonntag 05:00 UTC) wurden vom
+            #     Bot nie abgeholt weil Markt-zu -> Watchdog-Code skipped
+            #   - Brain-Snapshots blieben stundenlang stale weil ohne Trade
+            #     nichts persistiert wurde -> Reconcile-Drift (siehe heutige
+            #     KO-Position-Episode 13h ohne Snapshot)
+            # Beide Aufgaben sind read-only/idempotent und sollten in jedem
+            # Tick laufen — nicht abhaengig von Markt-Status.
+            _run_background_maintenance()
 
             if not is_trading_enabled():
                 # v37cw: bei Trading-Off zusaetzlich offene IBKR-Orders cancellen.
@@ -443,43 +523,12 @@ def scheduler_loop():
                 except ImportError:
                     pass
 
-            # --- Optimizer-Watchdog: pruefe ob GitHub-Action neue Werte pushed hat ---
-            # Verhindert die Race-Condition wo Renders naechster backup_to_cloud()
-            # die Optimizer-Tunings wieder ueberschreibt.
-            try:
-                from app.persistence import check_and_reload_optimizer_output
-                check_and_reload_optimizer_output()
-            except Exception as e:
-                log.warning(f"Optimizer-Watchdog Fehler (non-fatal): {e}", exc_info=True)
-
-            # --- Backtest-Watchdog (GH Action v12) ---
-            try:
-                from app.persistence import check_and_reload_backtest_output
-                check_and_reload_backtest_output()
-            except Exception as e:
-                log.warning(f"Backtest-Watchdog Fehler (non-fatal): {e}", exc_info=True)
-
-            # --- ML-Training-Watchdog (GH Action v12) ---
-            try:
-                from app.persistence import check_and_reload_ml_training_output
-                check_and_reload_ml_training_output()
-            except Exception as e:
-                log.warning(f"ML-Training-Watchdog Fehler (non-fatal): {e}", exc_info=True)
-
-            # --- Discovery-Watchdog (GH Action v12) ---
-            try:
-                from app.persistence import check_and_reload_discovery_output
-                check_and_reload_discovery_output()
-            except Exception as e:
-                log.warning(f"Discovery-Watchdog Fehler (non-fatal): {e}", exc_info=True)
-
-            # --- WFO-Watchdog (GH Action v37c, monatlich)
-            # Prueft ob neuer WFO-Lauf im Gist liegt -> reloaded + Hard-Gate-Alert
-            try:
-                from app.persistence import check_and_reload_wfo_output
-                check_and_reload_wfo_output()
-            except Exception as e:
-                log.warning(f"WFO-Watchdog Fehler (non-fatal): {e}", exc_info=True)
+            # v37h Pre-Cutover-Task 2 (10.05.2026): die 5 GH-Action-Watchdogs
+            # (optimizer/backtest/ml_training/discovery/wfo) wurden aus diesem
+            # market-hours-Block in _run_background_maintenance() verschoben
+            # (oben am Loop-Anfang). Vorher liefen sie nur Mo-Fr 09:30-16:00
+            # EST -> Sonntag-Optimizer-Pushes (05:00 UTC) wurden 7 Tage lang
+            # nicht abgeholt. Jetzt: alle 30 Min unabhaengig von market-hours.
 
             # --- Daily Equity Snapshot (>= 22:30 CET, einmal pro Werktag) ---
             # Schreibt portfolio_total_value + SPY/QQQ/AGG Close in

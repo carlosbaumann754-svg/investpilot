@@ -1790,6 +1790,161 @@ def walk_forward_validate(histories, config=None, train_pct=0.8,
     }
 
 
+def walk_forward_validate_rolling(histories, config=None,
+                                   train_months=24, test_months=6, step_months=6,
+                                   min_walks=2,
+                                   use_realistic_filters=True,
+                                   vix_history=None, earnings_blackouts=None):
+    """v37h Pre-Cutover-Task 1 (10.05.2026): Echter Rolling-Window-WFO.
+
+    Ergaenzt walk_forward_validate (single 80/20-Split) um eine echte
+    Rolling-Window-Validation. Macht N Walks, jeder mit eigenem Train/Test-
+    Window, und aggregiert die OOS-Metriken.
+
+    Konfiguration: 24Mo Train + 6Mo Test, 6Mo Step. Ueber 5 Jahre
+    Historie ergibt das ~5-6 Walks.
+
+    Args:
+        histories: dict of DataFrames (symbol -> OHLCV)
+        config: trading config
+        train_months: monatslange Train-Window (default 24 = 2 Jahre)
+        test_months: monatslange Test-Window (default 6)
+        step_months: Step zwischen Walks (default 6)
+        min_walks: min. Anzahl Walks fuer gueltigen Result. Bei zu wenig
+            History -> None (caller sollte auf walk_forward_validate
+            fallback).
+        use_realistic_filters/vix_history/earnings_blackouts: pass-through.
+
+    Returns:
+        dict mit:
+          walks: [{period_train, period_test, in_sample_metrics,
+                   out_of_sample_metrics, oos_trades_count}, ...]
+          aggregate: {
+            mean_oos_sharpe, median_oos_sharpe,
+            mean_oos_return_pct, mean_oos_max_dd_pct,
+            mean_is_sharpe, sharpe_decay_pct,
+            oos_walks, total_oos_trades
+          }
+
+        Falls zu wenig History fuer min_walks -> None.
+
+    Hard-Gate-relevant:
+        - mean_oos_sharpe < 2.0 -> Edge erodiert
+        - sharpe_decay_pct < 50% -> Overfitting-Verdacht (mean_oos vs mean_is)
+        - oos_walks < 3 -> Zu wenig Validation-Substanz
+    """
+    if not histories:
+        return None
+
+    # Schnellster Pfad: alle Symbol-Histories haben dieselbe Index-Range
+    # (alignmente nach pandas merge). Wir nehmen das laengste als Master.
+    sample_hist = next(iter(histories.values()))
+    if sample_hist is None or len(sample_hist) < 30 * (train_months + test_months):
+        return None
+
+    full_start = sample_hist.index[0]
+    full_end = sample_hist.index[-1]
+
+    # Berechne Walk-Slots
+    walks_meta = []
+    cursor = full_start
+    while True:
+        train_start = cursor
+        # train_months Monate weiter -> approximativ via 30.44d/Monat
+        train_end = train_start + timedelta(days=int(train_months * 30.44))
+        test_start = train_end
+        test_end = test_start + timedelta(days=int(test_months * 30.44))
+        if test_end > full_end:
+            break
+        walks_meta.append({
+            "train_start": train_start, "train_end": train_end,
+            "test_start": test_start, "test_end": test_end,
+        })
+        cursor = cursor + timedelta(days=int(step_months * 30.44))
+
+    if len(walks_meta) < min_walks:
+        log.info(
+            f"Rolling-WFO: nur {len(walks_meta)} Walks moeglich "
+            f"(min={min_walks}) — fallback auf single-split empfohlen"
+        )
+        return None
+
+    log.info(
+        f"Rolling-WFO: {len(walks_meta)} Walks "
+        f"(Train={train_months}Mo, Test={test_months}Mo, Step={step_months}Mo)"
+    )
+
+    sim_kwargs = {
+        "use_realistic_filters": use_realistic_filters,
+        "vix_history": vix_history,
+        "earnings_blackouts": earnings_blackouts,
+    }
+    pos_sizing = _build_position_sizing_from_config(config)
+    kelly_frac = pos_sizing["kelly_fraction"]
+
+    walks_results = []
+    for i, w in enumerate(walks_meta):
+        # Slice histories per Walk
+        train_h = {s: h.loc[w["train_start"]:w["train_end"]]
+                   for s, h in histories.items()
+                   if h is not None and len(h.loc[w["train_start"]:w["train_end"]]) >= 50}
+        test_h = {s: h.loc[w["test_start"]:w["test_end"]]
+                  for s, h in histories.items()
+                  if h is not None and len(h.loc[w["test_start"]:w["test_end"]]) >= 10}
+        if not train_h or not test_h:
+            continue
+
+        train_trades = simulate_trades(train_h, config, **sim_kwargs)
+        test_trades = simulate_trades(test_h, config, **sim_kwargs)
+        train_metrics = calculate_metrics(train_trades, position_sizing=pos_sizing)
+        test_metrics = calculate_metrics(test_trades, position_sizing=pos_sizing)
+        walks_results.append({
+            "walk_id": i + 1,
+            "period_train": f"{w['train_start']:%Y-%m-%d}—{w['train_end']:%Y-%m-%d}",
+            "period_test": f"{w['test_start']:%Y-%m-%d}—{w['test_end']:%Y-%m-%d}",
+            "in_sample_metrics": train_metrics,
+            "out_of_sample_metrics": test_metrics,
+            "oos_trades_count": len(test_trades),
+        })
+
+    if not walks_results:
+        return None
+
+    # Aggregate
+    import statistics
+    oos_sharpes = [w["out_of_sample_metrics"].get("sharpe_ratio") or 0
+                   for w in walks_results]
+    is_sharpes = [w["in_sample_metrics"].get("sharpe_ratio") or 0
+                  for w in walks_results]
+    oos_returns = [w["out_of_sample_metrics"].get("total_return_pct") or 0
+                   for w in walks_results]
+    oos_dds = [w["out_of_sample_metrics"].get("max_drawdown_pct") or 0
+               for w in walks_results]
+
+    mean_is = statistics.mean(is_sharpes) if is_sharpes else 0
+    mean_oos = statistics.mean(oos_sharpes) if oos_sharpes else 0
+    sharpe_decay_pct = (mean_oos / mean_is * 100) if mean_is else 0
+
+    return {
+        "walks": walks_results,
+        "aggregate": {
+            "oos_walks": len(walks_results),
+            "mean_oos_sharpe": round(mean_oos, 3),
+            "median_oos_sharpe": round(statistics.median(oos_sharpes), 3) if oos_sharpes else 0,
+            "mean_is_sharpe": round(mean_is, 3),
+            "sharpe_decay_pct": round(sharpe_decay_pct, 1),
+            "mean_oos_return_pct": round(statistics.mean(oos_returns), 2) if oos_returns else 0,
+            "mean_oos_max_dd_pct": round(statistics.mean(oos_dds), 2) if oos_dds else 0,
+            "total_oos_trades": sum(w["oos_trades_count"] for w in walks_results),
+            "config": {
+                "train_months": train_months,
+                "test_months": test_months,
+                "step_months": step_months,
+            },
+        },
+    }
+
+
 # ============================================================
 # ORCHESTRATOR
 # ============================================================
