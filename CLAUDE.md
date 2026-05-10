@@ -45,6 +45,34 @@ Inkl. v9 Brain-Recovery (truncated Gist Fix, Stale-Lock-Recovery) und v10 GitHub
 
 **Alter Render-Deploy (abgeschaltet):** ~~https://investpilot-2dp2.onrender.com~~
 
+## Roadmap-Update-Disziplin (PFLICHT, ab 2026-05-09)
+
+**HARTE REGEL — gilt fuer alle Claude-Sessions:**
+
+Nach JEDEM substanziellen Commit (Feature, Bugfix, Config-Change, Deploy)
+MUSS die Roadmap aktualisiert werden:
+
+1. **CHANGELOG-Eintrag** in `../investpilot_weiterentwicklung/generate_roadmap.py`
+   (Liste `CHANGELOG`, neuester Eintrag oben). Pattern: `{"datum": "YYYY-MM-DD
+   Wt HH:MM CEST (kurzbeschreibung)", "aenderung": (...)}`.
+2. **docx-Regenerieren:** `python ../investpilot_weiterentwicklung/generate_roadmap.py`
+
+**Wann ueberspringen:** triviale Commits (Typos, formatting, comment-only,
+chmod-fixes). Bei Zweifel: lieber Eintrag schreiben.
+
+**Schutz-Mechanismen aktiv (installiert 09.05.2026):**
+- Git post-commit hook (`.git/hooks/post-commit`) erinnert nach jedem Commit
+  wenn `generate_roadmap.py` >60 Min nicht angefasst.
+- Hook prueft auch ob `Roadmap_Status.docx` veraltet (mtime py > mtime docx).
+
+**Hintergrund:** 08.05.2026 lief eine 11-Commit-Lueke ohne Roadmap-Update durch
+(v37f Reconcile-Format, v37g Sentry-Integration, Tag-6-Deploy, .env-Hardening,
+UI-Patch). Backfill 09.05.2026. Lehre: ohne strukturellen Reminder vergisst
+man den Schritt — Audit-Trail darf nicht von Erinnerung abhaengen.
+
+**Bei Sessionsstart pruefen:** wenn der letzte CHANGELOG-Eintrag >1 Tag alt ist
+und git-log seitdem Commits zeigt, weise Carlos auf die Luecke hin.
+
 ## Code-Audit-Regime (ab 2026-04-15)
 
 Dreistufiges System um Bugs wie den Exit-Forecast-Config-Mismatch (v14) zu

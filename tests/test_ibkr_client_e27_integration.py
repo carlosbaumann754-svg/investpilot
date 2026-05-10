@@ -53,6 +53,36 @@ def test_tracker_enabled_via_config(make_broker, mock_storage):
     assert broker._tracker is not None
 
 
+def test_ibkr_broker_none_config_does_not_crash(mock_storage):
+    """v37h Task 2c (09.05.2026): IbkrBroker(None) und IbkrBroker() ohne Args
+    duerfen NICHT crashen.
+
+    Wurzel-Bug: scheduler.cancel_all_pending_orders() ruft IbkrBroker() ohne
+    Args auf. Im __init__ versuchte der Code config.get("realtime_status_tracker")
+    aufzurufen — wenn config None ist, AttributeError 'NoneType' has no
+    attribute 'get'. Auf Cutover-Tag waere das fatal weil cancel_all_pending
+    der Sicherheits-Pfad bei Trading-Off ist.
+
+    Fix: (config or {}).get(...) — None-safe wie Zeile 216 (ibkr_cfg).
+    """
+    from app.ibkr_client import IbkrBroker
+
+    # Variant 1: explizit None
+    broker = IbkrBroker(config=None)
+    assert broker._e27_enabled is False  # Default fallback
+    assert broker._tracker is not None  # Tracker trotzdem instantiiert
+
+    # Variant 2: kein Argument
+    broker2 = IbkrBroker()
+    assert broker2._e27_enabled is False
+    assert broker2._tracker is not None
+
+    # Variant 3: leerer Dict
+    broker3 = IbkrBroker(config={})
+    assert broker3._e27_enabled is False
+    assert broker3._tracker is not None
+
+
 def test_subscription_only_when_flag_enabled(make_broker, mock_storage):
     """_maybe_subscribe_e27_events macht nur etwas wenn flag=true."""
     broker = make_broker(enabled=False)

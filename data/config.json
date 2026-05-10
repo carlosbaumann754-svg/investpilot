@@ -367,5 +367,37 @@
       "base_url",
       "environment"
     ]
+  },
+  "asset_class_order_settings": {
+    "_comment": "Per-Asset-Class Order-Parameter. Reagiert auf Stress-Test-08.05.: Commodity-ETFs failen oft in Pre-Market wegen duenner Liquiditaet. RTH-only fuer Commodities + breiterer Slippage-Buffer.",
+    "_added": "2026-05-09 v37h",
+    "stocks": {
+      "slippage_pct": 0.5,
+      "trading_hours": "extended"
+    },
+    "etf": {
+      "slippage_pct": 0.5,
+      "trading_hours": "extended"
+    },
+    "commodities": {
+      "slippage_pct": 1.5,
+      "trading_hours": "rth_only"
+    },
+    "crypto": {
+      "slippage_pct": 1.0,
+      "trading_hours": "extended"
+    },
+    "forex": {
+      "slippage_pct": 0.3,
+      "trading_hours": "extended"
+    },
+    "indices": {
+      "slippage_pct": 0.5,
+      "trading_hours": "extended"
+    },
+    "_default": {
+      "slippage_pct": 0.5,
+      "trading_hours": "extended"
+    }
   }
 }

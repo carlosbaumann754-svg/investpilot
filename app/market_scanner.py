@@ -7,6 +7,7 @@ Nutzt yfinance fuer technische Analyse, eToro API fuer Instrument Discovery.
 import logging
 import time
 from datetime import datetime
+from typing import Optional
 
 log = logging.getLogger("Scanner")
 
@@ -174,6 +175,42 @@ def ibkr_ticker_to_bot_symbol(ibkr_ticker: str) -> str:
         if override.get("symbol") == ibkr_ticker:
             return bot_sym
     return ibkr_ticker  # Fallback: unmodifiziert
+
+
+def get_asset_class_for_instrument_id(instrument_id) -> Optional[str]:
+    """v37h Task 1 (09.05.2026): Asset-Class-Lookup ueber etoro_id.
+
+    Returnt z.B. "stocks", "etf", "commodities", "crypto", "forex" — oder
+    None wenn instrument_id nicht im Universe ist.
+
+    Wird in IbkrBroker._place_market_order benutzt um per-Asset-Class
+    Slippage + Trading-Hours zu konfigurieren (asset_class_settings in
+    config.json).
+
+    Hintergrund: Stress-Test 08.05. zeigte Cluster bei Commodity-ETFs
+    (CPER, SLV) die in Pre-Market-Hours mehrfach failed/cancelled wurden.
+    Liquiditaet + Spread sind Asset-Class-Eigenschaften, nicht symbol-
+    spezifisch. Asset-Class-Settings = saubere Cross-Cutting-Concern.
+    """
+    try:
+        iid = int(instrument_id)
+    except (ValueError, TypeError):
+        return None
+    for info in ASSET_UNIVERSE.values():
+        if info.get("etoro_id") == iid:
+            return info.get("class")
+    return None
+
+
+def get_asset_class_for_symbol(bot_symbol: str) -> Optional[str]:
+    """Asset-Class-Lookup via Bot-Symbol (Pendant zu instrument_id-Variante).
+
+    Nuetzlich fuer Pfade die Symbol-basiert arbeiten (z.B. Strategy-Code).
+    """
+    if not bot_symbol:
+        return None
+    info = ASSET_UNIVERSE.get(bot_symbol)
+    return info.get("class") if info else None
 
 
 def expand_symbol_for_match(symbol: str) -> set[str]:

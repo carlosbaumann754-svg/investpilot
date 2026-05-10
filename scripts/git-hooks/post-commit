@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# investpilot post-commit hook — Roadmap-Update-Reminder
+#
+# HINTERGRUND
+# 08.05.2026 lief eine 11-Commit-Lueke ohne Roadmap-Update durch (v37f, v37g
+# Sentry, Tag-6, Hardening, UI). Backfill am 09.05.2026. Damit das nicht
+# wieder passiert: dieser Hook erinnert nach jedem Commit, falls
+# generate_roadmap.py nicht in den letzten 60 Minuten angefasst wurde.
+#
+# REGEL
+# feedback_update_roadmap_after_changes.md: "Automatisch analog Backups —
+# CHANGELOG + ggf. Phase-Eintrag + Word-Regenerierung nach jedem Commit/
+# Config-Change."
+#
+# INSTALLATION
+# bash scripts/install-git-hooks.sh
+
+set -e
+
+ROADMAP_PY="$(git rev-parse --show-toplevel)/../investpilot_weiterentwicklung/generate_roadmap.py"
+ROADMAP_DOCX="$(git rev-parse --show-toplevel)/../investpilot_weiterentwicklung/Roadmap_Status.docx"
+
+# Skip wenn Roadmap-Repo nicht gefunden (z.B. anderer Clone)
+if [ ! -f "$ROADMAP_PY" ]; then
+    exit 0
+fi
+
+PY_MTIME=$(stat -c %Y "$ROADMAP_PY" 2>/dev/null || stat -f %m "$ROADMAP_PY" 2>/dev/null || echo 0)
+NOW=$(date +%s)
+AGE=$((NOW - PY_MTIME))
+
+# Hinweis erst wenn generate_roadmap.py seit >60 Min nicht geaendert
+if [ "$AGE" -gt 3600 ]; then
+    LAST_COMMIT_SUBJ=$(git log -1 --pretty=%s)
+    echo ""
+    echo "================================================================"
+    echo " ROADMAP-REMINDER"
+    echo "================================================================"
+    echo " Letzter Commit: $LAST_COMMIT_SUBJ"
+    echo " generate_roadmap.py zuletzt geaendert: vor $((AGE / 60)) Minuten"
+    echo ""
+    echo " Falls dieser Commit substanziell ist (Feature, Fix, Config),"
+    echo " bitte CHANGELOG aktualisieren UND docx regenerieren:"
+    echo ""
+    echo "   1. Eintrag in:"
+    echo "      ../investpilot_weiterentwicklung/generate_roadmap.py"
+    echo ""
+    echo "   2. Regenerieren:"
+    echo "      python ../investpilot_weiterentwicklung/generate_roadmap.py"
+    echo ""
+    echo " Hintergrund: 08.05.2026 = 11-Commit-Lueke ohne Roadmap-Update."
+    echo "================================================================"
+    echo ""
+fi
+
+# Zweite Pruefung: wurde generate_roadmap.py NACH der Roadmap_Status.docx
+# angefasst? Dann ist die docx veraltet -> regenerieren.
+if [ -f "$ROADMAP_DOCX" ]; then
+    DOCX_MTIME=$(stat -c %Y "$ROADMAP_DOCX" 2>/dev/null || stat -f %m "$ROADMAP_DOCX" 2>/dev/null || echo 0)
+    if [ "$PY_MTIME" -gt "$DOCX_MTIME" ]; then
+        echo " WARN: generate_roadmap.py NEUER als Roadmap_Status.docx —"
+        echo "       docx ist veraltet. Bitte regenerieren:"
+        echo "       python ../investpilot_weiterentwicklung/generate_roadmap.py"
+        echo ""
+    fi
+fi
+
+exit 0
