@@ -147,6 +147,7 @@ def test_polygon_is_available_false_without_key(monkeypatch):
 
 
 def test_polygon_fetch_quote_success(monkeypatch):
+    """v37h Update: /prev endpoint statt /last/trade (Free-Tier-OK)."""
     monkeypatch.setenv("POLYGON_API_KEY", "fakepoly")
     from app import polygon_client as pg
 
@@ -154,11 +155,14 @@ def test_polygon_fetch_quote_success(monkeypatch):
     fake_resp.status_code = 200
     fake_resp.json.return_value = {
         "status": "OK",
-        "results": {"p": 201.45, "t": 1715000000000},
+        "results": [
+            {"o": 200, "h": 202, "l": 199, "c": 201.45,
+             "v": 1000000, "t": 1715000000000},
+        ],
     }
     with patch("app.polygon_client.requests.get", return_value=fake_resp):
         price = pg.fetch_quote("AAPL")
-    assert price == 201.45
+    assert price == 201.45  # Close des Vortags
 
 
 def test_polygon_fetch_quote_429_returns_none(monkeypatch):

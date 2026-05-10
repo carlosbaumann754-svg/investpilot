@@ -106,13 +106,20 @@ def _get(path: str, params: Optional[dict[str, Any]] = None) -> Optional[dict]:
 
 
 def fetch_quote(symbol: str) -> Optional[float]:
-    """Last-Trade-Price (delayed 15 Min auf Free-Tier).
+    """Vortag-Close-Price.
+
+    Free-Tier-kompatibel via /v2/aggs/ticker/{symbol}/prev. Liefert
+    den Schlusskurs des letzten geschlossenen Handelstags. Fuer Live-
+    Trading nicht ideal, aber als Fallback wenn yfinance ausfaellt
+    (z.B. Wochenende) ein guter Reality-Check.
+
+    Hinweis: /v2/last/trade ist Polygon-Paid-Tier-only (403 fuer Free).
 
     Args:
         symbol: e.g. 'AAPL'
 
     Returns:
-        Float-Preis oder None.
+        Float-Close des Vortags oder None.
     """
     if not symbol:
         return None
@@ -121,12 +128,17 @@ def fetch_quote(symbol: str) -> Optional[float]:
     if cached and now - cached["fetched_at"] < _QUOTE_CACHE_TTL:
         return cached["value"]
 
-    # /v2/last/trade/{symbol} — last trade (delayed)
-    data = _get(f"/v2/last/trade/{symbol.upper()}")
+    # /v2/aggs/ticker/{symbol}/prev — Free-Tier-OK
+    data = _get(f"/v2/aggs/ticker/{symbol.upper()}/prev",
+                {"adjusted": "true"})
     if not data:
         return None
-    results = data.get("results") or {}
-    price = results.get("p")  # 'p' = price
+    results = data.get("results") or []
+    if not results:
+        return None
+    # results ist Array mit einem Eintrag fuer den Vortag
+    last_bar = results[0]
+    price = last_bar.get("c")  # 'c' = close
     if price is None:
         return None
     try:
