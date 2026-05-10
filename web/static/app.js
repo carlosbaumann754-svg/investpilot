@@ -1678,7 +1678,10 @@ function renderKellySweep(data) {
     if (!card) return;
     card.style.display = 'block';
 
-    const results = data.results || data.sweep_results || [];
+    // v37h Fix (10.05.2026): Backend liefert 'sweep' (kein '_results'-Suffix).
+    // Plus Metriken sind nested unter 'full_period' (oder direkt fuer alte Format).
+    // Backwards-compat: alle 3 Variant-Keys probieren.
+    const results = data.sweep || data.results || data.sweep_results || [];
     if (!results.length) return;
 
     const tbody = document.getElementById('kelly-sweep-table');
@@ -1687,9 +1690,11 @@ function renderKellySweep(data) {
 
     for (const r of results) {
         const k = r.kelly_fraction || r.k || '?';
-        const ret = r.total_return_pct != null ? r.total_return_pct.toFixed(1) + '%' : '--';
-        const sharpe = r.sharpe_ratio != null ? r.sharpe_ratio.toFixed(2) : '--';
-        const dd = r.max_drawdown_pct != null ? '-' + r.max_drawdown_pct.toFixed(1) + '%' : '--';
+        // Metriken aus full_period (neues Format) oder direkt (alt)
+        const m = r.full_period || r;
+        const ret = m.total_return_pct != null ? m.total_return_pct.toFixed(1) + '%' : '--';
+        const sharpe = m.sharpe_ratio != null ? m.sharpe_ratio.toFixed(2) : '--';
+        const dd = m.max_drawdown_pct != null ? '-' + m.max_drawdown_pct.toFixed(1) + '%' : '--';
         const tr = document.createElement('tr');
         const isCurrent = parseFloat(k) === 0.04;
         tr.style.fontWeight = isCurrent ? 'bold' : 'normal';
