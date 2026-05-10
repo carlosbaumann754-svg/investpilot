@@ -360,6 +360,70 @@ def test_stale_marker_pushover_failure_does_not_break(stress_tracker, monkeypatc
         "Stale-Status muss persistieren auch bei Pushover-Failure"
 
 
+def test_stale_marker_persists_across_instances_no_pushover_spam(monkeypatch):
+    """v37h Bugfix 10.05.2026 (Carlos's Pushover-Spam-Vorfall):
+
+    Vor dem Fix war _mark_stale nicht persistierend — nur in-memory.
+    Folge: Bei Container-Restart oder neuer IbkrBroker-Instanz (Reconcile-
+    Cron, API-Endpoints) wurde pending_orders.json frisch geladen mit
+    current_status='PendingSubmit'. Stale-Check feuerte erneut. Pushover-
+    Spam alle 1-3 Min.
+
+    Test verifiziert Cross-Instance-Idempotenz:
+      Tracker1 stales order -> persists status='Stale' to pending_orders.json
+      Tracker2 (fresh load) sees status='Stale' (in IBKR_FINAL_STATUSES)
+      Tracker2.recover_from_ibkr -> skips line 227 -> KEIN zweiter Pushover.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    # Shared storage simuliert pending_orders.json auf Disk
+    storage = {}
+    monkeypatch.setattr("app.config_manager.save_json",
+                        lambda fn, data: storage.__setitem__(fn, data))
+    monkeypatch.setattr("app.config_manager.load_json",
+                        lambda fn: storage.get(fn))
+    storage["trade_history.json"] = [{"symbol": "STUCK", "order_id": 122}]
+
+    pushover_calls = []
+    monkeypatch.setattr("app.alerts.send_pushover",
+                        lambda msg, *a, **kw: pushover_calls.append(msg))
+
+    # === Tracker1 — entdeckt + markiert stale ===
+    t1 = OrderStatusTracker(status_mapper=lambda s: s.lower() if s else None)
+    t1.register(order_id=122, trade_entry={"symbol": "STUCK", "order_id": 122})
+    backdated = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
+    t1._pending["122"]["registered_at"] = backdated
+
+    ib = MagicMock()
+    ib.openTrades.return_value = []
+    ib.trades.return_value = []
+
+    stats1 = t1.recover_from_ibkr(ib, stale_after_hours=48)
+    assert stats1["staled"] == 1, "Tracker1: Stale-Marker haette greifen muessen"
+    assert len(pushover_calls) == 1, "Tracker1: genau 1 Pushover beim ersten Marker"
+
+    # KRITISCH: storage["pending_orders.json"] muss jetzt status='Stale' enthalten
+    persisted = storage.get("pending_orders.json", {}).get("pending", {}).get("122", {})
+    assert persisted.get("current_status") == "Stale", \
+        f"Bugfix-Verifikation: pending_orders.json muss Stale-Status persistieren, " \
+        f"aber sah: {persisted.get('current_status')!r}"
+
+    # === Tracker2 — neue Instanz (z.B. Reconcile-Cron, Container-Restart) ===
+    t2 = OrderStatusTracker(status_mapper=lambda s: s.lower() if s else None)
+    # Constructor liest pending_orders.json -> Order 122 mit Stale geladen
+    assert t2._pending.get("122", {}).get("current_status") == "Stale", \
+        "Tracker2 muss Stale-Status aus persistiertem File laden"
+
+    stats2 = t2.recover_from_ibkr(ib, stale_after_hours=48)
+
+    # IDEMPOTENZ: kein zweiter Pushover, kein erneutes Stalen
+    assert stats2["staled"] == 0, \
+        f"Tracker2 darf NICHT erneut stalen (war: {stats2['staled']})"
+    assert len(pushover_calls) == 1, \
+        f"Cross-Instance-Idempotenz verletzt: {len(pushover_calls)} Pushover " \
+        f"(erwartet: genau 1 vom ersten Tracker)"
+
+
 def test_recovery_with_filled_order_in_ibkr(stress_tracker):
     """Happy-Path: Order war pending, beim Restart von IBKR als Filled."""
     tracker, storage = stress_tracker

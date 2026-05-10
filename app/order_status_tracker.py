@@ -269,7 +269,18 @@ class OrderStatusTracker:
     def _mark_stale(self, key: str, entry: dict) -> None:
         """Markiere pending Order als 'stale' wenn nach Bot->24h-Offline kein IBKR-Match.
 
-        Caller hat bereits self._lock. Updatet pending-Eintrag UND trade_history.
+        Caller hat bereits self._lock. Updatet pending-Eintrag UND
+        trade_history.json UND persistiert pending_orders.json.
+
+        BUGFIX 10.05.2026 (Carlos's Pushover-Spam-Vorfall): vorher fehlte
+        self._save_state() am Ende. Folge: Status="Stale" lebte nur in-
+        memory. Beim naechsten Container-Restart oder bei einer neuen
+        IbkrBroker-Instanz (Reconcile-Cron, API-Endpoints, Bot-Cycle)
+        wurde pending_orders.json frisch geladen mit alter Status =
+        PendingSubmit -> Stale-Check feuerte erneut -> Pushover-Spam
+        alle 1-3 Min. 'Stale' war zwar in IBKR_FINAL_STATUSES (also
+        Idempotenz-Check Zeile 227 wuerde greifen), aber der Marker
+        wurde nie persistiert.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         entry["current_status"] = "Stale"  # Custom-Status (nicht IBKR-Status)
@@ -320,6 +331,12 @@ class OrderStatusTracker:
             )
         except Exception as exc:  # pragma: no cover — Pushover-Failure soll Stale-Marker nicht brechen
             log.warning("E27 STALE: Pushover-Alert failed: %s", exc)
+
+        # BUGFIX 10.05.2026: pending_orders.json persistieren damit der
+        # "Stale"-Marker den Cross-Instance-Idempotenz-Check ueberlebt.
+        # Caller (recover_from_ibkr) haelt self._lock — _save_state ist
+        # konsistent mit dem Pattern in handle_status_event/cleanup_resolved.
+        self._save_state()
 
     def cleanup_resolved(self, max_age_hours: int = 24) -> int:
         """Loesche Final-Status-Eintraege aelter als max_age_hours.
