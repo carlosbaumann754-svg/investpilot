@@ -619,6 +619,68 @@ class IbkrBroker(BrokerBase):
     #   False = Order bleibt im IBKR-Order-Book (z.B. Limit fuer After-Hours)
     CANCEL_ON_TIMEOUT = True
 
+    # Status-Werte die einen Brain-Snapshot ausloesen (Cash/Positions haben
+    # sich tatsaechlich veraendert). Zentrale Liste damit Tests + Implementierung
+    # konsistent bleiben.
+    _SNAPSHOTTABLE_STATUSES = frozenset({"Filled", "PartiallyFilled"})
+
+    def _snapshot_after_fill_safely(self, status: str, symbol: str) -> bool:
+        """v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill.
+
+        HINTERGRUND
+        Vor dieser Aenderung wurde Brain-Snapshot nur im Trader-Cycle (alle 5-15
+        Min) geschrieben. Reconcile-Cron laeuft alle 30 Min. Wenn ein Fill
+        zwischen Cycle-Tick und naechstem Reconcile-Run passiert, sieht
+        Reconcile veraltete Cash-Werte -> Phantom-Drift-Alert (siehe
+        08.05.2026-Vorfall: 12 Pushover-Alerts ueber Nacht mit 'CASH_DRIFT:').
+
+        v37f hat das Schema-Mismatch (cash vs credit) gefixt aber NICHT den
+        Timing-Gap. Diese Methode schliesst den Gap.
+
+        Args:
+            status: Order-Status nach _place_market_order Wartephase.
+                Snapshot wird nur bei Filled/PartiallyFilled getriggert.
+            symbol: Fuer Audit-Log (Postmortem-Debugging).
+
+        Returns:
+            True  = Snapshot erfolgreich persisted.
+            False = Snapshot uebersprungen (status nicht-fuellend) ODER
+                    Fehler aufgetreten (defensiv gefangen, Order-Flow geht
+                    weiter).
+
+        DEFENSIVE
+        Diese Methode darf NIE eine Exception hochwerfen — der Call-Site
+        in _place_market_order rechnet damit dass eine fehlgeschlagene
+        Snapshot-Persistierung den Order-Result nicht beeinflusst.
+        """
+        if status not in self._SNAPSHOTTABLE_STATUSES:
+            return False
+        try:
+            portfolio = self.get_portfolio()
+        except Exception as e:
+            log.warning(
+                "Snapshot-After-Fill: get_portfolio raised for %s — non-fatal: %s",
+                symbol, e,
+            )
+            return False
+        if portfolio is None:
+            log.warning(
+                "Snapshot-After-Fill skipped for %s: get_portfolio returned None",
+                symbol,
+            )
+            return False
+        try:
+            from app.brain import record_snapshot  # lazy import vermeidet Circular
+            record_snapshot(portfolio)
+            log.info("Snapshot-After-Fill OK: %s persisted to brain", symbol)
+            return True
+        except Exception as e:
+            log.warning(
+                "Snapshot-After-Fill: record_snapshot raised for %s — non-fatal: %s",
+                symbol, e,
+            )
+            return False
+
     def _place_market_order(
         self,
         instrument_id: int,
@@ -766,6 +828,12 @@ class IbkrBroker(BrokerBase):
 
             log.info("Order %s status=%s filled=%d avgPrice=%.4f",
                      trade.order.orderId, status, fill_qty, avg_fill_price)
+
+            # v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill —
+            # schliesst Timing-Gap zwischen Fill und naechstem Trader-Cycle.
+            # Reconcile-Cron sieht damit immer aktuelles Cash + Positions.
+            # Defensive: Helper faengt alle Errors (Order-Result unbeeinflusst).
+            self._snapshot_after_fill_safely(status, contract.symbol)
 
             # 4. eToro-kompatibles Response
             return {
