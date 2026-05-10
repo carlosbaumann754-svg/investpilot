@@ -14,3 +14,13 @@ brain_state.json
 trade_history.json
 config.json
 !data/config.json
+
+# v37h Cleanup 10.05.2026: Runtime-Outputs gehoeren nicht in Git
+# (werden vom Bot/Backtester staendig ueberschrieben).
+data/universe_health.json
+data/backtest_history.json
+data/backtest_results.json
+data/backtest_status.json
+# Stress-Test-Smoke-Inputs sind ephemer (echte Records liegen in
+# investpilot_weiterentwicklung/).
+stress_smoke_test.txt
