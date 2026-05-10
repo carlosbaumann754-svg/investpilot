@@ -398,6 +398,18 @@ def scheduler_loop():
     log.info(f"Trading Flag: {TRADING_FLAG}")
     log.info("=" * 55)
 
+    # v37h Pre-Cutover (10.05.2026): yfinance-Wochenend-Noise filtern.
+    # ERROR-Logs wie "$HG=F: possibly delisted; no price data found"
+    # sind Sa/So-Artefakte (Futures haben keine Wochenend-Daten). Filter
+    # dropt diese am Wochenende auf DEBUG; Werktag bleibt unveraendert
+    # damit echte Delistings sichtbar.
+    try:
+        from app.yfinance_log_filter import install_yfinance_weekend_filter
+        if install_yfinance_weekend_filter():
+            log.info("yfinance-Wochenend-Filter installiert (Cry-Wolf-Reduction)")
+    except Exception as e:
+        log.warning(f"yfinance-Filter-Install fehlgeschlagen (non-fatal): {e}")
+
     # Cloud-Restore: Brain-Daten aus letztem Backup wiederherstellen (GitHub Gist + GDrive)
     log.info("Cloud-Restore: Pruefe ob Backup vorhanden...")
     try:
