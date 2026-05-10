@@ -247,6 +247,15 @@ _BG_HEARTBEAT_SNAPSHOT_S = 3600  # 1 Std — Brain-Snapshot heartbeat damit
                                  # performance_snapshots nicht explodieren
                                  # (365-Eintrag-Limit + tagliche Backups OK)
 
+# Review-Fix #1 (10.05.2026): GitHub-Token-Expiration silent-fail
+# Detection. Wenn ein Watchdog 401/403 wirft -> Token wahrscheinlich
+# expired. Bei 3 consecutive failures -> log.error (-> Sentry) +
+# Pushover-Alert. Reduziert Detect-Time von "irgendwann mal jemand
+# klickt manuell" auf "30 Min nach Token-Expiry".
+_BG_TOKEN_FAIL_COUNT = {"count": 0, "alerted_at": 0.0}
+_BG_TOKEN_FAIL_THRESHOLD = 3        # 3 Watchdog-Calls in Folge fehlgeschlagen
+_BG_TOKEN_REALERT_AFTER_S = 21600   # 6h zwischen Pushover-Re-Alerts
+
 
 def _run_background_maintenance() -> None:
     """v37h Pre-Cutover-Task 2+3 (10.05.2026): Hintergrund-Maintenance die
@@ -267,6 +276,10 @@ def _run_background_maintenance() -> None:
     # ----- Watchdog-Block: alle 30 Min -----
     if now - _BG_MAINT_LAST_RUN.get("watchdogs", 0) >= _BG_WATCHDOG_INTERVAL_S:
         _BG_MAINT_LAST_RUN["watchdogs"] = now
+        # Review-Fix #1: vor Watchdog-Block einmal Token-Validity checken
+        # (alle 6h). Bei 401/403 -> Pushover-Alert (sonst silent-fail mit
+        # invalidiertem Token = bekannter Bug-Class).
+        _check_github_token_validity(now)
         for name, fn_name in [
             ("optimizer", "check_and_reload_optimizer_output"),
             ("backtest", "check_and_reload_backtest_output"),
@@ -289,19 +302,92 @@ def _run_background_maintenance() -> None:
     if (not is_market_hours()
             and now - _BG_MAINT_LAST_RUN.get("heartbeat", 0) >= _BG_HEARTBEAT_SNAPSHOT_S):
         _BG_MAINT_LAST_RUN["heartbeat"] = now
+        # Review-Fix #2 (Code-Review 10.05.2026): get_portfolio() ist live
+        # IBKR-Roundtrip — bei IB-Disconnect blockt der scheduler-thread
+        # bis IBKR-Timeout (~30-60s). Vorher: schneller is_connected()-
+        # Check, der Disconnect sofort detektiert.
         try:
             from app.broker_base import get_broker
             from app.brain import record_snapshot
             broker = get_broker()
-            portfolio = broker.get_portfolio()
-            if portfolio is not None:
-                snap = record_snapshot(portfolio)
-                log.info(
-                    f"BG-Heartbeat-Snapshot: cash=${snap.get('cash',0):.0f} "
-                    f"pos={snap.get('num_positions', 0)}"
-                )
+            # Skip wenn broker offline (vermeidet 30-60s Block)
+            ib = getattr(broker, "_ib", None)
+            if ib is None or not ib.isConnected():
+                log.info("BG-Heartbeat: skip — IBKR disconnected")
+            else:
+                portfolio = broker.get_portfolio()
+                if portfolio is not None:
+                    snap = record_snapshot(portfolio)
+                    log.info(
+                        f"BG-Heartbeat-Snapshot: cash=${snap.get('cash',0):.0f} "
+                        f"pos={snap.get('num_positions', 0)}"
+                    )
         except Exception as e:
             log.warning(f"BG-Heartbeat-Snapshot Fehler (non-fatal): {e}")
+
+
+def _check_github_token_validity(now: float) -> None:
+    """v37h Review-Fix #1 (10.05.2026): GitHub-Token-Expiration-Detection.
+
+    Vorher silent-failed wenn Token expired -> alle 5 Watchdogs returned
+    False forever -> Bot lief ohne Optimizer/Backtest/ML/Discovery/WFO-
+    Updates. Carlos hat 1-Jahr-Token (Setup 08.05.2026), expiry ~08.05.2027,
+    aber pre-cutover Visibility ist Pflicht.
+
+    Throttle: 6h. Bei 401/403 -> Pushover-Alert (priority 1, max 1× / 6h).
+    """
+    last_alerted = _BG_TOKEN_FAIL_COUNT.get("alerted_at", 0.0)
+    # Token-Check selbst auch throttlen (alle 6h reicht — Token expiry
+    # passiert nicht ploetzlich). last_checked > 0 == "wurde schon mal
+    # gecheckt"; beim ersten Aufruf nach Bot-Start sofort rennen.
+    last_checked = _BG_MAINT_LAST_RUN.get("token_check", 0.0)
+    if last_checked > 0 and now - last_checked < _BG_TOKEN_REALERT_AFTER_S:
+        return
+    _BG_MAINT_LAST_RUN["token_check"] = now
+
+    try:
+        from app.persistence import _get_token
+        token = _get_token()
+        if not token:
+            log.warning("BG-Token-Check: kein GITHUB_TOKEN gesetzt")
+            return
+        import requests
+        resp = requests.get(
+            "https://api.github.com/rate_limit",
+            headers={"Authorization": f"token {token}",
+                     "Accept": "application/vnd.github+json"},
+            timeout=10,
+        )
+        if resp.status_code in (401, 403):
+            _BG_TOKEN_FAIL_COUNT["count"] = _BG_TOKEN_FAIL_COUNT.get("count", 0) + 1
+            log.error(
+                f"BG-Token-Check: GitHub-Token EXPIRED/INVALID (HTTP {resp.status_code}). "
+                f"Watchdogs no-op bis Token erneuert wird. "
+                f"Fix: neuen gist-scope Token in .env setzen."
+            )
+            # Pushover nur 1x / 6h. last_alerted=0 = noch nie alerted.
+            if last_alerted == 0 or now - last_alerted >= _BG_TOKEN_REALERT_AFTER_S:
+                try:
+                    from app.alerts import send_pushover
+                    send_pushover(
+                        f"GITHUB_TOKEN expired (HTTP {resp.status_code}). "
+                        f"Bot kann GH-Action-Outputs (Optimizer/Backtest/ML/"
+                        f"Discovery/WFO) nicht mehr abholen. "
+                        f"Fix: .env updaten + Container restart.",
+                        title="InvestPilot GITHUB_TOKEN expired",
+                        priority=1,
+                    )
+                    _BG_TOKEN_FAIL_COUNT["alerted_at"] = now
+                except Exception as e:
+                    log.warning(f"Token-Alert Pushover failed: {e}")
+        elif resp.status_code == 200:
+            # Reset wenn vorher gefailed
+            if _BG_TOKEN_FAIL_COUNT.get("count", 0) > 0:
+                log.info("BG-Token-Check: GitHub-Token wieder gueltig")
+                _BG_TOKEN_FAIL_COUNT["count"] = 0
+    except Exception as e:
+        # Network-Errors etc. duerfen den scheduler nicht blockieren
+        log.debug(f"BG-Token-Check: {e}")
 
 
 def scheduler_loop():

@@ -13,12 +13,20 @@ mit Throttle gegen API-Rate-Limits (30 Min Watchdogs, 60 Min Heartbeat).
 from unittest.mock import MagicMock, patch
 import pytest
 
+# Import original token-check BEFORE any fixture patches it (autouse stub
+# unten ersetzt scheduler._check_github_token_validity per default).
+from app.scheduler import _check_github_token_validity as _ORIGINAL_TOKEN_CHECK
+
 
 @pytest.fixture(autouse=True)
 def reset_state(monkeypatch):
-    """Reset _BG_MAINT_LAST_RUN zwischen Tests."""
+    """Reset _BG_MAINT_LAST_RUN zwischen Tests + stub Token-Check (sonst HTTP)."""
     from app import scheduler
     scheduler._BG_MAINT_LAST_RUN.clear()
+    scheduler._BG_TOKEN_FAIL_COUNT.update({"count": 0, "alerted_at": 0.0})
+    # Stub Token-Check damit Tests keine echten GH-API-Calls machen
+    monkeypatch.setattr(scheduler, "_check_github_token_validity",
+                        lambda now: None)
     yield
     scheduler._BG_MAINT_LAST_RUN.clear()
 
@@ -222,3 +230,98 @@ def test_heartbeat_exception_does_not_stop_watchdogs():
         scheduler._run_background_maintenance()
 
     opt.assert_called_once()
+
+
+# ============================================================
+# Review-Fix #2: Heartbeat skippt bei IB-Disconnect (vermeidet 30-60s Block)
+# ============================================================
+
+def test_heartbeat_skips_when_ib_disconnected():
+    """Wenn broker._ib.isConnected() False -> Skip get_portfolio (kein 30-60s Block)."""
+    from app import scheduler
+
+    fake_broker = MagicMock()
+    fake_broker._ib.isConnected.return_value = False  # disconnected
+
+    with patch("app.scheduler.is_market_hours", return_value=False), \
+         patch("app.broker_base.get_broker", return_value=fake_broker), \
+         patch("app.brain.record_snapshot") as rec, \
+         patch("app.persistence.check_and_reload_optimizer_output", return_value=False), \
+         patch("app.persistence.check_and_reload_backtest_output", return_value=False), \
+         patch("app.persistence.check_and_reload_ml_training_output", return_value=False), \
+         patch("app.persistence.check_and_reload_discovery_output", return_value=False), \
+         patch("app.persistence.check_and_reload_wfo_output", return_value=False):
+        scheduler._run_background_maintenance()
+
+    fake_broker.get_portfolio.assert_not_called()  # KEIN Roundtrip
+    rec.assert_not_called()
+
+
+# ============================================================
+# Review-Fix #1: Token-Validity-Check bei 401/403 -> Pushover-Alert
+# ============================================================
+
+def test_token_validity_401_triggers_pushover(monkeypatch):
+    """GitHub-Token expired (HTTP 401) -> Pushover-Alert mit priority=1."""
+    from app import scheduler
+    # Bypass den autouse-Stub fuer diesen Test
+    # Restore die echte Funktion (autouse-Stub hat sie zu no-op gesetzt)
+    monkeypatch.setattr(scheduler, "_check_github_token_validity",
+                        _ORIGINAL_TOKEN_CHECK)
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 401
+
+    pushovers = []
+    monkeypatch.setattr("app.alerts.send_pushover",
+                        lambda msg, *a, **kw: pushovers.append({"msg": msg, "kw": kw}))
+
+    with patch("app.persistence._get_token", return_value="badtoken"), \
+         patch("requests.get", return_value=fake_resp):
+        _ORIGINAL_TOKEN_CHECK(now=1000.0)
+
+    assert len(pushovers) == 1
+    assert "GITHUB_TOKEN" in pushovers[0]["msg"] or "401" in pushovers[0]["msg"]
+    assert pushovers[0]["kw"].get("priority") == 1
+
+
+def test_token_validity_200_resets_fail_counter(monkeypatch):
+    """HTTP 200 -> reset _BG_TOKEN_FAIL_COUNT auf 0."""
+    from app import scheduler
+    # Restore die echte Funktion (autouse-Stub hat sie zu no-op gesetzt)
+    monkeypatch.setattr(scheduler, "_check_github_token_validity",
+                        _ORIGINAL_TOKEN_CHECK)
+
+    scheduler._BG_TOKEN_FAIL_COUNT["count"] = 5  # vorher gefailed
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+
+    with patch("app.persistence._get_token", return_value="goodtoken"), \
+         patch("requests.get", return_value=fake_resp):
+        _ORIGINAL_TOKEN_CHECK(now=1000.0)
+
+    assert scheduler._BG_TOKEN_FAIL_COUNT["count"] == 0
+
+
+def test_token_validity_throttled_6h(monkeypatch):
+    """Token-Check 2× sofort: nur 1× echter HTTP-Request (6h Throttle)."""
+    from app import scheduler
+    # Restore die echte Funktion (autouse-Stub hat sie zu no-op gesetzt)
+    monkeypatch.setattr(scheduler, "_check_github_token_validity",
+                        _ORIGINAL_TOKEN_CHECK)
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    request_count = {"n": 0}
+
+    def fake_get(*a, **kw):
+        request_count["n"] += 1
+        return fake_resp
+
+    with patch("app.persistence._get_token", return_value="t"), \
+         patch("requests.get", side_effect=fake_get):
+        _ORIGINAL_TOKEN_CHECK(now=1000.0)
+        _ORIGINAL_TOKEN_CHECK(now=1001.0)  # 1s spaeter
+
+    assert request_count["n"] == 1  # nur 1 echter Call
