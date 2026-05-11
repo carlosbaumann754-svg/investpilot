@@ -165,13 +165,18 @@ def load_config():
         if val:
             etoro[config_key] = val
 
-    # Validierung: mindestens public_key und ein private_key muessen da sein
-    if not etoro.get("public_key"):
-        log.warning("ETORO_PUBLIC_KEY nicht gesetzt (weder in .env noch config.json)")
-    env = etoro.get("environment", "demo")
-    key_name = "demo_private_key" if env == "demo" else "private_key"
-    if not etoro.get(key_name):
-        log.warning(f"eToro {key_name} nicht gesetzt fuer environment={env}")
+    # Validierung: mindestens public_key und ein private_key muessen da sein.
+    # v37h (11.05.2026): nur fuer broker=etoro warnen — bei broker=ibkr sind
+    # die eToro-Keys irrelevant und das WARNING-Log alle paar Minuten ist
+    # Noise. Fallback auf 'etoro' wenn broker-key fehlt = Schutz bleibt.
+    broker = (config.get("broker") or "etoro").lower()
+    if broker == "etoro":
+        if not etoro.get("public_key"):
+            log.warning("ETORO_PUBLIC_KEY nicht gesetzt (weder in .env noch config.json)")
+        env = etoro.get("environment", "demo")
+        key_name = "demo_private_key" if env == "demo" else "private_key"
+        if not etoro.get(key_name):
+            log.warning(f"eToro {key_name} nicht gesetzt fuer environment={env}")
 
     return config
 
