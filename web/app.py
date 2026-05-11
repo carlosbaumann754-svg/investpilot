@@ -2559,7 +2559,14 @@ async def api_risk(user=Depends(require_auth)):
 
 @app.get("/api/exposure")
 async def api_exposure(user=Depends(require_auth)):
-    """Effektive Marktexposure (Kapital x Hebel) je Asset-Klasse."""
+    """Effektive Marktexposure (Kapital x Hebel) je Asset-Klasse.
+
+    v37h Tab-Audit-Fix (11.05.2026): bei IBKR jetzt brain-cache statt
+    direkter get_portfolio() — analog /api/portfolio Pattern. Vorher
+    erzeugte direkter ib_insync-Call im FastAPI-async-Handler Loop-
+    Conflicts und returnte None -> 'Portfolio nicht verfuegbar' obwohl
+    Bot 11 echte Positionen hatte.
+    """
     try:
         from app.risk_manager import calculate_exposure
         from app.leverage_manager import get_leverage_summary
@@ -2567,13 +2574,20 @@ async def api_exposure(user=Depends(require_auth)):
         from app.config_manager import load_config
 
         config = load_config()
+        broker_name = (config.get("broker") or "etoro").lower()
         client = get_broker(config, readonly=True)
         if not client.configured:
-            return {"error": "eToro nicht konfiguriert"}
+            return {"error": f"Broker '{broker_name}' nicht konfiguriert"}
 
-        portfolio = client.get_portfolio()
-        if not portfolio:
-            return {"error": "Portfolio nicht verfuegbar"}
+        # IBKR -> brain-cache Pfad (asyncio-loop-safe, analog /api/portfolio)
+        if broker_name == "ibkr":
+            portfolio = _portfolio_from_brain_cache()
+            if not portfolio:
+                return {"error": "Portfolio noch nicht im brain_state — warte auf ersten Bot-Cycle"}
+        else:
+            portfolio = client.get_portfolio()
+            if not portfolio:
+                return {"error": "Portfolio nicht verfuegbar"}
 
         from app.etoro_client import EtoroClient as EC
         positions = [EC.parse_position(p) for p in portfolio.get("positions", [])]
