@@ -710,9 +710,15 @@ def run_brain_cycle(portfolio):
     Snapshot-After-Fill-Calls bleibt. Vorher konnte Async-Thread mitten
     in run_brain_cycle einen Snapshot persistieren, der dann durch
     spaetere save_brain in Schritt 4/5/6 ueberschrieben wurde.
+
+    v37h Bug-Fix (11.05.2026 20:35 CEST): erstes Deploy schluckte den
+    return-Wert von _run_brain_cycle_locked. Trader-Cycle in trader.py:
+    2196 erwartet aber `report = run_brain_cycle(...)` und ruft danach
+    `report.get('total_runs')` — was bei None crashed.
+    Returns: report-dict (analog Originalverhalten vor Race-Fix-Refactor).
     """
     with _BRAIN_LOCK:
-        _run_brain_cycle_locked(portfolio)
+        return _run_brain_cycle_locked(portfolio)
 
 
 def _run_brain_cycle_locked(portfolio):

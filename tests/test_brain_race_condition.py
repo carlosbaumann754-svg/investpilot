@@ -185,3 +185,23 @@ def test_record_snapshot_returns_dict_with_expected_keys(isolated_brain):
                 "positions_count", "positions"):
         assert key in snap, f"snap fehlt {key}"
     assert snap["num_positions"] == 1
+
+
+def test_run_brain_cycle_returns_report_dict(isolated_brain, monkeypatch):
+    """Bug-Regression-Test (11.05.2026 20:35 CEST):
+    run_brain_cycle Wrapper hatte `return` vergessen -> Trader-Cycle
+    crashte in trader.py:2196 mit 'NoneType' object has no attribute 'get'.
+    Test stellt sicher dass Wrapper das report-dict durchpropagiert.
+    """
+    from app.brain import run_brain_cycle
+    # Backup-to-Cloud + andere external Calls stubben
+    monkeypatch.setattr("app.brain.backup_to_cloud", lambda: None)
+
+    report = run_brain_cycle(_make_portfolio("AAPL"))
+
+    assert report is not None, \
+        "run_brain_cycle muss report-dict zurueckgeben (kein None!)"
+    assert isinstance(report, dict)
+    # Trader-Cycle ruft report.get('total_runs') — muss existieren
+    assert "total_runs" in report
+    assert report["total_runs"] >= 1
