@@ -2,10 +2,25 @@
 InvestPilot - Trade Brain (Selbstlernendes Analyse-Modul)
 Sammelt Performance-Daten, erkennt Muster, optimiert Strategie.
 Refactored aus trade_brain.py - nutzt ConfigManager.
+
+v37h Race-Condition-Fix (11.05.2026):
+=====================================
+Brain-State-Mutationen (load -> mutate -> save) sind read-modify-write
+nicht atomar. Carlos's NGAS/UNG-Trade von Mo 11.05. 17:50 zeigte
+Race-Condition:
+  - Async-Thread (Snapshot-After-Fill) schrieb UNG-Snapshot
+  - Trader-Cycle parallel: lud altes brain (vor UNG), schrieb es zurueck
+  -> UNG-Snapshot war ueberschrieben -> CASH_DRIFT alle 30 Min Pushover
+
+Fix: _BRAIN_LOCK (threading.RLock) wrapped alle load_brain/save_brain-
+Sequenzen in record_snapshot + andere State-Mutationen. Bewusst nicht
+in load_brain selbst weil read-only-Zugriffe von API-Endpoints
+nicht-blockierend sein sollten.
 """
 
 import logging
 import statistics
+import threading
 from datetime import datetime
 
 from app.config_manager import load_config, save_config, load_json, save_json
@@ -15,6 +30,12 @@ from app.persistence import backup_to_cloud
 log = logging.getLogger("TradeBrain")
 
 BRAIN_FILE = "brain_state.json"
+
+# v37h: Re-entrant Lock fuer Brain-State-Mutationen (Race-Condition-Fix
+# 11.05.2026). RLock erlaubt rekursive Acquires aus derselben Thread —
+# wichtig wenn record_snapshot intern weitere Brain-mutating-Funktionen
+# aufruft.
+_BRAIN_LOCK = threading.RLock()
 
 
 def load_brain():
@@ -49,7 +70,21 @@ def save_brain(brain):
 # ============================================================
 
 def record_snapshot(portfolio):
-    """Speichere Portfolio-Snapshot fuer Trendanalyse."""
+    """Speichere Portfolio-Snapshot fuer Trendanalyse.
+
+    v37h Race-Condition-Fix (11.05.2026): die gesamte load->mutate->save
+    Sequenz laeuft unter _BRAIN_LOCK damit parallele Aufrufe (z.B.
+    Snapshot-After-Fill async-thread + Trader-Cycle sync) sich nicht
+    gegenseitig ueberschreiben. Vorher konnte ein paralleler save den
+    frisch hinzugefuegten Snapshot wegwerfen — siehe NGAS/UNG-Drift
+    11.05. 17:50 UTC (Bot's Brain hatte 10 Pos statt 11, $21'592 Drift).
+    """
+    with _BRAIN_LOCK:
+        return _record_snapshot_locked(portfolio)
+
+
+def _record_snapshot_locked(portfolio):
+    """Innere Implementation — caller muss _BRAIN_LOCK halten."""
     brain = load_brain()
     brain["total_runs"] += 1
 
@@ -624,14 +659,30 @@ def analyze_parameter_performance():
 
 
 def run_brain_cycle(portfolio):
-    """Fuehre kompletten Brain-Zyklus aus (v2 mit Walk-Forward)."""
+    """Fuehre kompletten Brain-Zyklus aus (v2 mit Walk-Forward).
+
+    v37h Race-Condition-Fix (11.05.2026): wrapped in _BRAIN_LOCK damit
+    Trader-Cycle's 7-Schritte-Brain-Mutation (record_snapshot, analyze,
+    detect, learn, optimize, walk-forward, report) atomisch zu parallelen
+    Snapshot-After-Fill-Calls bleibt. Vorher konnte Async-Thread mitten
+    in run_brain_cycle einen Snapshot persistieren, der dann durch
+    spaetere save_brain in Schritt 4/5/6 ueberschrieben wurde.
+    """
+    with _BRAIN_LOCK:
+        _run_brain_cycle_locked(portfolio)
+
+
+def _run_brain_cycle_locked(portfolio):
+    """Caller muss _BRAIN_LOCK halten."""
     log.info("")
     log.info("=" * 55)
     log.info("TRADE BRAIN - Analyse & Optimierung")
     log.info("=" * 55)
 
     log.info("\n[1/7] Snapshot aufzeichnen...")
-    record_snapshot(portfolio)
+    # Direkt _record_snapshot_locked aufrufen (RLock erlaubt rekursiv, aber
+    # so vermeiden wir doppelten Acquire-Overhead).
+    _record_snapshot_locked(portfolio)
 
     log.info("\n[2/7] Performance analysieren...")
     analyze_instrument_performance()
