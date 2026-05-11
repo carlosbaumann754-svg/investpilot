@@ -729,9 +729,21 @@ async def api_portfolio(user=Depends(require_auth)):
         else:
             total_value = credit + total_invested + unrealized_pnl
 
+        # v37h Tab-Audit-Day-2 Fix (11.05.2026): market_value = qty * current_price
+        # ("Marktwert" wie IBKR), `invested` ist Cost-Basis (qty * entry_price).
+        # Vorher zeigte Dashboard nur `invested` als "Investiert" — irre-
+        # fuehrend, weil das Anschaffungswert ist, nicht aktueller Wert.
+        # Beispiel AAPL: 179 * $283.63 (entry) = $50'769 Cost-Basis
+        # vs 179 * $291.87 (current) = $52'245 Marktwert. Differenz = unr_pnl.
+        # IBKR Mobile-App zeigt "Marktwert" (=current value), wir jetzt auch.
+        total_market_value = sum(
+            (p.get("invested") or 0) + (p.get("pnl") or 0) for p in parsed
+        )
+
         return {
             "credit": round(credit, 2),
-            "invested": round(total_invested, 2),
+            "invested": round(total_invested, 2),       # Cost-Basis (Anschaffung)
+            "market_value": round(total_market_value, 2),  # aktueller Marktwert
             "unrealized_pnl": round(unrealized_pnl, 2),
             "total_value": round(total_value, 2),
             "num_positions": len(positions),
@@ -1341,13 +1353,50 @@ async def api_pnl_periods(user=Depends(require_auth)):
                 if ts >= start_dt:
                     realized[key] += float(pnl)
 
+        # v37h Tab-Audit-Day-2 Fix (11.05.2026): Equity-Snapshots-Vergleich
+        # fuer Hybrid-Fenster (Heute + 7T). Vorher: pnl = realized + ALL
+        # unrealized (= total Buchgewinn aller offenen Positionen, nicht
+        # Tages-Delta). Jetzt: pnl = current_equity - equity_at_window_start
+        # = echter Marktwert-Delta wie IBKR's Tages-G&V.
+        snaps = []
+        try:
+            from app.config_manager import load_json as _lj
+            snaps = (_lj("brain_state.json") or {}).get("performance_snapshots") or []
+        except Exception:
+            snaps = []
+
+        def _equity_at_or_before(target_dt):
+            """Equity vom letzten Snapshot dessen Timestamp <= target_dt (naive UTC)."""
+            best = None
+            for s in snaps:
+                raw = s.get("timestamp") or s.get("ts") or ""
+                try:
+                    t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                    if t.tzinfo is not None:
+                        t = t.replace(tzinfo=None)
+                except Exception:
+                    continue
+                if t <= target_dt:
+                    eq = s.get("equity") or s.get("total_value") or 0
+                    if eq:
+                        best = float(eq)
+            return best
+
         # Periods zusammenbauen mit Hybrid-Logik
         periods = []
-        for key, label, _start_dt, hybrid in windows:
+        for key, label, start_dt, hybrid in windows:
             r_pnl = realized[key]
+            equity_basis = None
             if hybrid:
-                total_pnl = r_pnl + current_unrealized
-                mode = "hybrid"
+                # Echter Marktwert-Delta vs Equity-Snapshot bei Fenster-Anfang
+                equity_basis = _equity_at_or_before(start_dt)
+                if equity_basis and equity_basis > 0 and current_value > 0:
+                    total_pnl = current_value - equity_basis
+                    mode = "equity_delta"
+                else:
+                    # Fallback alt: r_pnl + all_unrealized (z.B. keine Snaps)
+                    total_pnl = r_pnl + current_unrealized
+                    mode = "hybrid_fallback"
             else:
                 total_pnl = r_pnl
                 mode = "realized"
@@ -1356,7 +1405,8 @@ async def api_pnl_periods(user=Depends(require_auth)):
             # v36f: pct=None signalisiert dem Frontend "N/A" — vermeidet
             # falsche -100% Anzeige wenn current_value oder start_equity
             # zu klein ist (Pre-IBKR-Phase mit $0 Snapshots).
-            start_equity = current_value - total_pnl
+            # v37h: bei equity_delta-Mode haben wir den exakten Basiswert.
+            start_equity = equity_basis if equity_basis else (current_value - total_pnl)
             min_basis = 1000.0  # unter $1k ist die Berechnung Pseudozahl
             if current_value > min_basis and start_equity > min_basis:
                 pct = round((total_pnl / start_equity) * 100, 2)
@@ -1371,6 +1421,7 @@ async def api_pnl_periods(user=Depends(require_auth)):
                 "realized_pnl": round(r_pnl, 2),
                 "unrealized_pnl": round(current_unrealized, 2) if hybrid else 0,
                 "mode": mode,
+                "equity_basis": round(equity_basis, 2) if equity_basis else None,
             })
 
         return {

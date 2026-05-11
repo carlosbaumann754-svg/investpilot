@@ -400,7 +400,19 @@ async function loadDashboard() {
                 pnlEl.textContent = `P/L: ${fmtUsd(p.unrealized_pnl)} (${fmtPct(p.invested > 0 ? p.unrealized_pnl / p.invested * 100 : 0)})`;
                 pnlEl.className = 'card-sub ' + pnlClass(p.unrealized_pnl);
                 document.getElementById('cash-value').textContent = fmtUsd(p.credit);
-                document.getElementById('invested-value').textContent = fmtUsd(p.invested);
+                // v37h Tab-Audit-Day-2: Marktwert (current value) als Hauptwert,
+                // Cost-Basis (Anschaffung) als Subtext. Bei alten Responses ohne
+                // market_value Feld fallback auf invested (kein Visual-Break).
+                const mv = (typeof p.market_value === 'number') ? p.market_value : p.invested;
+                document.getElementById('invested-value').textContent = fmtUsd(mv);
+                const cbEl = document.getElementById('invested-cost-basis');
+                if (cbEl) {
+                    if (typeof p.market_value === 'number' && p.invested) {
+                        cbEl.textContent = `Anschaffung: ${fmtUsd(p.invested)}`;
+                    } else {
+                        cbEl.textContent = '';
+                    }
+                }
                 document.getElementById('num-positions').textContent = p.num_positions;
 
                 // Parse trailing SL data for position enrichment
