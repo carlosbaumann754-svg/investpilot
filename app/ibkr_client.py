@@ -474,6 +474,55 @@ class IbkrBroker(BrokerBase):
             log.error("_get_account_value(%s) failed: %s", tag, e)
             return None
 
+    def _get_account_value_base(self, tag: str) -> Optional[float]:
+        """v37h Tab-Audit-Day-2 (11.05.2026): explizit BASE-Currency-Variante.
+
+        Bei Multi-Currency-Setup (z.B. Carlos: CHF=BASE, USD/GBP-Loans)
+        liefert IBKR fuer einige Tags (UnrealizedPnL, RealizedPnL) MEHRERE
+        Eintraege je Currency. Fuer Display in der Account-Basis-Waehrung
+        brauchen wir explizit den BASE-Eintrag. Tags die nur BASE haben
+        (NetLiquidation, TotalCashValue, GrossPositionValue) liefern hier
+        denselben Wert wie _get_account_value (Fallback-Logik).
+        """
+        try:
+            ib = self._get_ib()
+            matches = [av for av in ib.accountValues() if av.tag == tag]
+            if not matches:
+                return None
+            # Praeferenz BASE > leer > USD > rest
+            for pref in ("BASE", "", "USD"):
+                for av in matches:
+                    if av.currency == pref:
+                        try:
+                            return float(av.value)
+                        except (TypeError, ValueError):
+                            continue
+            for av in matches:
+                try:
+                    return float(av.value)
+                except (TypeError, ValueError):
+                    continue
+            return None
+        except Exception as e:
+            log.error("_get_account_value_base(%s) failed: %s", tag, e)
+            return None
+
+    def _get_base_currency(self) -> str:
+        """v37h: Identifiziert die Account-Basis-Waehrung aus IBKR.
+
+        AccountValue mit tag='AccountType' oder via NetLiquidation's
+        currency-Feld. Fallback 'USD' falls nicht ermittelbar.
+        """
+        try:
+            ib = self._get_ib()
+            # NetLiquidation hat genau einen Eintrag in BASE-Currency
+            for av in ib.accountValues():
+                if av.tag == "NetLiquidation" and av.currency and av.currency != "BASE":
+                    return str(av.currency).upper()
+        except Exception:
+            pass
+        return "USD"
+
     def get_portfolio(self) -> Optional[dict]:
         """
         Portfolio-Snapshot im eToro-kompatiblen Format.
@@ -578,14 +627,31 @@ class IbkrBroker(BrokerBase):
             realized = self._get_account_value("RealizedPnL") or 0.0
             gross_pos_value = self._get_account_value("GrossPositionValue") or 0.0
 
+            # v37h Tab-Audit-Day-2 (11.05.2026): Multi-Currency-Display.
+            # Carlos's Konto: CHF=BASE, USD/GBP Cash-Loans + USD Aktien-Positionen.
+            # NetLiquidation kommt nur in BASE (CHF). UnrealizedPnL kommt sowohl
+            # USD ($21'951) als auch BASE (CHF 17'082) — Bot-Trading nutzt USD,
+            # Dashboard zeigt BASE (= IBKR-Mobile-Sicht).
+            base_currency = self._get_base_currency()
+            base_unrealized = self._get_account_value_base("UnrealizedPnL") or 0.0
+            base_realized = self._get_account_value_base("RealizedPnL") or 0.0
+            # NetLiquidation, TotalCashValue, GrossPositionValue sind sowieso
+            # nur BASE-denominiert (Single-Account-Sicht), wiederverwenden:
+            base_net_liquidation = equity
+            base_total_cash = cash
+            base_gross_position_value = gross_pos_value
+            # Implizite Cost-Basis in BASE = GrossPositionValue - UnrealizedPnL
+            base_cost_basis = base_gross_position_value - base_unrealized
+
             # eToro-kompatible Top-Level-Keys (Bot-Konsumenten lesen diese!):
             #   credit         = Cash-Balance (eToro Standard, jetzt TotalCashValue)
-            #   unrealizedPnL  = offene P/L
-            #   positions      = Liste offener Positionen
-            # Plus IBKR-spezifische Erweiterungen mit '_'-Prefix
+            #   unrealizedPnL  = offene P/L (USD-Trading-Sicht)
+            #   positions      = Liste offener Positionen (alle USD-Werte)
+            # Plus IBKR-spezifische Erweiterungen mit '_'-Prefix.
+            # Plus _base_* fuer Multi-Currency-Display (Dashboard).
             return {
                 "credit": cash,                   # ETORO STANDARD — kritisch fuer trader.py!
-                "unrealizedPnL": unrealized,      # ETORO STANDARD
+                "unrealizedPnL": unrealized,      # ETORO STANDARD (USD-Wert fuer Trading-Code)
                 "positions": mapped_positions,    # ETORO STANDARD
                 "aggregatedPositions": [],        # eToro-Kompatibilitaet
                 "creditByRealizedEquity": equity, # Legacy-Alias
@@ -595,6 +661,14 @@ class IbkrBroker(BrokerBase):
                 "_buying_power": buying_power,    # v37cd: AvailableFunds separat
                 "_realized_pnl": realized,
                 "_gross_position_value": gross_pos_value,
+                # v37h Multi-Currency-Layer (Display in Account-Basis-Waehrung):
+                "_base_currency": base_currency,
+                "_base_net_liquidation": base_net_liquidation,
+                "_base_total_cash": base_total_cash,
+                "_base_gross_position_value": base_gross_position_value,
+                "_base_unrealized_pnl": base_unrealized,
+                "_base_realized_pnl": base_realized,
+                "_base_cost_basis": base_cost_basis,
             }
         except Exception as e:
             log.error("get_portfolio failed: %s", e)

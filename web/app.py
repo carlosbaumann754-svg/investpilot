@@ -664,6 +664,14 @@ def _portfolio_from_brain_cache():
         "_invested": invested,
         "_age_seconds": age_seconds,
         "_source": f"brain_cache (snapshot {last.get('ts','?')})",
+        # v37h Multi-Currency-Layer (BASE = Account-Basis-Waehrung)
+        "_base_currency": last.get("base_currency") or "USD",
+        "_base_net_liquidation": last.get("base_net_liquidation"),
+        "_base_total_cash": last.get("base_total_cash"),
+        "_base_gross_position_value": last.get("base_gross_position_value"),
+        "_base_unrealized_pnl": last.get("base_unrealized_pnl"),
+        "_base_realized_pnl": last.get("base_realized_pnl"),
+        "_base_cost_basis": last.get("base_cost_basis"),
     }
 
 
@@ -729,24 +737,47 @@ async def api_portfolio(user=Depends(require_auth)):
         else:
             total_value = credit + total_invested + unrealized_pnl
 
-        # v37h Tab-Audit-Day-2 Fix (11.05.2026): market_value = total_value - cash.
-        # Total_value kommt aus IBKR NetLiquidation (= Cash + Marktwert aller
-        # Positionen, IBKR-authoritative). Cash kommt aus credit (matched IBKR).
-        # Damit ergibt sich der Marktwert automatisch konsistent mit IBKR's
-        # Mobile-App "Marktwert"-Anzeige, OHNE auf Bot-Snapshot-Preise (yfinance
-        # nachbörslich) angewiesen zu sein.
-        # NICHT: sum(invested + pnl) — das war Versuch 1, gab $177k Diskrepanz
-        # weil yfinance current_prices nachbörslich vs IBKR Schlusskurs driften.
-        total_market_value = max(0.0, total_value - credit)
+        # v37h Tab-Audit-Day-2 (11.05.2026): Multi-Currency-Display.
+        # Carlos's IBKR-Konto: BASE=CHF, USD-Margin-Loan + GBP-Cash + USD-Aktien.
+        # Bot-Trading nutzt weiterhin USD (Positionen sind alle USD-denominated),
+        # aber Dashboard zeigt jetzt konsistent BASE-Currency (CHF) wie die
+        # IBKR Mobile-App. Vorher gemischtes Display: NetLiq/Cash in CHF (aus
+        # NetLiquidation/TotalCashValue, die nur in BASE existieren), aber
+        # UnrealizedPnL/Cost-Basis in USD (aus position-Sum) -> Diskrepanz.
+        base_currency = portfolio.get("_base_currency") or "USD"
+        base_net_liq = portfolio.get("_base_net_liquidation")
+        base_total_cash = portfolio.get("_base_total_cash")
+        base_gross_pos = portfolio.get("_base_gross_position_value")
+        base_unrealized = portfolio.get("_base_unrealized_pnl")
+        base_realized = portfolio.get("_base_realized_pnl")
+        base_cost_basis = portfolio.get("_base_cost_basis")
+
+        # Display-Werte: BASE wenn verfuegbar, sonst USD-Fallback (eToro-Pfad
+        # oder alte Snapshots ohne base-Felder).
+        display_total = base_net_liq if base_net_liq is not None else total_value
+        display_cash = base_total_cash if base_total_cash is not None else credit
+        display_market = base_gross_pos if base_gross_pos is not None \
+            else max(0.0, total_value - credit)
+        display_unreal = base_unrealized if base_unrealized is not None else unrealized_pnl
+        display_cost = base_cost_basis if base_cost_basis is not None else total_invested
+        display_currency = base_currency
 
         return {
-            "credit": round(credit, 2),
-            "invested": round(total_invested, 2),       # Cost-Basis (Anschaffung)
-            "market_value": round(total_market_value, 2),  # aktueller Marktwert
-            "unrealized_pnl": round(unrealized_pnl, 2),
-            "total_value": round(total_value, 2),
+            # Display-Felder (BASE-Currency, konsistent mit IBKR Mobile)
+            "credit": round(display_cash, 2),
+            "invested": round(display_cost, 2),         # Cost-Basis in BASE
+            "market_value": round(display_market, 2),    # aktueller Marktwert in BASE
+            "unrealized_pnl": round(display_unreal, 2),
+            "total_value": round(display_total, 2),
+            "currency": display_currency,                # NEW: "CHF" / "USD" etc.
             "num_positions": len(positions),
             "positions": parsed,
+            # Diagnose-Felder (USD-Werte fuer Vergleich falls relevant)
+            "_usd_credit": round(credit, 2),
+            "_usd_invested": round(total_invested, 2),
+            "_usd_unrealized_pnl": round(unrealized_pnl, 2),
+            "_usd_total_value": round(total_value, 2),
+            "_base_realized_pnl": round(base_realized, 2) if base_realized is not None else None,
         }
     except Exception as e:
         log.error(f"Portfolio API Error: {e}")

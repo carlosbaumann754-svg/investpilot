@@ -118,6 +118,18 @@ def _record_snapshot_locked(portfolio):
     # Drift-Detection silent kaputt gegangen.
     from datetime import timezone
     _now = datetime.now(timezone.utc)
+    # v37h Tab-Audit-Day-2 (11.05.2026): Multi-Currency-Display-Layer.
+    # Bei IBKR-Multi-Currency-Setup (Carlos: CHF=BASE, USD+GBP Cash-Loans)
+    # zeigt das Dashboard sonst halb-USD halb-CHF. Speichere BASE-Werte
+    # separat damit /api/portfolio sie an's Frontend durchreichen kann.
+    base_currency = portfolio.get("_base_currency") or "USD"
+    base_net_liq = portfolio.get("_base_net_liquidation") or total_value
+    base_total_cash = portfolio.get("_base_total_cash") or credit
+    base_gross_pos = portfolio.get("_base_gross_position_value")
+    base_unrealized = portfolio.get("_base_unrealized_pnl")
+    base_realized = portfolio.get("_base_realized_pnl") or 0
+    base_cost_basis = portfolio.get("_base_cost_basis")
+
     snapshot = {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "time": datetime.now().strftime("%H:%M"),
@@ -131,6 +143,14 @@ def _record_snapshot_locked(portfolio):
         "equity": round(total_value, 2),  # v37f: Reconcile-Alias
         "num_positions": len(positions),
         "positions_count": len(positions),  # v37f: Reconcile-Alias
+        # v37h Multi-Currency-Layer (BASE = Account-Basis-Waehrung, z.B. CHF):
+        "base_currency": base_currency,
+        "base_net_liquidation": round(base_net_liq, 2),
+        "base_total_cash": round(base_total_cash, 2),
+        "base_gross_position_value": round(base_gross_pos, 2) if base_gross_pos is not None else None,
+        "base_unrealized_pnl": round(base_unrealized, 2) if base_unrealized is not None else None,
+        "base_realized_pnl": round(base_realized, 2),
+        "base_cost_basis": round(base_cost_basis, 2) if base_cost_basis is not None else None,
         # v36e: symbol + entry_price + current_price mit in den Snapshot,
         # damit Dashboard nicht "#null" zeigen muss (vorher war nur conId/iid
         # gespeichert, was im Frontend unleserlich ist).

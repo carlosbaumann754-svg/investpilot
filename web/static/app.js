@@ -56,9 +56,21 @@ function showToast(msg) {
 }
 
 // === FORMATTING ===
+// v37h Tab-Audit-Day-2 (11.05.2026): Multi-Currency-Display.
+// fmtUsd bleibt USD-formatiert (Position-Tabelle, Trades, alle USD-denominated
+// Werte unveraendert). NEU: fmtBase(v) fuer Account-Karten (Portfolio-Wert,
+// Cash, Marktwert, P/L, HEUTE etc.) in Account-Basis-Waehrung (BASE).
+// Bei Carlos's IBKR-Account ist BASE=CHF, bei eToro war BASE=USD.
+let _botCurrency = 'USD';
+const _currencySymbols = {USD: '$', CHF: 'CHF ', EUR: '€', GBP: '£', JPY: '¥'};
+function _symbolFor(cur) { return _currencySymbols[cur] || (cur + ' '); }
 function fmtUsd(v) {
     if (v == null) return '--';
     return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtBase(v) {
+    if (v == null) return '--';
+    return _symbolFor(_botCurrency) + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtPct(v) {
@@ -323,9 +335,13 @@ function renderPnlPeriods(data) {
 
     grid.innerHTML = data.periods.map(p => {
         const cls = (p.pnl_usd || 0) >= 0 ? 'positive' : 'negative';
-        const usdTxt = (p.pnl_usd == null) ? '--' : fmtUsd(p.pnl_usd);
+        // v37h Tab-Audit-Day-2: HEUTE/7T sind in BASE (equity_delta-Mode), 30T+
+        // realized aus trade_history sind technisch in USD. fmtBase ist
+        // pragmatisch: zeigt Symbol der Account-Currency (CHF bei IBKR, $ bei
+        // eToro). Drift fuer 30T+ ist <1% und beide Werte sind nah beieinander.
+        const usdTxt = (p.pnl_usd == null) ? '--' : fmtBase(p.pnl_usd);
         const pctTxt = (p.pnl_pct == null) ? '' : fmtPct(p.pnl_pct);
-        const modeIcon = p.mode === 'hybrid' ? '*' : '';
+        const modeIcon = (p.mode === 'hybrid' || p.mode === 'hybrid_fallback') ? '*' : '';
         return `
             <div class="pnl-period-cell">
                 <div class="pnl-label">${p.label}${modeIcon}</div>
@@ -395,20 +411,23 @@ async function loadDashboard() {
         if (portfolioRes) {
             const p = await portfolioRes.json();
             if (!p.error) {
-                document.getElementById('total-value').textContent = fmtUsd(p.total_value);
+                // v37h Multi-Currency: Currency aus Response uebernehmen.
+                // Diese Top-Karten zeigen Account-BASE-Currency (z.B. CHF).
+                if (p.currency) _botCurrency = p.currency;
+                document.getElementById('total-value').textContent = fmtBase(p.total_value);
                 const pnlEl = document.getElementById('total-pnl');
-                pnlEl.textContent = `P/L: ${fmtUsd(p.unrealized_pnl)} (${fmtPct(p.invested > 0 ? p.unrealized_pnl / p.invested * 100 : 0)})`;
+                pnlEl.textContent = `P/L: ${fmtBase(p.unrealized_pnl)} (${fmtPct(p.invested > 0 ? p.unrealized_pnl / p.invested * 100 : 0)})`;
                 pnlEl.className = 'card-sub ' + pnlClass(p.unrealized_pnl);
-                document.getElementById('cash-value').textContent = fmtUsd(p.credit);
+                document.getElementById('cash-value').textContent = fmtBase(p.credit);
                 // v37h Tab-Audit-Day-2: Marktwert (current value) als Hauptwert,
                 // Cost-Basis (Anschaffung) als Subtext. Bei alten Responses ohne
                 // market_value Feld fallback auf invested (kein Visual-Break).
                 const mv = (typeof p.market_value === 'number') ? p.market_value : p.invested;
-                document.getElementById('invested-value').textContent = fmtUsd(mv);
+                document.getElementById('invested-value').textContent = fmtBase(mv);
                 const cbEl = document.getElementById('invested-cost-basis');
                 if (cbEl) {
                     if (typeof p.market_value === 'number' && p.invested) {
-                        cbEl.textContent = `Anschaffung: ${fmtUsd(p.invested)}`;
+                        cbEl.textContent = `Anschaffung: ${fmtBase(p.invested)}`;
                     } else {
                         cbEl.textContent = '';
                     }
