@@ -168,7 +168,15 @@ def _record_snapshot_locked(portfolio):
 # ============================================================
 
 def analyze_instrument_performance():
-    """Bewerte jedes Instrument basierend auf historischen Daten."""
+    """Bewerte jedes Instrument basierend auf historischen Daten.
+
+    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK.
+    """
+    with _BRAIN_LOCK:
+        return _analyze_instrument_performance_locked()
+
+
+def _analyze_instrument_performance_locked():
     brain = load_brain()
     snapshots = brain["performance_snapshots"]
 
@@ -245,7 +253,15 @@ def analyze_instrument_performance():
 # ============================================================
 
 def detect_market_regime():
-    """Erkenne aktuelles Marktregime aus Portfolio-Entwicklung."""
+    """Erkenne aktuelles Marktregime aus Portfolio-Entwicklung.
+
+    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK.
+    """
+    with _BRAIN_LOCK:
+        return _detect_market_regime_locked()
+
+
+def _detect_market_regime_locked():
     brain = load_brain()
     snapshots = brain["performance_snapshots"]
 
@@ -288,7 +304,15 @@ def detect_market_regime():
 # ============================================================
 
 def learn_rules():
-    """Leite Regeln aus der Performance-Historie ab."""
+    """Leite Regeln aus der Performance-Historie ab.
+
+    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK.
+    """
+    with _BRAIN_LOCK:
+        return _learn_rules_locked()
+
+
+def _learn_rules_locked():
     brain = load_brain()
     scores = brain.get("instrument_scores", {})
     snapshots = brain.get("performance_snapshots", [])
@@ -390,7 +414,15 @@ def learn_rules():
 # ============================================================
 
 def optimize_strategy():
-    """Passe Strategie basierend auf gelernten Regeln an."""
+    """Passe Strategie basierend auf gelernten Regeln an.
+
+    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK.
+    """
+    with _BRAIN_LOCK:
+        return _optimize_strategy_locked()
+
+
+def _optimize_strategy_locked():
     brain = load_brain()
     rules = brain.get("learned_rules", [])
 
@@ -470,7 +502,18 @@ def optimize_strategy():
 # ============================================================
 
 def generate_performance_report():
-    """Erstelle Performance-Report."""
+    """Erstelle Performance-Report.
+
+    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK. Wird Freitag
+    abend von weekly_report.py:496 direkt aufgerufen (nicht via
+    run_brain_cycle) — daher Race mit Snapshot-After-Fill bei spaeten
+    Freitag-Trades moeglich. Lock schliesst die Luecke.
+    """
+    with _BRAIN_LOCK:
+        return _generate_performance_report_locked()
+
+
+def _generate_performance_report_locked():
     brain = load_brain()
     snapshots = brain.get("performance_snapshots", [])
 
