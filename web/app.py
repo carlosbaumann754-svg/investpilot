@@ -729,16 +729,15 @@ async def api_portfolio(user=Depends(require_auth)):
         else:
             total_value = credit + total_invested + unrealized_pnl
 
-        # v37h Tab-Audit-Day-2 Fix (11.05.2026): market_value = qty * current_price
-        # ("Marktwert" wie IBKR), `invested` ist Cost-Basis (qty * entry_price).
-        # Vorher zeigte Dashboard nur `invested` als "Investiert" — irre-
-        # fuehrend, weil das Anschaffungswert ist, nicht aktueller Wert.
-        # Beispiel AAPL: 179 * $283.63 (entry) = $50'769 Cost-Basis
-        # vs 179 * $291.87 (current) = $52'245 Marktwert. Differenz = unr_pnl.
-        # IBKR Mobile-App zeigt "Marktwert" (=current value), wir jetzt auch.
-        total_market_value = sum(
-            (p.get("invested") or 0) + (p.get("pnl") or 0) for p in parsed
-        )
+        # v37h Tab-Audit-Day-2 Fix (11.05.2026): market_value = total_value - cash.
+        # Total_value kommt aus IBKR NetLiquidation (= Cash + Marktwert aller
+        # Positionen, IBKR-authoritative). Cash kommt aus credit (matched IBKR).
+        # Damit ergibt sich der Marktwert automatisch konsistent mit IBKR's
+        # Mobile-App "Marktwert"-Anzeige, OHNE auf Bot-Snapshot-Preise (yfinance
+        # nachbörslich) angewiesen zu sein.
+        # NICHT: sum(invested + pnl) — das war Versuch 1, gab $177k Diskrepanz
+        # weil yfinance current_prices nachbörslich vs IBKR Schlusskurs driften.
+        total_market_value = max(0.0, total_value - credit)
 
         return {
             "credit": round(credit, 2),
