@@ -2592,6 +2592,15 @@ async def api_exposure(user=Depends(require_auth)):
         from app.etoro_client import EtoroClient as EC
         positions = [EC.parse_position(p) for p in portfolio.get("positions", [])]
 
+        # v37h Tab-Audit-2-Fix (11.05.2026): asset_class anreichern fuer by_class
+        # (vorher zeigte by_class 'unknown' fuer alle IBKR-Positionen weil
+        # parse_position keine asset_class setzt). Pattern analog /api/risk-summary
+        # Z2498. _lookup_asset_class handelt eToro-IDs UND IBKR-conIds.
+        from app.trader import _lookup_asset_class
+        for p in positions:
+            if not p.get("asset_class"):
+                p["asset_class"] = _lookup_asset_class(p.get("instrument_id"))
+
         exposure = calculate_exposure(positions)
         leverage = get_leverage_summary(positions)
 
