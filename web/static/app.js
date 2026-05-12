@@ -922,22 +922,21 @@ async function loadSettings() {
     if (!res) return;
     const cfg = await res.json();
 
-    // Strategy selector
-    const stratSelect = document.getElementById('cfg-strategy');
-    const knownStrategies = Object.keys(STRATEGY_PRESETS);
-    if (knownStrategies.includes(cfg.strategy)) {
-        stratSelect.value = cfg.strategy;
-    } else {
-        stratSelect.value = 'custom';
-    }
-    const preset = STRATEGY_PRESETS[stratSelect.value];
-    document.getElementById('strategy-desc').textContent = preset?.desc || '';
+    // v37h Tab-Audit-Day-2 (12.05.2026): Strategy-Selector wurde in v37cx
+    // aus dem HTML entfernt (Bot bleibt fix auf WFO-validierter Strategie).
+    // Der JS-Code las aber weiterhin cfg-strategy + strategy-desc -> crash
+    // via null.value. Entfernt + Min-Scanner-Score hinzugefuegt.
 
     document.getElementById('cfg-sl').value = cfg.stop_loss_pct;
     document.getElementById('cfg-tp').value = cfg.take_profit_pct;
     document.getElementById('cfg-rebalance').value = cfg.rebalance_threshold_pct;
     document.getElementById('cfg-leverage').value = cfg.default_leverage;
     document.getElementById('cfg-max-trade-pct').value = cfg.max_single_trade_pct_of_portfolio ?? 0.15;
+    // v37h: Min-Scanner-Score (WFO-locked, readonly im UI)
+    const minScoreEl = document.getElementById('cfg-min-score');
+    if (minScoreEl) {
+        minScoreEl.value = cfg.min_scanner_score ?? cfg.demo_trading?.min_scanner_score ?? 30;
+    }
 
     // Effektiv-Anzeige aus /api/risk (v15_sizing)
     try {
@@ -997,9 +996,12 @@ async function clearPortfolioTargets() {
 async function saveSettings(e) {
     e.preventDefault();
 
+    // v37h Tab-Audit-Day-2 (12.05.2026): Strategy-Selector ist tot (v37cx).
+    // stop_loss_pct + min_scanner_score sind WFO-locked — Frontend sendet
+    // sie nicht mit, Backend's WFO-Lock-Hook in save_config() wuerde sie
+    // sowieso ueberschreiben. Spart einen unnoetigen Round-Trip durch
+    // den enforce_locks-Code-Pfad.
     const update = {
-        strategy: document.getElementById('cfg-strategy').value,
-        stop_loss_pct: parseFloat(document.getElementById('cfg-sl').value),
         take_profit_pct: parseFloat(document.getElementById('cfg-tp').value),
         rebalance_threshold_pct: parseFloat(document.getElementById('cfg-rebalance').value),
         default_leverage: parseInt(document.getElementById('cfg-leverage').value),
@@ -1012,7 +1014,7 @@ async function saveSettings(e) {
     });
 
     if (res && res.ok) {
-        showToast('Strategie gespeichert');
+        showToast('Strategie gespeichert (Stop-Loss + Min-Score bleiben WFO-locked)');
     } else {
         const err = await res?.json();
         showToast('Fehler: ' + (err?.detail || 'Unbekannt'));

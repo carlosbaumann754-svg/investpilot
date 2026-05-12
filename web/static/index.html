@@ -1151,36 +1151,48 @@
                      Strategie. Andere Strategien werden in separate Bots ausgegliedert. -->
                 <div class="grid-2">
                     <div class="form-group">
-                        <label>Stop-Loss (%)</label><span class="tip" data-tip="Die Notbremse: Wenn eine Position so viel ins Minus faellt, wird sie automatisch verkauft. Beispiel: -5% = verkauft, sobald der Kurs 5% unter dem Kaufpreis liegt. Schuetzt vor grossen Verlusten.">?</span>
-                        <input type="number" id="cfg-sl" step="0.5" min="-50" max="0">
+                        <label>🔒 Stop-Loss (%)</label><span class="tip" data-tip="Die Notbremse: Wenn eine Position so viel ins Minus faellt, wird sie automatisch verkauft. Aktuell WFO-LOCKED auf -3.0%: die Walk-Forward-Optimization hat diesen Wert als konservativsten Punkt ueber 5 Validierungs-Windows bestaetigt. Manuelle Aenderungen werden beim Speichern automatisch wieder zurueckgesetzt — das schuetzt vor versehentlichem Loosen waehrend Real-Money-Phase. Ueberschreibung nur durch erneutes WFO-Run (1. So im Monat).">?</span>
+                        <input type="number" id="cfg-sl" step="0.5" min="-50" max="0" readonly style="opacity:0.6;cursor:not-allowed;">
+                        <div class="card-sub" style="margin-top:4px;font-size:11px;color:var(--text-dim);">WFO-locked, Override nur via Monthly WFO-Run</div>
                     </div>
                     <div class="form-group">
-                        <label>Take-Profit (%)</label><span class="tip" data-tip="Der Gewinn-Ausstieg: Wenn eine Position so viel im Plus ist, wird sie automatisch verkauft. Beispiel: +10% = Gewinn mitnehmen, sobald 10% erreicht sind.">?</span>
+                        <label>Take-Profit (%)</label><span class="tip" data-tip="Der Gewinn-Ausstieg: Wenn eine Position so viel im Plus ist, wird sie automatisch verkauft. Beispiel: +10% = Gewinn mitnehmen, sobald 10% erreicht sind. Frei editierbar (NICHT WFO-locked).">?</span>
                         <input type="number" id="cfg-tp" step="0.5" min="0" max="100">
                     </div>
                 </div>
                 <div class="grid-2">
                     <div class="form-group">
-                        <label>Rebalance-Schwelle (%)</label><span class="tip" data-tip="Ab welcher Abweichung das Portfolio neu ausbalanciert wird. Beispiel: 5% = wenn eine Position statt 10% auf 15% des Depots waechst, wird ein Teil verkauft um die Balance zu halten.">?</span>
+                        <label>Rebalance-Schwelle (%)</label><span class="tip" data-tip="Ab welcher Abweichung das Portfolio neu ausbalanciert wird. Beispiel: 5% = wenn eine Position statt 10% auf 15% des Depots waechst, wird ein Teil verkauft um die Balance zu halten. Frei editierbar.">?</span>
                         <input type="number" id="cfg-rebalance" step="0.5" min="1" max="20">
                     </div>
                     <div class="form-group">
-                        <label>Default Leverage</label><span class="tip" data-tip="Standard-Hebel fuer neue Trades. Aktuell IGNORIERT — IBKR steuert Margin/Hebel automatisch ueber das Konto-Setup. Wert bleibt nur als historischer Default in der Config.">?</span>
-                        <select id="cfg-leverage">
-                            <option value="1">1x</option>
+                        <label>⚠️ Default Leverage</label><span class="tip" data-tip="Standard-Hebel fuer neue Trades. AKTUELL IGNORIERT bei IBKR — Margin/Hebel wird automatisch ueber das Konto-Setup gesteuert. Wert bleibt nur als historischer Default in der Config, hat KEINEN Einfluss auf reale Trades. Bei eToro-Rueckfall waere er aktiv.">?</span>
+                        <select id="cfg-leverage" style="opacity:0.7;">
+                            <option value="1">1x (IBKR-default)</option>
                             <option value="2">2x</option>
                             <option value="5">5x</option>
                             <option value="10">10x</option>
                             <option value="25">25x</option>
                         </select>
+                        <div class="card-sub" style="margin-top:4px;font-size:11px;color:var(--text-dim);">Bei IBKR ignoriert (Account-Margin)</div>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Max. Einzeltrade (% vom Portfolio)</label><span class="tip" data-tip="v15 Prozent-basiert: Die Obergrenze fuer einen einzelnen Trade als Prozentsatz vom Portfolio-Wert. Beispiel: 0.15 = max 15% des Portfolios pro Trade. Skaliert automatisch mit dem Portfolio-Wachstum.">?</span>
-                    <input type="number" id="cfg-max-trade-pct" step="0.01" min="0.01" max="0.5" placeholder="0.15">
-                    <div class="card-sub" style="margin-top:4px;font-size:12px;">Aktuell effektiv: <span id="cfg-max-trade-effective" style="font-weight:700;">--</span> bei Portfolio <span id="cfg-portfolio-value">--</span></div>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>Max. Einzeltrade (% vom Portfolio)</label><span class="tip" data-tip="v15 Prozent-basiert: Die Obergrenze fuer einen einzelnen Trade als Prozentsatz vom Portfolio-Wert. Beispiel: 0.15 = max 15% des Portfolios pro Trade. Skaliert automatisch mit dem Portfolio-Wachstum. Frei editierbar.">?</span>
+                        <input type="number" id="cfg-max-trade-pct" step="0.01" min="0.01" max="0.5" placeholder="0.15">
+                        <div class="card-sub" style="margin-top:4px;font-size:12px;">Aktuell effektiv: <span id="cfg-max-trade-effective" style="font-weight:700;">--</span> bei Portfolio <span id="cfg-portfolio-value">--</span></div>
+                    </div>
+                    <div class="form-group">
+                        <label>🔒 Min. Scanner-Score</label><span class="tip" data-tip="Mindest-Score den ein Asset im Scanner erreichen muss damit der Bot ueberhaupt einen Trade in Betracht zieht. Aktuell WFO-LOCKED auf 30: ueber 5 Validierungs-Windows wurde dieser Schwellwert als optimal bestaetigt. Hoeher = strenger Filter = weniger aber qualitativ bessere Trades. Manuelle Aenderungen werden beim Speichern zurueckgesetzt.">?</span>
+                        <input type="number" id="cfg-min-score" step="1" min="0" max="100" readonly style="opacity:0.6;cursor:not-allowed;">
+                        <div class="card-sub" style="margin-top:4px;font-size:11px;color:var(--text-dim);">WFO-locked, Override nur via Monthly WFO-Run</div>
+                    </div>
                 </div>
-                <button type="submit" class="btn btn-primary">Speichern</button>
+                <div class="card-sub" style="margin-top:14px;padding:10px;background:rgba(59,130,246,0.08);border-left:3px solid var(--blue);border-radius:4px;font-size:12px;line-height:1.5;">
+                    💡 <strong>Position-Sizing (Kelly-Faktor)</strong> wird im <a href="javascript:showTab('backtest')" style="color:var(--blue);text-decoration:underline;">Backtest-Tab → Kelly-Sweep-Card</a> verwaltet. Dort kann der k-Wert getestet und der Live-Wert angepasst werden. Aktuell <code>k=0.04</code> (Mai 2026 Sweep-bestaetigt).
+                </div>
+                <button type="submit" class="btn btn-primary" style="margin-top:14px;">Speichern</button>
             </form>
         </div>
 
