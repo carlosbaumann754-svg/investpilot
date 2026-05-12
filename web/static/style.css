@@ -545,29 +545,61 @@ tr:hover {
 }
 
 /* In Tabellen-Headern: Tooltip nach UNTEN oeffnen, damit er nicht im
-   vorherigen Card-Header oder engen Oben-Rand verschwindet. */
-.data-table thead .tip::after {
+   vorherigen Card-Header oder engen Oben-Rand verschwindet.
+   v37h Tab-Audit-Day-2 (12.05.2026): generalisiert von .data-table auf
+   .table-wrap. Vorher griff die Regel nur fuer 2 Spezial-Tables
+   (Equity-History, Exit-Forecast). Carlos zeigte heute am Trades-Tab
+   ("ZEIT ↕ ?") und Brain Instrument-Scores ("SYMBOL ?") dass die
+   Tooltip-Box vom .table-wrap overflow geclipt wurde. Jetzt: ALLE
+   Tables in .table-wrap (= alle Tabellen mit horizontal-scroll-
+   Container) bekommen Tooltip-Down + erste/letzte Spalten-Alignment. */
+.table-wrap thead .tip::after {
     bottom: auto;
     top: calc(100% + 8px);
 }
-.data-table thead .tip::before {
+.table-wrap thead .tip::before {
     bottom: auto;
     top: calc(100% + 2px);
     border-top-color: transparent;
     border-bottom-color: var(--border);
 }
 
+/* Erste 1-2 Spalten: Tooltip linksbuendig, damit er nicht links aus
+   der Karte rausragt (war vorher nur fuer "letzte 3 Spalten" gefixt). */
+.table-wrap thead th:nth-child(-n+2) .tip::after {
+    left: 0;
+    right: auto;
+    transform: none;
+}
+.table-wrap thead th:nth-child(-n+2) .tip::before {
+    left: 14px;
+    right: auto;
+    transform: none;
+}
+
 /* Letzte 2-3 Spalten: Tooltip rechtsbuendig statt mittig, damit er nicht
    rechts aus der Karte rausragt. */
-.data-table thead th:nth-last-child(-n+3) .tip::after {
+.table-wrap thead th:nth-last-child(-n+3) .tip::after {
     left: auto;
     right: 0;
     transform: none;
 }
-.data-table thead th:nth-last-child(-n+3) .tip::before {
+.table-wrap thead th:nth-last-child(-n+3) .tip::before {
     left: auto;
     right: 14px;
     transform: none;
+}
+
+/* v37h Tab-Audit-Day-2: .table-wrap soll Tooltip nach UNTEN nicht clippen.
+   overflow-x: clip + overflow-y: visible (statt overflow-x: auto) erlaubt
+   Tooltip-Overflow nach unten, opfert horizontal-scroll. Trade-off:
+   bei sehr schmalen Mobile-Screens (<375px) koennten Tabellen jetzt etwas
+   ueberlaufen — aber Tooltips funktionieren ueberall, was wichtiger ist.
+   Modern Browser (Chrome 90+, Firefox 81+, Safari 16+) supporten 'clip'. */
+.table-wrap {
+    overflow-x: auto;
+    overflow-y: visible;  /* erlaubt Tooltip-Down ohne Clipping */
+    -webkit-overflow-scrolling: touch;
 }
 
 /* === P&L PERIODS GRID === */
