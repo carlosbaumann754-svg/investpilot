@@ -941,30 +941,79 @@ def check_stop_loss_take_profit(client, config):
                         prev_total = partial_state.get(pid_key, {}).get("total_closed_pct", 0)
                         new_total = prev_total + close_pct
 
-                        # eToro API unterstuetzt kein partielles Schliessen.
-                        # Wenn kumulierte Tranchen >= 100%: GANZE Position schliessen.
+                        # v37h Tab-Audit-Day-2 (12.05.2026): bei IBKR jetzt
+                        # ECHTER partial_close statt nur Log-Signal! eToro-
+                        # Fallback bleibt fuer Legacy-Pfad. Bei kumuliert
+                        # >=100% nutzen wir close_position() (komplett raus),
+                        # sonst partial_close(close_pct) (Teil-Schliessung).
+                        action_kind = None
                         if new_total >= 100:
                             log.info(f"  PROFIT_LOCK_CLOSE: Alle Tranchen erreicht "
                                      f"({new_total}%) — schliesse Position komplett")
                             result = _close_position_safe(client, p["position_id"], p["instrument_id"], "PROFIT_LOCK")
                             if _is_skipped_idempotent(result):
                                 continue
-                            # v37dh-fix (07.05.2026): Status aus IBKR-Reality
-                            # statt 'executed if result'. PROFIT_LOCK kann auch
-                            # cancelled/rejected werden (z.B. Limit nicht erreicht).
                             trade_status = _trade_status_from_result(result) if result else "failed"
+                            action_kind = "PROFIT_LOCK_CLOSE"
                             if not result:
                                 log.warning(f"  PROFIT_LOCK_CLOSE FEHLGESCHLAGEN — "
                                             f"Tranche wird NICHT als erledigt markiert")
+                        elif hasattr(client, "partial_close"):
+                            # IBKR-Pfad: echter Teil-Verkauf via partial_close
+                            try:
+                                result = client.partial_close(
+                                    p["position_id"], close_pct, p["instrument_id"],
+                                )
+                            except Exception as e:
+                                log.error(f"  PARTIAL_CLOSE Exception: {e}")
+                                result = None
+                            if result and result.get("_unsupported"):
+                                # eToro-Fallback: nur Signal loggen
+                                log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} "
+                                         f"erreicht (Broker unterstuetzt kein partial-close — "
+                                         f"kumuliert {new_total}%)")
+                                trade_status = "signal_logged"
+                                result = True
+                                action_kind = "PARTIAL_SIGNAL"
+                            elif result and result.get("_skipped_too_small"):
+                                log.info(f"  PARTIAL_CLOSE skipped (qty too small): "
+                                         f"Tranche {tranche_idx+1}, full_qty="
+                                         f"{result.get('_full_qty')}, pct={close_pct}")
+                                trade_status = "skipped_small"
+                                action_kind = "PARTIAL_SKIP"
+                            elif result and result.get("_already_closed"):
+                                log.info(f"  PARTIAL_CLOSE skip: Position bereits geschlossen")
+                                trade_status = "already_closed"
+                                action_kind = "PARTIAL_SKIP"
+                            elif result:
+                                # Echter partial-close erfolgreich
+                                close_qty = result.get("_close_qty", "?")
+                                remaining = result.get("_remaining_qty", "?")
+                                log.info(f"  PARTIAL_CLOSE OK: {close_qty} shares "
+                                         f"verkauft, {remaining} bleiben (Tranche "
+                                         f"{tranche_idx+1}, kumuliert {new_total}%)")
+                                trade_status = _trade_status_from_result(result)
+                                action_kind = "PARTIAL_CLOSE"
+                            else:
+                                log.warning(f"  PARTIAL_CLOSE fehlgeschlagen — "
+                                            f"Tranche bleibt offen fuer naechsten Cycle")
+                                trade_status = "failed"
+                                action_kind = "PARTIAL_CLOSE_FAILED"
                         else:
+                            # Legacy-Pfad (eToro-Client ohne partial_close-Methode)
                             log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} erreicht "
-                                     f"(kumuliert {new_total}% — eToro erlaubt nur Full Close)")
+                                     f"(legacy: kumuliert {new_total}%)")
                             trade_status = "signal_logged"
-                            result = True  # Signals werden immer als "erfolgreich" gewertet
+                            result = True
+                            action_kind = "PARTIAL_SIGNAL"
 
-                        # Tranche NUR bei Erfolg als ausgeloest markieren
-                        # (bei API-Fehler bleibt Tranche offen fuer naechsten Zyklus)
-                        if result:
+                        # Tranche NUR bei Erfolg/Signal als ausgeloest markieren
+                        # (bei API-Fehler/Skip bleibt Tranche offen fuer naechsten Zyklus)
+                        tranche_consumed = (
+                            action_kind in ("PROFIT_LOCK_CLOSE", "PARTIAL_CLOSE", "PARTIAL_SIGNAL")
+                            and result is not None and result is not False
+                        )
+                        if tranche_consumed:
                             if pid_key not in partial_state:
                                 partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
                             partial_state[pid_key]["triggered"].append(tranche_idx)
@@ -973,7 +1022,7 @@ def check_stop_loss_take_profit(client, config):
 
                         trade_entry = {
                             "timestamp": datetime.now().isoformat(),
-                            "action": "PROFIT_LOCK_CLOSE" if new_total >= 100 else "PARTIAL_SIGNAL",
+                            "action": action_kind,
                             "instrument_id": p["instrument_id"],
                             "position_id": p["position_id"],
                             "pnl_pct": p["pnl_pct"],
@@ -987,7 +1036,7 @@ def check_stop_loss_take_profit(client, config):
                             "status": trade_status,
                         }
                         save_trade(_attach_fill_prices(trade_entry, result))
-                        actions.append(trade_entry["action"])
+                        actions.append(action_kind)
 
                         # Bei voller Schliessung: Rest der Tranchen-Pruefung ueberspringen
                         if new_total >= 100 and result:

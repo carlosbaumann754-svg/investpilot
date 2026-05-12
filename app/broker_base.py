@@ -105,6 +105,26 @@ class BrokerBase(ABC):
         """Offene Position schliessen."""
         ...
 
+    def partial_close(
+        self,
+        position_id: str,
+        pct_of_position: float,
+        instrument_id: Optional[int] = None,
+    ) -> Optional[dict]:
+        """v37h Tab-Audit-Day-2 (12.05.2026): Teil-Schliessung einer Position.
+
+        Default-Implementation: NICHT unterstuetzt — Caller bekommt
+        {"_unsupported": True} zurueck und kann auf "Signal-Only loggen"
+        zurueckfallen (eToro-Pfad). IbkrBroker ueberschreibt diese
+        Methode mit echter Implementation via opposite-side LimitOrder.
+
+        Args:
+            position_id: eToro UUID oder IBKR conId.
+            pct_of_position: 0-100, Prozent der offenen Qty zu schliessen.
+            instrument_id: optional.
+        """
+        return {"_unsupported": True, "_broker": "base"}
+
     # ------------------------------------------------------------------
     # Instruments / Market-Data
     # ------------------------------------------------------------------

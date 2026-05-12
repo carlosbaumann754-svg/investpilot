@@ -1404,6 +1404,150 @@ class IbkrBroker(BrokerBase):
             log.exception("close_position failed: %s", e)
             return None
 
+    def partial_close(self, position_id, pct_of_position: float, instrument_id=None):
+        """
+        v37h Tab-Audit-Day-2 (12.05.2026): Teil-Schliessung einer Position.
+
+        Carlos's Beobachtung: PARTIAL_SIGNAL-Code in trader.py loggte nur
+        TP-Tranchen-Erreichungen (eToro hatte kein partial-close). Bei
+        IBKR-Migration wurde der Code-Pfad nicht aktualisiert -> 60%% der
+        Strategie (TP-1 +4%%, TP-2 +8%%) waren effektiv tot.
+
+        Fix: echte partial-close via opposite-side LimitOrder mit qty_close
+        statt full-qty. Volle Position-Resolution-Logic dupliziert (mit
+        close_position konsistent halten, kein gemeinsamer Helper bisher).
+
+        Args:
+            position_id: eToro UUID oder IBKR conId.
+            pct_of_position: 0.0-100.0 — wieviel Prozent der offenen Qty
+                             geschlossen werden sollen.
+            instrument_id: optional, wenn position_id nicht conId ist.
+
+        Returns:
+            dict mit orderForOpen + _close_qty / _remaining_qty,
+            oder None bei Fehler,
+            oder {"_already_closed": True, ...} wenn Position weg ist.
+        """
+        from ib_insync import LimitOrder
+
+        if not (0 < pct_of_position <= 100):
+            log.error("partial_close: pct_of_position muss 0-100 sein, war %s",
+                      pct_of_position)
+            return None
+
+        try:
+            ib = self._get_ib()
+            target_con_id = None
+
+            # Position-Resolution (analog close_position)
+            if instrument_id is not None:
+                try:
+                    iid = int(instrument_id)
+                except (ValueError, TypeError):
+                    iid = None
+
+                if iid is not None and any(
+                    getattr(p.contract, "conId", None) == iid for p in ib.positions()
+                ):
+                    target_con_id = iid
+                elif iid is not None and iid >= 10000000:
+                    log.warning(
+                        "partial_close: conId=%s nicht (mehr) in ib.positions() "
+                        "-> Position bereits geschlossen. Skip ohne Error.",
+                        iid,
+                    )
+                    return {"_already_closed": True, "_conId": iid}
+                else:
+                    try:
+                        from app.ibkr_contract_resolver import resolve_contract
+                        target_con_id = resolve_contract(ib, instrument_id).conId
+                    except Exception as e:
+                        log.error("partial_close resolve_contract failed: %s", e)
+                        return None
+            else:
+                try:
+                    target_con_id = int(position_id)
+                except (ValueError, TypeError):
+                    log.error("partial_close: position_id '%s' ist keine conId",
+                              position_id)
+                    return None
+
+            positions = [p for p in ib.positions() if getattr(p.contract, "conId", None) == target_con_id]
+            if not positions:
+                log.error("partial_close: keine offene Position fuer conId=%s", target_con_id)
+                return None
+
+            pos = positions[0]
+            full_qty = abs(int(pos.position))
+            # Quantity-Berechnung mit round-off + Min-Order-Schutz
+            qty_close = int(round(full_qty * pct_of_position / 100.0))
+            # Sicherheits-Caps:
+            # 1. Min 1 share (sonst sinnloser Trade)
+            # 2. Max full_qty - 1 (wir wollen nicht versehentlich komplett schliessen)
+            # Bei pct=100 koennte der Caller stattdessen close_position() nutzen.
+            if qty_close < 1:
+                log.warning(
+                    "partial_close: %.1f%% von %d shares = %d (zu klein) — skip",
+                    pct_of_position, full_qty, qty_close,
+                )
+                return {"_skipped_too_small": True, "_full_qty": full_qty,
+                        "_pct": pct_of_position}
+            if qty_close >= full_qty:
+                log.warning(
+                    "partial_close: %.1f%% von %d = %d (>=full) — Caller sollte "
+                    "close_position() nutzen. Begrenze auf full_qty-1=%d.",
+                    pct_of_position, full_qty, qty_close, full_qty - 1,
+                )
+                qty_close = full_qty - 1
+                if qty_close < 1:
+                    return {"_skipped_too_small": True, "_full_qty": full_qty}
+
+            remaining_qty = full_qty - qty_close
+            action = "SELL" if pos.position > 0 else "BUY"
+
+            # Quote + LimitOrder (gleicher Mechanismus wie close_position)
+            from app.ibkr_contract_resolver import get_quote
+            quote = get_quote(ib, pos.contract)
+            if quote is None or quote <= 0:
+                log.error("partial_close: kein Quote fuer %s — Order abgebrochen",
+                          pos.contract.symbol)
+                return None
+            slippage_sign = 1 if action == "BUY" else -1
+            limit_price = round(quote * (1 + slippage_sign * self.limit_slippage_pct / 100.0), 2)
+
+            log.info("PARTIAL_CLOSE %s qty=%d (%.1f%% von %d, %d bleibt) %s @ $%.2f",
+                     pos.contract.symbol, qty_close, pct_of_position, full_qty,
+                     remaining_qty, action, limit_price)
+            order = LimitOrder(action, qty_close, limit_price)
+            trade = ib.placeOrder(pos.contract, order)
+
+            deadline = time.time() + 30.0
+            while time.time() < deadline:
+                ib.sleep(0.2)
+                if trade.isDone():
+                    break
+
+            return {
+                "orderForOpen": {
+                    "orderID": str(trade.order.orderId),
+                    "statusID": trade.orderStatus.status,
+                    "filledQuantity": int(trade.orderStatus.filled),
+                    "avgFillPrice": float(trade.orderStatus.avgFillPrice or 0),
+                    "intendedPrice": float(limit_price or 0),
+                    "refQuote": float(quote or 0),
+                },
+                "_broker": "ibkr",
+                "_action": "partial_close",
+                "_close_qty": qty_close,
+                "_remaining_qty": remaining_qty,
+                "_full_qty": full_qty,
+                "_pct_closed": pct_of_position,
+                "_closed_position_id": str(target_con_id),
+            }
+        except Exception as e:
+            log.exception("partial_close failed: %s", e)
+            return None
+
     # --- Instruments ---
 
     def search_instrument(self, query: str) -> list[dict]:
