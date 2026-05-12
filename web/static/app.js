@@ -44,7 +44,7 @@ function switchTab(name) {
     if (name === 'backtest') { loadBacktest(); loadOptimizer(); loadKellySweep(); loadLastRunTimestamps(); }
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
-    if (name === 'ask') document.getElementById('ask-input').focus();
+    // v37h: 'ask' Tab wurde 12.05.2026 entfernt (Carlos: nicht benoetigt)
 }
 
 // === TOAST ===
@@ -881,38 +881,9 @@ async function loadBrain() {
 }
 
 // === STRATEGY PRESETS ===
-const STRATEGY_PRESETS = {
-    aggressive_day_trade: {
-        desc: 'Hohes Risiko, hohe Rendite. Enge SL/TP, 2x Leverage, haeufiges Rebalancing.',
-        stop_loss_pct: -3, take_profit_pct: 5, rebalance_threshold_pct: 2,
-        default_leverage: 2, max_single_trade_pct_of_portfolio: 0.15,
-    },
-    balanced_growth: {
-        desc: 'Mittleres Risiko. Breite Streuung, moderater Leverage, langfristiges Wachstum.',
-        stop_loss_pct: -8, take_profit_pct: 15, rebalance_threshold_pct: 5,
-        default_leverage: 1, max_single_trade_pct_of_portfolio: 0.10,
-    },
-    conservative_etf: {
-        desc: 'Niedriges Risiko. ETF-lastig, kein Leverage, seltenes Rebalancing.',
-        stop_loss_pct: -15, take_profit_pct: 25, rebalance_threshold_pct: 10,
-        default_leverage: 1, max_single_trade_pct_of_portfolio: 0.05,
-    },
-    custom: {
-        desc: 'Eigene Parameter frei konfigurieren.',
-    },
-};
-
-function onStrategyPreset(name) {
-    const preset = STRATEGY_PRESETS[name];
-    if (!preset) return;
-    document.getElementById('strategy-desc').textContent = preset.desc || '';
-    if (name === 'custom') return; // Don't overwrite fields
-    document.getElementById('cfg-sl').value = preset.stop_loss_pct;
-    document.getElementById('cfg-tp').value = preset.take_profit_pct;
-    document.getElementById('cfg-rebalance').value = preset.rebalance_threshold_pct;
-    document.getElementById('cfg-leverage').value = preset.default_leverage;
-    document.getElementById('cfg-max-trade-pct').value = preset.max_single_trade_pct_of_portfolio;
-}
+// v37h Tab-Audit-Day-2 (12.05.2026): STRATEGY_PRESETS + onStrategyPreset
+// entfernt. Strategy-Selector wurde in v37cx aus HTML entfernt (Bot bleibt
+// fix auf WFO-validierter Strategie). Dead-Code-Cleanup nach Bug-Hunt-Audit.
 
 // === SETTINGS ===
 async function loadSettings() {
@@ -1507,64 +1478,8 @@ async function runBacktest() {
     }
 }
 
-async function trainML() {
-    const btn = document.getElementById('btn-train-ml');
-    btn.disabled = true;
-    btn.textContent = 'Training startet...';
-    showToast('ML-Training wird gestartet...');
-
-    try {
-        const res = await apiFetch('/api/ml-model/train', { method: 'POST' });
-        if (!res || !res.ok) {
-            const err = await res?.json();
-            showToast('Start fehlgeschlagen: ' + (err?.detail || 'Unbekannt'));
-            btn.disabled = false;
-            btn.textContent = 'ML-Modell trainieren';
-            return;
-        }
-        const startData = await res.json();
-        if (startData.status === 'already_running') {
-            showToast('Training laeuft bereits im Hintergrund');
-        }
-        // Status-Polling bis done oder error (max 25 min = 150 * 10s)
-        // GH Action dauert typ. 5-15 Min (v12 offload analog Backtest).
-        const MAX_POLLS = 150;
-        for (let i = 0; i < MAX_POLLS; i++) {
-            await new Promise(r => setTimeout(r, 10000));
-            const sRes = await apiFetch('/api/ml-model/train/status');
-            if (!sRes || !sRes.ok) continue;
-            const s = await sRes.json();
-            if (s.state === 'running') {
-                btn.textContent = s.phase === 'dispatching' ? 'GH Action startet...'
-                                : s.phase === 'init' ? 'Runner initialisiert...'
-                                : s.phase === 'download' ? 'Lade Historie...'
-                                : s.phase === 'train' ? 'Trainiere Modell...'
-                                : 'Training laeuft...';
-            } else if (s.state === 'done') {
-                showToast('ML-Modell trainiert!');
-                if (s.model_info) renderMLModel(s.model_info);
-                // Sicherheitshalber auch /api/ml-model neu laden
-                try {
-                    const mRes = await apiFetch('/api/ml-model');
-                    if (mRes && mRes.ok) {
-                        const mData = await mRes.json();
-                        if (mData && !mData.error) renderMLModel(mData);
-                    }
-                } catch {}
-                break;
-            } else if (s.state === 'error') {
-                showToast('ML Training Fehler: ' + (s.error || 'Unbekannt'));
-                console.error('ML training error:', s);
-                break;
-            }
-        }
-    } catch (e) {
-        showToast('ML Training Fehler: ' + e.message);
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'ML-Modell trainieren';
-    }
-}
+// trainML() entfernt 12.05.2026 (v37h) — Button btn-train-ml war im HTML
+// bewusst entfernt, ML-Training wird via GitHub-Action getriggert.
 
 // === OPTIMIZER ===
 
@@ -1647,32 +1562,8 @@ function renderOptimizer(data) {
     }
 }
 
-async function runOptimizer() {
-    const btn = document.getElementById('btn-run-optimizer');
-    btn.disabled = true;
-    btn.textContent = 'Optimierung laeuft...';
-    showToast('Optimizer gestartet (kann 5-10 Minuten dauern)...');
-
-    try {
-        const res = await apiFetch('/api/optimizer/run', { method: 'POST' });
-        if (res && res.ok) {
-            const data = await res.json();
-            showToast('Optimierung abgeschlossen: ' + (data.result?.action || 'done'));
-            if (data.result) {
-                loadOptimizer();
-                loadBacktest();
-            }
-        } else {
-            const err = await res?.json();
-            showToast('Optimizer Fehler: ' + (err?.detail || 'Unbekannt'));
-        }
-    } catch (e) {
-        showToast('Optimizer Fehler: ' + e.message);
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Optimizer starten';
-    }
-}
+// runOptimizer() entfernt 12.05.2026 (v37h) — btn-run-optimizer war im HTML
+// bewusst entfernt, Optimizer wird via Sonntag-Cron + GitHub-Action getriggert.
 
 async function rollbackOptimizer() {
     if (!confirm('Letzte Optimierung rueckgaengig machen?')) return;
@@ -1920,7 +1811,8 @@ async function loadV15Sizing() {
     }
 }
 
-// === ASK (Q&A Chat) ===
+// (Ask/Q&A-Chat-Funktionen entfernt 12.05.2026 — v37h)
+
 // === INIT ===
 (function init() {
     if (!getToken()) {
@@ -1965,31 +1857,8 @@ async function loadV15Sizing() {
 // =====================================================================
 // SURVIVORSHIP-BIAS-AUDIT (E4)
 // =====================================================================
-async function surveyRunNow() {
-    const btn = document.getElementById('surv-run-btn');
-    const msg = document.getElementById('surv-run-msg');
-    if (!confirm('Survivorship-Audit JETZT starten?\n\n' +
-                 '• ~50 yfinance-Calls fuer alle Universe-Symbole\n' +
-                 '• Runtime ca. 30-60 Sek\n' +
-                 '• Aktualisiert die Bias-Schaetzung in der Card')) return;
-    btn.disabled = true;
-    msg.textContent = 'Starte...';
-    try {
-        const r = await apiFetch('/api/survivorship/run', {method: 'POST'});
-        const d = await r.json();
-        if (d.ok) {
-            msg.textContent = '✓ ' + d.message;
-            setTimeout(loadSurvivorship, 60000);
-            setTimeout(loadSurvivorship, 90000);
-        } else {
-            msg.textContent = '✗ ' + (d.error || 'Fehler');
-        }
-    } catch (e) {
-        msg.textContent = '✗ ' + e.message;
-    } finally {
-        setTimeout(() => { btn.disabled = false; }, 2000);
-    }
-}
+// surveyRunNow() entfernt 12.05.2026 (v37h) — surv-run-btn war im HTML
+// bewusst entfernt, Survivorship-Audit laeuft via Sonntag-Cron automatisch.
 
 
 function _survNextSundayUtc() {
@@ -3139,27 +3008,8 @@ async function loadCutoverReadiness() {
     }
 }
 
-async function costModelCalibrate() {
-    const btn = document.getElementById('cost-model-btn');
-    const msg = document.getElementById('cost-model-msg');
-    if (btn) btn.disabled = true;
-    if (msg) msg.textContent = 'Calibrator laeuft...';
-    try {
-        const r = await fetch('/api/cost_model/calibrate', { method: 'POST' });
-        const data = await r.json();
-        if (data.ok) {
-            msg.innerHTML = `<span style="color:#10b981;">✓ ${data.fills_analyzed} Fills analysiert, ${data.overrides_active} Override(s) aktiv</span>`;
-            setTimeout(loadCostModelStatus, 500);
-        } else {
-            msg.innerHTML = `<span style="color:#f87171;">Fehler: ${data.error || 'unbekannt'}</span>`;
-        }
-    } catch (e) {
-        msg.innerHTML = `<span style="color:#f87171;">Fehler: ${e.message}</span>`;
-    } finally {
-        if (btn) btn.disabled = false;
-        setTimeout(() => { if (msg) msg.textContent = ''; }, 8000);
-    }
-}
+// costModelCalibrate() entfernt 12.05.2026 (v37h) — cost-model-btn war im HTML
+// bewusst entfernt, Cost-Model-Calibrator laeuft via Sonntag-Cron automatisch.
 
 
 // v37cx: Anti-Regression Self-Test Card

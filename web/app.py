@@ -4570,63 +4570,10 @@ async def api_diagnostics_alert():
         return {"status": "error", "error": str(ex)}
 
 
-# ============================================================
-# Q&A ASK
-# ============================================================
-
-class AskRequest(BaseModel):
-    question: str
-
-
-@app.post("/api/ask")
-async def api_ask(req: AskRequest, user=Depends(require_auth)):
-    """Beantworte Fragen zum Bot mit Claude API."""
-    if not req.question or len(req.question.strip()) < 3:
-        raise HTTPException(400, "Frage zu kurz")
-
-    try:
-        from app.ask import ask_question
-
-        config = load_config()
-
-        # Trade-History anreichern: instrument_id -> symbol/name (sonst sieht
-        # Claude nur anonyme IDs und kann die Frage nicht beantworten)
-        raw_history = read_json_safe("trade_history.json") or []
-        enrich_with_asset_meta(raw_history)
-
-        # Daten sammeln
-        context_data = {
-            "trade_history": raw_history,
-            "decision_log": read_json_safe("decision_log.json") or [],
-            "brain_state": read_json_safe("brain_state.json") or {},
-            "risk_state": read_json_safe("risk_state.json") or {},
-            "scanner_state": read_json_safe("scanner_state.json") or {},
-        }
-
-        # Portfolio live abfragen
-        try:
-            client = get_broker(config, readonly=True)
-            credit = client.get_credit()
-            positions = client.get_portfolio()
-            parsed = [EtoroClient.parse_position(p) for p in positions]
-            total_invested = sum(p["invested"] for p in parsed)
-            unrealized = sum(p["pnl"] for p in parsed)
-            context_data["portfolio"] = {
-                "total_value": round(credit + total_invested + unrealized, 2),
-                "credit": round(credit, 2),
-                "invested": round(total_invested, 2),
-                "unrealized_pnl": round(unrealized, 2),
-                "num_positions": len(positions),
-                "positions": parsed,
-            }
-        except Exception:
-            context_data["portfolio"] = None
-
-        result = ask_question(req.question, context_data, config)
-        return result
-    except Exception as ex:
-        log.error(f"Ask Fehler: {ex}")
-        return {"error": f"Fehler: {str(ex)}"}
+# v37h Tab-Audit-Day-2 (12.05.2026): Q&A-Ask-Endpoint entfernt.
+# Carlos hat den Ask-Tab bewusst deaktiviert und braucht ihn auch zukuenftig
+# nicht. Tab-HTML war schon weg, JS-Reference und Backend-Endpoint sowie
+# app/ask.py Modul folgen jetzt nach (Dead-Code-Cleanup).
 
 
 # ============================================================
