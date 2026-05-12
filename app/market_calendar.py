@@ -126,3 +126,84 @@ def upcoming_holidays(start: Optional[date] = None,
 def all_holidays(region: str = "US") -> Iterable[date]:
     """Alle bekannten Holidays fuer eine Region (sortiert)."""
     return sorted(_HOLIDAYS_BY_REGION.get(region.upper(), frozenset()))
+
+
+# ============================================================
+# v37h Tab-Audit-Day-2 (12.05.2026): Last-Market-Close-Logik
+# ============================================================
+#
+# Hintergrund: /api/pnl-periods berechnete "HEUTE" als rolling 24h delta.
+# IBKR Mobile-App misst stattdessen "Tages-G&V" seit gestrigem Marktschluss
+# (NYSE 16:00 ET = 20:00 UTC im Sommer, 21:00 UTC im Winter). Carlos verglich
+# 12.05. Mittag CHF +445 (Bot) vs -5'553 (IBKR) — 6k Diff weil Bot's Baseline
+# Mo Vormittag (vor Mo's Nachmittag-Rally) statt Mo Marktschluss war.
+#
+# Diese Helper liefert "letzter US-Markt-Schluss" als UTC-Timestamp,
+# mit DST-Awareness via zoneinfo + Holiday-Filter via existing API + WE-Logik.
+
+def last_market_close_utc(now_utc: Optional[datetime] = None,
+                          region: str = "US",
+                          iana_timezone: str = "America/New_York",
+                          close_hour_local: int = 16,
+                          close_minute_local: int = 0) -> datetime:
+    """Letzter offizieller US-Marktschluss als UTC-Timestamp.
+
+    Algorithmus:
+      1. Konvertiere now in Markt-TZ (handelt DST automatisch).
+      2. Wenn heute Trading-Tag UND aktuelle Zeit >= 16:00 ET:
+         -> heute 16:00 ET als UTC zurueck
+      3. Sonst: gehe Tag fuer Tag zurueck bis Trading-Tag gefunden,
+         dann 16:00 ET dieses Tages als UTC.
+
+    Trading-Tag = Mo-Fr UND nicht in US-Holiday-Liste.
+
+    Edge-Cases handled:
+      - Sa/So-Morgen -> Freitag 16:00 ET (oder Donnerstag wenn Fr Holiday)
+      - Memorial Day Di-Morgen -> Freitag 16:00 ET (Mon = Holiday)
+      - Thanksgiving Fr-Morgen -> Mi 16:00 ET (Do = Holiday)
+      - DST-Umstellung im November/Maerz: automatisch korrekt via ZoneInfo
+      - Halloween (kein Holiday) -> kein Special-Case, Mo-Logik greift
+
+    Returns naive UTC datetime (kompatibel mit den meisten Bot-Snapshots).
+    """
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(iana_timezone)
+    now = now_utc or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    now_local = now.astimezone(tz)
+    current_date = now_local.date()
+
+    def _is_trading_day(d: date) -> bool:
+        # Sa = 5, So = 6
+        if d.weekday() >= 5:
+            return False
+        return not is_market_holiday(d, region=region)
+
+    # Schritt 1: heute oder zurueck zu letztem Trading-Tag
+    today_close_local = now_local.replace(
+        hour=close_hour_local, minute=close_minute_local,
+        second=0, microsecond=0,
+    )
+
+    if _is_trading_day(current_date) and now_local >= today_close_local:
+        # Heute Trading-Tag UND Markt ist schon zu -> heute 16:00 ET
+        return today_close_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+    # Schritt 2: vorherigen Trading-Tag suchen
+    from datetime import timedelta as _td
+    probe = current_date - _td(days=1)
+    # Defensiver Bound: max 10 Tage zurueck (Weihnachten-zu-Neujahr-Gap)
+    for _ in range(10):
+        if _is_trading_day(probe):
+            close_local = datetime(
+                probe.year, probe.month, probe.day,
+                close_hour_local, close_minute_local,
+                tzinfo=tz,
+            )
+            return close_local.astimezone(timezone.utc).replace(tzinfo=None)
+        probe = probe - _td(days=1)
+
+    # Fallback (sollte nie greifen): now - 1 Tag
+    return (now - _td(days=1)).replace(tzinfo=None)

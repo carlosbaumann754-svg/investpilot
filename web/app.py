@@ -1347,9 +1347,24 @@ async def api_pnl_periods(user=Depends(require_auth)):
         except Exception as e:
             log.warning(f"PnL-Periods: Portfolio-Fetch fehlgeschlagen: {e}")
 
+        # v37h Tab-Audit-Day-2 (12.05.2026): "HEUTE" jetzt seit letztem
+        # Marktschluss (NYSE 16:00 ET) statt rolling 24h. Matched IBKR
+        # Mobile-App "Tages-G&V"-Definition (Industry-Standard). Handelt
+        # automatisch Sa/So, US-Holidays (Memorial Day, Thanksgiving etc),
+        # DST-Wechsel via app/market_calendar.py. Tests in
+        # tests/test_market_close_baseline.py (13 Edge-Cases, alle gruen).
         now = datetime.now()
+        try:
+            from app.market_calendar import last_market_close_utc
+            last_close = last_market_close_utc()  # naive UTC
+            # Konvertiere zu naive lokal (Bot rechnet in UTC-naive Snapshots eh)
+            day_window_start = last_close
+        except Exception as e:
+            log.warning(f"last_market_close_utc fehlgeschlagen ({e}) — Fallback rolling 24h")
+            day_window_start = now - timedelta(days=1)
+
         windows = [
-            ("1d",   "Heute",       now - timedelta(days=1),    True),
+            ("1d",   "Heute",       day_window_start,           True),
             ("7d",   "7 Tage",      now - timedelta(days=7),    True),
             ("30d",  "30 Tage",     now - timedelta(days=30),   False),
             ("90d",  "3 Monate",    now - timedelta(days=90),   False),
