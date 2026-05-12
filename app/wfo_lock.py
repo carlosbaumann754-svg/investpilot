@@ -65,6 +65,11 @@ LOCKED_KEYS = [
     ("stop_loss_pct", "demo_trading.stop_loss_pct", "max"),  # max: -3 > -5 (näher zu 0)
     ("take_profit_pct", "demo_trading.take_profit_pct", "min"),  # v37ct: min = konservativ (frueher Gewinn-Lock)
     ("min_scanner_score", "scanner.min_scanner_score", "max"),
+    # v37h Tab-Audit-Day-2 (12.05.2026, Q3-1): zweiter Pfad fuer min_scanner_score
+    # damit Backtester (liest demo_trading.min_scanner_score) und Live-Scanner
+    # (liest scanner.min_scanner_score) konsistent gelockt sind. Vorher: 30 vs
+    # 40 unsynchron -> Backtest-Live-Divergenz im WFO-Sharpe.
+    ("min_scanner_score", "demo_trading.min_scanner_score", "max"),
 ]
 
 
