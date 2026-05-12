@@ -128,7 +128,7 @@
         <div class="card" id="selftest-card" style="border-left:4px solid #10b981;">
             <div class="card-title">
                 Self-Test (Anti-Regression)
-                <span class="tip" data-tip="Bot prueft sich selbst stuendlich auf 10 kritische Punkte: broker=ibkr, Trading-Flag-Persistenz, IB-Gateway erreichbar, Heartbeat frisch, keine eToro-Reste in Logs, kritische Files lesbar, etc. Bei NEUEM Fail kommt Pushover-Alert. Card zeigt aktuellen Stand."></span>
+                <span class="tip" data-tip="Bot prueft sich selbst stuendlich auf 12 kritische Punkte: broker=ibkr, Trading-Flag-Persistenz, IB-Gateway erreichbar (via Connection-Pool), Heartbeat frisch, keine eToro-Reste in Logs, kritische Files lesbar, Asset-Klassen-Config sane, Health-Endpoint OK, Pending-Closes frisch, IBKR-Session-Watchdog, Discovery-Freshness, keine Legacy-Files aktiv. Bei NEUEM Fail kommt Pushover-Alert. Card zeigt aktuellen Stand."></span>
                 <button onclick="runSelfTest()" style="float:right;font-size:11px;padding:4px 10px;cursor:pointer;">Jetzt pruefen</button>
             </div>
             <div id="selftest-status-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
@@ -684,7 +684,7 @@
 
             <!-- v37bb: Filter + Suche -->
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
-                <select id="trades-filter-action" onchange="applyTradesFilter()" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;font-size:13px;">
+                <select id="trades-filter-action" onchange="applyTradesFilter()" title="Filter nach Trade-Typ. 'Alle Aktionen' zeigt alles, sonst nur den gewaehlten Typ (BUYs/Closes/SL/TP/Earnings/Manual/Failed). Kombiniert sich mit der Symbol-Suche rechts." style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;font-size:13px;">
                     <option value="">Alle Aktionen</option>
                     <option value="BUY">Nur BUYs (BUY/SCANNER_BUY)</option>
                     <option value="CLOSE">Alle Closes (SL/TP/Trailing/Time/Earnings/Manual)</option>
@@ -702,17 +702,17 @@
                 <table>
                     <thead>
                         <tr style="cursor:pointer;">
-                            <th onclick="sortTrades('timestamp')">Zeit ↕</th>
-                            <th onclick="sortTrades('action')">Aktion ↕</th>
-                            <th onclick="sortTrades('symbol')">Symbol ↕</th>
-                            <th onclick="sortTrades('amount_usd')">Betrag ↕</th>
-                            <th>Lev</th>
+                            <th onclick="sortTrades('timestamp')">Zeit ↕<span class="tip" data-tip="Zeitpunkt des Trades in UTC. Bei BUYs der Auftrags-Zeitpunkt, bei CLOSEs der Fill-Zeitpunkt. Klicke um auf- oder absteigend zu sortieren.">?</span></th>
+                            <th onclick="sortTrades('action')">Aktion ↕<span class="tip" data-tip="Typ des Trades: SCANNER_BUY (Bot-Kauf), STOP_LOSS_CLOSE / TAKE_PROFIT_CLOSE (automatische Exits), TIME_STOP_CLOSE (zu lange offen), EARNINGS_BLACKOUT_CLOSE (vor Earnings rausgeschmissen), MANUAL_SELL (du selbst geschlossen), FAILED (Order nicht durchgegangen).">?</span></th>
+                            <th onclick="sortTrades('symbol')">Symbol ↕<span class="tip" data-tip="Ticker des gehandelten Wertpapiers (z.B. AAPL, TSLA).">?</span></th>
+                            <th onclick="sortTrades('amount_usd')">Betrag ↕<span class="tip" data-tip="USD-Betrag der Order (bei BUYs der eingesetzte Kapitalbetrag, bei CLOSEs der realisierte P/L in USD).">?</span></th>
+                            <th>Lev<span class="tip" data-tip="Hebel der Position. Aktuell 1x auf IBKR (kein Margin verwendet), kann sich aendern.">?</span></th>
                         </tr>
                     </thead>
                     <tbody id="trades-table"></tbody>
                 </table>
             </div>
-            <button class="btn btn-primary" style="margin-top:12px" onclick="loadMoreTrades()">Mehr laden</button>
+            <button class="btn btn-primary" style="margin-top:12px" onclick="loadMoreTrades()" title="Naechsten Block aelterer Trades aus der trade_history.json nachladen (Pagination, 50 pro Klick).">Mehr laden</button>
         </div>
     </div>
 
@@ -802,7 +802,13 @@
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>Symbol</th><th>Score</th><th>Avg %</th><th>Win %</th><th>Trend</th></tr>
+                        <tr>
+                            <th>Symbol<span class="tip" data-tip="Ticker des bewerteten Wertpapiers.">?</span></th>
+                            <th>Score<span class="tip" data-tip="Bot-interne Bewertung 0-100. Aus Avg %, Win % und Volatilitaet berechnet. Hoeher = Bot vertraut diesem Asset, niedriger = vorsichtig sein. Schwellwert fuer 'gute' Assets liegt typisch bei 30-40.">?</span></th>
+                            <th>Avg %<span class="tip" data-tip="Durchschnittliche Rendite pro Trade dieses Assets (alle abgeschlossenen Trades). +2.5% z.B. heisst, im Mittel verdient der Bot 2.5% pro abgeschlossenem Trade mit diesem Symbol.">?</span></th>
+                            <th>Win %<span class="tip" data-tip="Anteil profitabler Trades dieses Assets. 60% = 6 von 10 Trades waren im Plus.">?</span></th>
+                            <th>Trend<span class="tip" data-tip="Pfeil-Indikator: Hat sich der Score in den letzten Trades verbessert (↑), verschlechtert (↓) oder gehalten (→)?">?</span></th>
+                        </tr>
                     </thead>
                     <tbody id="scores-table"></tbody>
                 </table>
@@ -810,7 +816,7 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Gelernte Regeln</div>
+            <div class="card-title">Gelernte Regeln<span class="tip" data-tip="Konkrete Regeln die der Bot aus seiner Trade-Historie abgeleitet hat. Beispiel: 'AAPL funktioniert gut wenn VIX unter 20' oder 'SHORT bei NVDA vermeiden wenn Earnings naher als 5 Tage'. Sammlung waechst mit jedem Wochen-Brain-Cycle. Leer bei neuem Bot oder zu wenig Trades fuer statistische Signifikanz.">?</span></div>
             <div id="rules-list" style="font-size:13px; color: var(--text-dim)">Keine Regeln</div>
         </div>
 
