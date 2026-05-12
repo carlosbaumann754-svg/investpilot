@@ -370,11 +370,18 @@ def alert_emergency(reason, closed_count=0, config=None):
 # ============================================================
 
 def alert_regime_halt(regime_reason, regime_data=None, config=None):
-    """Sende Notification wenn Regime-Filter Trading stoppt."""
+    """Sende Notification wenn Regime-Filter Trading stoppt.
+
+    v37h Tab-Audit-Day-2 (12.05.2026): Regime-Halt ist 'negativ-event'
+    (Bot pausiert Trading) \u2014 Carlos's Praeferenz: IMMER Pushover-
+    eskalation, Telegram-Filter wird uebersprungen. Hard-WARNING-Level
+    (Pushover-Priority 1 via priority_map) damit Mobile-Banner kommt.
+    """
     if config is None:
         config = load_config()
-    if not _tg_notify_enabled("regime_change", config):
-        return
+    # Bypass _tg_notify_enabled \u2014 Regime-Halt ist immer kritisch genug
+    # fuer Pushover, unabhaengig von Telegram-Status. Wenn Pushover
+    # disabled ist, kommt halt nichts (send_alert checkt jeden Channel).
 
     msg = f"\U0001f6ab <b>REGIME HALT AKTIVIERT</b>\n{regime_reason}"
     if regime_data:
@@ -388,11 +395,17 @@ def alert_regime_halt(regime_reason, regime_data=None, config=None):
 
 
 def alert_regime_resumed(config=None):
-    """Sende Notification wenn Regime-Filter Trading wieder erlaubt."""
+    """Sende Notification wenn Regime-Filter Trading wieder erlaubt.
+
+    v37h: Bypass-Pattern analog zu alert_regime_halt \u2014 User soll wissen
+    dass Bot wieder live ist nach einem Halt (sonst denkt er evtl. Bot
+    sei immer noch pausiert). INFO-Level (Pushover-Priority 0 = silent
+    notification, kein Mobile-Banner aber im History sichtbar).
+    """
     if config is None:
         config = load_config()
-    if not _tg_notify_enabled("regime_change", config):
-        return
+    # Bypass _tg_notify_enabled (analog zu halt \u2014 Follow-up zum negativen
+    # Event muss User sehen)
 
     msg = "\u2705 <b>REGIME HALT AUFGEHOBEN</b>\nTrading wieder aktiv."
     send_alert(msg, "INFO", config)
