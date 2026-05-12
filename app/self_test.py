@@ -148,25 +148,34 @@ def tc_critical_files() -> TestResult:
 
 
 def tc_ibkr_connect() -> TestResult:
-    """IB-Gateway erreichbar via socat-bridge (Port 4004)."""
+    """IB-Gateway erreichbar — via IbkrBroker statt direktem ib_insync.
+
+    v37h Tab-Audit-Day-2 (12.05.2026): vorher direkter IB().connect()-Call
+    crashte im FastAPI AnyIO-Worker-Thread mit 'no current event loop'.
+    Self-Test war Daueralarm 11/12 obwohl Bot's eigene Connection (via
+    IbkrBroker) sauber lief. Jetzt: IbkrBroker._get_ib() — hat
+    _ensure_event_loop()-Logik + Healthcheck-Layer (reqCurrentTime) +
+    Pool-Sharing. Connection-Infrastructure ist identisch zum Trader-Cycle.
+    """
     t0 = time.time()
     try:
-        from ib_insync import IB
-        ib = IB()
-        ib.connect("ib-gateway", 4004, clientId=199, timeout=10)
+        from app.ibkr_client import IbkrBroker
+        from app.config_manager import load_config
+        cfg = load_config()
+        broker = IbkrBroker(cfg.get("ibkr") or {}, readonly=True)
+        ib = broker._get_ib()
         connected = ib.isConnected()
-        # Quick ping: 1 account-tag holen
         tags = ib.accountSummary()
-        ib.disconnect()
+        # KEIN ib.disconnect() — Pool-Sharing, Connection bleibt aktiv
         if not connected:
-            return TestResult("ibkr_connect", False, "isConnected=False after connect",
+            return TestResult("ibkr_connect", False, "isConnected=False after _get_ib()",
                               severity="critical", category="ibkr",
                               duration_ms=int((time.time() - t0) * 1000))
         if not tags:
             return TestResult("ibkr_connect", False, "leere accountSummary",
                               severity="warning", category="ibkr",
                               duration_ms=int((time.time() - t0) * 1000))
-        return TestResult("ibkr_connect", True, f"{len(tags)} account-tags",
+        return TestResult("ibkr_connect", True, f"{len(tags)} account-tags via pool",
                           severity="info", category="ibkr",
                           duration_ms=int((time.time() - t0) * 1000))
     except Exception as e:
