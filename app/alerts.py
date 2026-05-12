@@ -264,7 +264,16 @@ def send_alert(message, level="INFO", config=None):
 # ============================================================
 
 def alert_trade_executed(trade_entry, config=None):
-    """Sende Notification fuer ausgefuehrten Trade."""
+    """Sende Notification fuer ausgefuehrten Trade.
+
+    v37h Tab-Audit-Day-2 (12.05.2026): FAILED-Actions ueberspringen den
+    Telegram-Notify-Filter und werden IMMER als ERROR-Level via send_alert
+    geschickt. Carlos hat Telegram disabled aber Pushover enabled — der
+    bisherige Filter blockte Pushover komplett bei Trade-Events. Erfolg-
+    reiche Trades bleiben weiterhin silent (Carlos will keinen Spam bei
+    BUYs/normalen Closes), aber FAILED-Pfade werden jetzt sicher
+    eskaliert (Pushover-Priority 1 via 'ERROR'-Level im priority_map).
+    """
     if config is None:
         config = load_config()
 
@@ -275,16 +284,33 @@ def alert_trade_executed(trade_entry, config=None):
     score = trade_entry.get("scanner_score", "")
     pnl = trade_entry.get("pnl_pct", "")
 
+    # v37h: FAILED-Actions IMMER eskalieren (Telegram-Filter ueberspringen).
+    # Pattern: *_FAILED (STOP_LOSS_CLOSE_FAILED, PARTIAL_CLOSE_FAILED, etc.)
+    is_failed = action.endswith("_FAILED") or "_FAILED" in action
+
     # Bestimme ob Stop-Loss oder normaler Trade
     is_stop_loss = action in ("STOP_LOSS_CLOSE", "TRAILING_SL_CLOSE")
 
-    # Pruefe granulare Telegram-Einstellung
-    if is_stop_loss and not _tg_notify_enabled("stop_loss", config):
-        return
-    if not is_stop_loss and not _tg_notify_enabled("trades", config):
-        return
+    # Pruefe granulare Telegram-Einstellung — aber NICHT fuer FAILED-Actions
+    if not is_failed:
+        if is_stop_loss and not _tg_notify_enabled("stop_loss", config):
+            return
+        if not is_stop_loss and not _tg_notify_enabled("trades", config):
+            return
 
-    if "CLOSE" in action or "SELL" in action:
+    if is_failed:
+        # v37h: dedizierter Error-Message-Format fuer FAILED-Pfade
+        reason = trade_entry.get("reason", "Bot-Cycle wird erneut versuchen")
+        pnl_str = f"\nP/L stand: {pnl:+.1f}%" if isinstance(pnl, (int, float)) else ""
+        msg = (f"⚠️ <b>{action}</b>: {symbol}{pnl_str}\n"
+               f"Position bleibt OFFEN — {reason}")
+        # Bei Partial-Close-Fail zusaetzliche Tranche-Info anzeigen
+        if "PARTIAL_CLOSE" in action and trade_entry.get("tranche_close_pct"):
+            tc = trade_entry["tranche_close_pct"]
+            tt = trade_entry.get("tranche_target_pct", "?")
+            msg += f"\nTranche: {tc}% bei +{tt}% PnL"
+        level = "ERROR"  # priority 1 in Pushover priority_map
+    elif "CLOSE" in action or "SELL" in action:
         pnl_str = f"\nP/L: {pnl:+.1f}%" if pnl else ""
         msg = f"<b>{action}</b>: {symbol}{pnl_str}"
 
