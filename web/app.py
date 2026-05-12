@@ -1620,9 +1620,22 @@ async def api_brain(user=Depends(require_auth)):
 
 @app.get("/api/config")
 async def api_config(user=Depends(require_auth)):
-    """Aktuelle Strategie-Parameter (ohne Secrets)."""
+    """Aktuelle Strategie-Parameter (ohne Secrets).
+
+    v37h Tab-Audit-Day-2 (12.05.2026): erweitert um WFO-locked Felder
+    (min_scanner_score) + v15-Sizing (max_single_trade_pct_of_portfolio)
+    damit Frontend-Settings-Tab alle relevanten Werte anzeigen kann.
+    Bei min_scanner_score nutzen wir scanner.min_scanner_score (WFO-Lock-
+    Target = max-Mode = strengster = aktueller Wert 40), nicht
+    demo_trading.min_scanner_score (war 30, ist redundant aber nicht
+    locked).
+    """
     config = load_config()
     dt = config.get("demo_trading", {})
+    scanner = config.get("scanner", {})
+    # WFO-Lock-Target: scanner.min_scanner_score (max-Mode in enforce_locks).
+    # Fallback auf demo_trading.min_scanner_score falls scanner-Section leer.
+    min_score = scanner.get("min_scanner_score", dt.get("min_scanner_score", 30))
     return {
         "strategy": dt.get("strategy", "unknown"),
         "stop_loss_pct": dt.get("stop_loss_pct", -10),
@@ -1630,6 +1643,8 @@ async def api_config(user=Depends(require_auth)):
         "rebalance_threshold_pct": dt.get("rebalance_threshold_pct", 5),
         "default_leverage": dt.get("default_leverage", 1),
         "max_single_trade_usd": dt.get("max_single_trade_usd", 5000),
+        "max_single_trade_pct_of_portfolio": dt.get("max_single_trade_pct_of_portfolio", 0.15),
+        "min_scanner_score": min_score,
         "portfolio_targets": dt.get("portfolio_targets", {}),
     }
 
