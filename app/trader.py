@@ -995,8 +995,20 @@ def check_stop_loss_take_profit(client, config):
                                 trade_status = _trade_status_from_result(result)
                                 action_kind = "PARTIAL_CLOSE"
                             else:
-                                log.warning(f"  PARTIAL_CLOSE fehlgeschlagen — "
-                                            f"Tranche bleibt offen fuer naechsten Cycle")
+                                # v37h Pushover-Eskalation: nutze _log_close_failure
+                                # statt nur Warning. Bringt: ERROR-Log + Trade-History-
+                                # Persist mit _FAILED-Suffix + Pushover als WARNING-
+                                # Level via alerts_mod.alert_trade_executed. Wichtig
+                                # weil PARTIAL_CLOSE_FAILED = Real-Money-Risiko
+                                # (Tranche blockt sich selbst, Position bleibt offen
+                                # mit zu wenig Profit-Locking).
+                                _log_close_failure("PARTIAL_CLOSE", p, al, extra={
+                                    "tranche_index": tranche_idx,
+                                    "tranche_close_pct": close_pct,
+                                    "tranche_target_pct": target_pct,
+                                    "total_closed_pct": new_total,
+                                    "reason": "client.partial_close returnte falsy/None",
+                                })
                                 trade_status = "failed"
                                 action_kind = "PARTIAL_CLOSE_FAILED"
                         else:
@@ -1042,7 +1054,11 @@ def check_stop_loss_take_profit(client, config):
                         if new_total >= 100 and result:
                             break
 
-                        if al:
+                        # v37h: alert_trade_executed nur bei Erfolg-Pfaden senden.
+                        # PARTIAL_CLOSE_FAILED ruft schon _log_close_failure auf
+                        # (ERROR-Alert via WARNING-Level) — kein Doppel-Push.
+                        # PARTIAL_SKIP ist ein "saubere Skip", kein Alert noetig.
+                        if al and action_kind in ("PROFIT_LOCK_CLOSE", "PARTIAL_CLOSE", "PARTIAL_SIGNAL"):
                             al.alert_trade_executed(trade_entry)
 
         # Stop-Loss Check
