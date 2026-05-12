@@ -547,6 +547,13 @@
             <div id="news-badges" style="display:flex;gap:6px;flex-wrap:wrap;">--</div>
         </div>
 
+        <!-- PRICE-DATA SOURCES (v37h Tab-Audit-Day-2, 12.05.2026) -->
+        <div class="card" id="data-sources-card">
+            <div class="card-title">Preis-Daten-Quellen<span class="tip" data-tip="Woher der Bot die aktuellen Aktienkurse, ETF-Preise und Daily-Bars holt. Hat NICHTS mit den News-Quellen oben zu tun. Der Bot nutzt eine Fallback-Kette: zuerst die schnellste Quelle (yfinance), bei Ausfall die naechste (Alpha Vantage), dann Polygon, dann Finnhub. Damit ist eine Live-Trading-Pause durch Quell-Ausfall fast ausgeschlossen.">?</span></div>
+            <div id="data-primary" class="card-sub" style="margin-bottom:10px;">--</div>
+            <div id="data-badges" style="display:flex;gap:6px;flex-wrap:wrap;">--</div>
+        </div>
+
         <!-- SECTOR STRENGTH -->
         <div class="card" id="sector-card" style="display:none;">
             <div class="card-title">Sektor-Staerke<span class="tip" data-tip="Zusammensetzung des Scanner-Universums nach Sektor (NICHT deine Portfolio-Allokation!). Prozent = Anteil der gescannten Symbole pro Sektor, Zahl in Klammern = Anzahl Symbole. Der Bot nutzt die Sektor-Momentum intern fuers Scoring (starker Sektor = Bonus, schwacher = Penalty).">?</span></div>

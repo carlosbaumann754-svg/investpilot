@@ -4199,6 +4199,49 @@ async def api_sectors(user=Depends(require_auth)):
 # NEWS SOURCES STATUS (Finnhub / Anthropic / VADER / yfinance)
 # ============================================================
 
+@app.get("/api/data-sources")
+async def api_data_sources(user=Depends(require_auth)):
+    """v37h Tab-Audit-Day-2 (12.05.2026): welche Preis-Daten-Quellen
+    (Quote-API) sind aktuell aktiv? Pendant zu /api/news-sources fuer
+    News+Sentiment. Carlos sah die News-Card und fragte wo die zwei
+    neuen Quellen (Alpha Vantage + Polygon, eingebunden 10.05. Option A
+    Fallback-Chain) angezeigt werden — das war reines Visibility-Gap.
+
+    Returns:
+        sources: dict[name -> bool] der konfigurierten Quellen
+        priority: list[str] in Fallback-Reihenfolge
+        primary: name der primaeren aktiven Quelle
+    """
+    try:
+        from app.data_fallback import get_active_sources
+        status = get_active_sources()
+        priority = ["yfinance", "alpha_vantage", "polygon", "finnhub"]
+        primary = next((s for s in priority if status.get(s)), "none")
+        labels = {
+            "yfinance": "Yahoo Finance (yfinance, primary)",
+            "alpha_vantage": "Alpha Vantage (Free-Tier 5 req/min)",
+            "polygon": "Polygon.io (Free-Tier, Vortags-Close)",
+            "finnhub": "Finnhub (Free-Tier 60 req/min)",
+            "none": "Keine Quelle aktiv",
+        }
+        descriptions = {
+            "yfinance": "Quote + Daily-Bars + Earnings via yfinance Library. Frei, keine API-Limits, aber unzuverlaessig am Wochenende ('possibly delisted' Spam).",
+            "alpha_vantage": "Quote + Daily + Forex via Alpha Vantage REST-API. Forex-Spezialist. Cache 15 Min Quote, 6h Daily.",
+            "polygon": "Quote (Vortag-Close /v2/aggs/prev) + Crypto via Polygon.io. Free-Tier kompatibel.",
+            "finnhub": "Quote + Insider-Transaktionen via Finnhub. Free-Tier 60 req/min, primary fuer SEC EDGAR Form 4 Backup.",
+        }
+        return {
+            "sources": status,
+            "priority": priority,
+            "primary": primary,
+            "primary_label": labels.get(primary, primary),
+            "labels": labels,
+            "descriptions": descriptions,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/news-sources")
 async def api_news_sources(user=Depends(require_auth)):
     """Welche Sentiment-/News-Quellen sind aktuell live?"""

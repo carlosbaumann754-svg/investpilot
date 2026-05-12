@@ -551,6 +551,7 @@ async function loadDashboard() {
         // v12 Feature Status + Universe Health (unabhaengig vom restlichen Load)
         loadV12Status();
         loadNewsSources();
+        loadDataSources();  // v37h Tab-Audit-Day-2: Preis-Daten-Quellen-Card
 
         // Sector Strength
         if (sectorRes) {
@@ -2786,6 +2787,43 @@ async function loadNewsSources() {
         badgesEl.innerHTML = items.map(([label, on]) =>
             `<span class="badge ${on ? 'badge-green' : 'badge-blue'}" style="opacity:${on ? 1 : 0.5};">${label}${on ? '' : ' · off'}</span>`
         ).join('');
+    }
+}
+
+// v37h Tab-Audit-Day-2 (12.05.2026): Preis-Daten-Quellen-Card (Pendant zur
+// News-Card). Carlos sah News-Card und fragte wo Alpha Vantage + Polygon
+// angezeigt werden — die wurden 10.05. als Quote-API-Fallback eingebunden,
+// nicht als News-Quellen. Reines Visibility-Gap.
+async function loadDataSources() {
+    const res = await apiFetch('/api/data-sources');
+    if (!res) return;
+    let data;
+    try { data = await res.json(); } catch (e) { return; }
+    if (!data || data.error) return;
+
+    const sources = data.sources || {};
+    const labels = data.labels || {};
+    const primaryEl = document.getElementById('data-primary');
+    const badgesEl = document.getElementById('data-badges');
+
+    if (primaryEl) {
+        primaryEl.innerHTML = `Primaer: <strong>${data.primary_label || '--'}</strong>`;
+    }
+
+    if (badgesEl) {
+        // In Fallback-Priorität rendern (yfinance > AV > Polygon > Finnhub)
+        const priority = data.priority || ['yfinance', 'alpha_vantage', 'polygon', 'finnhub'];
+        const shortLabels = {
+            yfinance: 'Yahoo Finance',
+            alpha_vantage: 'Alpha Vantage',
+            polygon: 'Polygon.io',
+            finnhub: 'Finnhub',
+        };
+        badgesEl.innerHTML = priority.map(key => {
+            const on = !!sources[key];
+            const label = shortLabels[key] || key;
+            return `<span class="badge ${on ? 'badge-green' : 'badge-blue'}" style="opacity:${on ? 1 : 0.5};">${label}${on ? '' : ' · off'}</span>`;
+        }).join('');
     }
 }
 
