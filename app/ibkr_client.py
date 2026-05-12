@@ -151,6 +151,79 @@ from app.broker_base import BrokerBase
 _IB_INSTANCES: dict[tuple, "object"] = {}  # key=(host,port,client_id) -> IB
 _IB_LOCK = threading.RLock()
 
+# v37h Tab-Audit-Day-2 (12.05.2026): Connection-Healthcheck-Cache.
+# isConnected() reicht NICHT als Liveness-Check — ib_insync's Socket kann
+# weiterhin "open" sein nachdem ib-gateway interne Session verloren hat
+# (z.B. nach Daily 03:00 UTC Restart). Resultat: accountValues() liefert
+# stale Cached-Werte ohne Fehler. Cash-Drift-Alert vom 12.05.06:43 UTC
+# war exakt dieser Bug — Bot's Snapshots zeigten 2+ Stunden identische
+# Werte ($421'397.13) während IBKR-Live $416'822 hatte.
+#
+# Fix: aktiver reqCurrentTime()-Healthcheck mit Throttling. Pro Pool-Key
+# wird der letzte erfolgreiche Healthcheck-Zeitstempel gespeichert; falls
+# > HEALTHCHECK_INTERVAL_SEC her, wird ein neuer reqCurrentTime() mit
+# kurzem Timeout gemacht. Falls der failed: Connection als stale gemeldet.
+import time as _time
+_HEALTHCHECK_TS: dict[tuple, float] = {}
+_HEALTHCHECK_INTERVAL_SEC = 60  # 1x pro Minute reicht (Bot-Cycle = ~5 Min)
+_HEALTHCHECK_TIMEOUT_SEC = 2.0   # reqCurrentTime sollte <1s antworten
+
+
+def _connection_is_fresh(ib, key, *, force=False) -> bool:
+    """v37h: Aktiver Liveness-Check via reqCurrentTime().
+
+    Cache-Pattern: gecached pro `_HEALTHCHECK_INTERVAL_SEC` (Default 60s).
+    Wenn letzter erfolgreicher Check juenger als das, return True ohne
+    erneuten Call. Sonst: reqCurrentTime() ausfuehren, bei Erfolg cache
+    updaten, bei Fail return False (Caller invalidiert Pool).
+
+    Returns:
+        True wenn Connection live ist (oder check skipped wegen Cache)
+        False wenn reqCurrentTime() failed -> stale connection
+    """
+    now = _time.time()
+    if not force:
+        last = _HEALTHCHECK_TS.get(key, 0)
+        if now - last < _HEALTHCHECK_INTERVAL_SEC:
+            return True
+    try:
+        # reqCurrentTime() ist async aber ib_insync exponiert synchronen
+        # Wrapper. Bei stale connection blockiert er bis Timeout (default
+        # 2s). Wir trustern den default-timeout.
+        srv_time = ib.reqCurrentTime()
+        if srv_time is None:
+            return False
+        _HEALTHCHECK_TS[key] = now
+        return True
+    except Exception as e:
+        log.warning("IBKR-Healthcheck reqCurrentTime() failed (%s) — "
+                    "Connection wird als stale invalidiert", type(e).__name__)
+        return False
+
+
+# Pushover-Throttle fuer Stale-Detection (vermeidet Spam wenn IBG-Outage
+# laenger anhaelt — 1x pro Stunde reicht als Signal an Carlos)
+_STALE_ALERT_LAST: dict[tuple, float] = {}
+_STALE_ALERT_INTERVAL_SEC = 3600
+
+
+def _maybe_alert_stale(key: tuple) -> None:
+    now = _time.time()
+    last = _STALE_ALERT_LAST.get(key, 0)
+    if now - last < _STALE_ALERT_INTERVAL_SEC:
+        return
+    _STALE_ALERT_LAST[key] = now
+    try:
+        from app.alerts import push_alert
+        push_alert(
+            "IBKR-Connection stale",
+            f"reqCurrentTime() failed fuer Pool-Key={key}. Bot hat "
+            f"Connection invalidiert und reconnected. Falls dies oft "
+            f"vorkommt: ib-gateway Container pruefen.",
+        )
+    except Exception as e:
+        log.debug("Pushover-Alert (stale) failed: %s", e)
+
 
 def _pool_get(key: tuple):
     with _IB_LOCK:
@@ -324,7 +397,15 @@ class IbkrBroker(BrokerBase):
         if self._ib is not None:
             try:
                 if self._ib.isConnected():
-                    return self._ib
+                    # v37h Healthcheck: pruefe ob ib_insync wirklich live ist
+                    # (isConnected reicht nicht — silent stale moeglich)
+                    if _connection_is_fresh(self._ib, self._pool_key):
+                        return self._ib
+                    log.warning("Direkt-injected IB-Instanz ist stale — "
+                                "Invalidate Pool und neu connecten")
+                    _maybe_alert_stale(self._pool_key)
+                    _pool_invalidate(self._pool_key)
+                    self._ib = None
             except Exception:
                 pass
 
@@ -335,8 +416,15 @@ class IbkrBroker(BrokerBase):
         if cached is not None:
             try:
                 if cached.isConnected():
-                    self._ib = cached  # backwards-compat
-                    return cached
+                    # v37h Healthcheck: vor Reuse pruefen ob Connection live
+                    if _connection_is_fresh(cached, key):
+                        self._ib = cached  # backwards-compat
+                        return cached
+                    log.warning("Pool-Instance %s ist stale (silent-stale "
+                                "nach ib-gateway Restart?) — invalidiere "
+                                "Pool fuer fresh reconnect", key)
+                    _maybe_alert_stale(key)
+                    # fall-through zur Invalidation + Neu-Connect
             except Exception:
                 pass
             # Tote Instance -> invalidieren
