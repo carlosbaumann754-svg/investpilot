@@ -66,27 +66,27 @@ def test_cross_validation_classes():
 
 
 def test_spread_check_no_anomaly_when_close():
-    """Bei <0.5% Spread: kein Alarm."""
+    """Bei <5% Spread: kein Alarm (Polygon /prev = Vortag-Close,
+    erwartete RTH-Spreads bis ~3%)."""
     from app.data_fallback import _check_quote_spread
-    # AAPL: 200.00 vs 200.50 = 0.25% Spread
+    # AAPL: 200.00 vs 204.00 = 2.0% Spread (typisch fuer live-vs-prev)
     result = _check_quote_spread(200.00, "yfinance",
-                                  200.50, "polygon", "AAPL")
+                                  204.00, "polygon", "AAPL")
     assert result is False  # kein Anomalie-Flag
 
 
 def test_spread_check_detects_anomaly():
-    """Bei >0.5% Spread: Anomalie + Alert (Mock send_alert)."""
+    """Bei >5% Spread: Anomalie + Alert (Symbol-Verwechslung-Schwellwert)."""
     from app.data_fallback import _check_quote_spread, _ANOMALY_ALERT_LAST
     _ANOMALY_ALERT_LAST.clear()
-    # AAPL: 200.00 vs 205.00 = 2.5% Spread
+    # AAPL: 200.00 vs 220.00 = 10% Spread (= echter Bug-Schwellwert)
     with patch("app.alerts.send_alert") as mock_send:
         result = _check_quote_spread(200.00, "yfinance",
-                                      205.00, "polygon", "AAPL")
+                                      220.00, "polygon", "AAPL")
     assert result is True
     mock_send.assert_called_once()
     _msg, level = mock_send.call_args[0][0], mock_send.call_args[1].get("level") \
         or (mock_send.call_args[0][1] if len(mock_send.call_args[0]) > 1 else None)
-    # Level kann positional oder kwarg sein
     assert "QUOTE-SPREAD-ANOMALY" in _msg
     assert "AAPL" in _msg
 
@@ -97,7 +97,7 @@ def test_spread_check_throttle_prevents_spam():
     _ANOMALY_ALERT_LAST.clear()
     with patch("app.alerts.send_alert") as mock_send:
         for _ in range(3):
-            _check_quote_spread(200.00, "yfinance", 205.00, "polygon", "AAPL")
+            _check_quote_spread(200.00, "yfinance", 220.00, "polygon", "AAPL")
     # Nur 1 Alert trotz 3 Aufrufen
     assert mock_send.call_count == 1
 

@@ -235,7 +235,14 @@ _ASSET_CLASS_ROUTES: dict[str, list[str]] = {
 _CROSS_VALIDATION_CLASSES = frozenset({"stocks", "etf"})
 
 # Spread-Schwellwert fuer Anomaly-Alert (Prozent).
-_QUOTE_SPREAD_THRESHOLD_PCT = 0.5
+# v37h Option-C Soak-Test Day-1 (13.05.2026): erhoeht von 0.5% auf 5.0%.
+# Begruendung: erster Live-Test zeigte AAPL 1.56% / SPY 0.65% Spreads —
+# NICHT Bugs sondern erwartet (yfinance live vs Polygon /prev = Vortag-
+# Close auf Free-Tier). 0.5% wuerde permanent waehrend RTH feuern.
+# 5.0% = "Symbol-Verwechslung oder echter Daten-Bug"-Schwellwert. Bei
+# Polygon Paid-Tier-Upgrade (Live-Quotes) koennte spaeter wieder auf
+# 0.5-1.0% gesenkt werden — als Q3-Backlog dokumentiert.
+_QUOTE_SPREAD_THRESHOLD_PCT = 5.0
 
 # Pushover-Throttle: gleiche Symbol+Anomaly nicht oefter als 1x pro Stunde.
 _ANOMALY_ALERT_LAST: dict[str, float] = {}
