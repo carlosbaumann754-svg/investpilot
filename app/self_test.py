@@ -148,21 +148,32 @@ def tc_critical_files() -> TestResult:
 
 
 def tc_ibkr_connect() -> TestResult:
-    """IB-Gateway erreichbar — via IbkrBroker statt direktem ib_insync.
+    """IB-Gateway erreichbar — via IbkrBroker mit dedizierter Self-Test-clientId.
 
     v37h Tab-Audit-Day-2 (12.05.2026): vorher direkter IB().connect()-Call
     crashte im FastAPI AnyIO-Worker-Thread mit 'no current event loop'.
-    Self-Test war Daueralarm 11/12 obwohl Bot's eigene Connection (via
-    IbkrBroker) sauber lief. Jetzt: IbkrBroker._get_ib() — hat
-    _ensure_event_loop()-Logik + Healthcheck-Layer (reqCurrentTime) +
-    Pool-Sharing. Connection-Infrastructure ist identisch zum Trader-Cycle.
+    v37h Tab-Audit-Day-3 (13.05.2026): Self-Test nutzte cfg.ibkr.client_id
+    was zu Konflikten mit Bot-Cycle/Watchdog/Reconcile-Slots fuehrte
+    (TimeoutError nach 14h Uptime). Fix: dedizierte clientId=199 fuer
+    Self-Test reservieren — kein Pool-Konflikt mehr.
+
+    Fallback bei "already_in_use": IbkrBroker._get_ib hat schon eingebaute
+    Retry-Logik mit random clientId (siehe _get_ib Retry-Block).
     """
     t0 = time.time()
     try:
         from app.ibkr_client import IbkrBroker
         from app.config_manager import load_config
         cfg = load_config()
-        broker = IbkrBroker(cfg.get("ibkr") or {}, readonly=True)
+        ibkr_cfg = dict(cfg.get("ibkr") or {})
+        # v37h: dedizierte Self-Test-clientId. 199 ist reserviert fuer
+        # Self-Test (Bot's Pool nutzt typisch 1-99 default, oder 100-999
+        # nach Retry). Falls 199 auch belegt: _get_ib's eingebauter Retry
+        # mit random clientId greift automatisch.
+        ibkr_cfg["client_id"] = 199
+        # Shorter timeout damit Self-Test nicht 30s blockt bei IBG-Problem
+        ibkr_cfg["timeout"] = 8
+        broker = IbkrBroker(ibkr_cfg, readonly=True)
         ib = broker._get_ib()
         connected = ib.isConnected()
         tags = ib.accountSummary()
@@ -175,7 +186,7 @@ def tc_ibkr_connect() -> TestResult:
             return TestResult("ibkr_connect", False, "leere accountSummary",
                               severity="warning", category="ibkr",
                               duration_ms=int((time.time() - t0) * 1000))
-        return TestResult("ibkr_connect", True, f"{len(tags)} account-tags via pool",
+        return TestResult("ibkr_connect", True, f"{len(tags)} account-tags (clientId=199)",
                           severity="info", category="ibkr",
                           duration_ms=int((time.time() - t0) * 1000))
     except Exception as e:
