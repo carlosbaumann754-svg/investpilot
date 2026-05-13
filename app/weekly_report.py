@@ -108,11 +108,9 @@ def _assess_brain_health(brain):
     else:
         strengths.append(f"Marktregime erkannt: {regime}")
 
-    rules = brain.get("learned_rules", [])
-    if len(rules) > 5:
-        strengths.append(f"{len(rules)} gelernte Regeln aktiv")
-    elif len(rules) == 0:
-        issues.append("Noch keine Regeln gelernt - Brain braucht mehr Zyklen")
+    # v37h Tab-Audit-Day-3 (13.05.2026): "Gelernte Regeln" Feature deaktiviert
+    # (Carlos-Entscheidung, v6-Era ueberholt durch WFO/Optimizer/Kelly).
+    # Weekly Report ignoriert das Feld jetzt.
 
     sharpe = brain.get("sharpe_estimate", 0)
     if sharpe > 1.0:

@@ -864,20 +864,10 @@ async function loadBrain() {
         tbody.appendChild(tr);
     });
 
-    // Rules list
-    const rulesEl = document.getElementById('rules-list');
-    const rules = b.learned_rules || [];
-    if (rules.length === 0) {
-        rulesEl.innerHTML = '<span style="color:var(--text-dim)">Noch keine Regeln gelernt (min. 5 Laeufe)</span>';
-    } else {
-        rulesEl.innerHTML = rules.map(r =>
-            `<div style="margin-bottom:8px; padding:8px; background:var(--bg-input); border-radius:8px">
-                <span class="badge badge-purple">${r.type}</span>
-                <div style="margin-top:4px">${r.reason}</div>
-                <div style="color:var(--text-dim); font-size:11px">${fmtTime(r.created)} | Conf: ${((r.confidence || 0) * 100).toFixed(0)}%</div>
-            </div>`
-        ).join('');
-    }
+    // v37h Tab-Audit-Day-3 (13.05.2026): rules-list Rendering entfernt.
+    // Card aus HTML weg (Carlos-Entscheidung), b.learned_rules wird nicht
+    // mehr angezeigt. Backend liefert das Feld weiter (fuer weekly_report)
+    // — wird aber im Frontend ignoriert.
 }
 
 // === STRATEGY PRESETS ===

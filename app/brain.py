@@ -799,36 +799,27 @@ def _run_brain_cycle_locked(portfolio):
     log.info("TRADE BRAIN - Analyse & Optimierung")
     log.info("=" * 55)
 
-    log.info("\n[1/7] Snapshot aufzeichnen...")
+    log.info("\n[1/5] Snapshot aufzeichnen...")
     # Direkt _record_snapshot_locked aufrufen (RLock erlaubt rekursiv, aber
     # so vermeiden wir doppelten Acquire-Overhead).
     _record_snapshot_locked(portfolio)
 
-    log.info("\n[2/7] Performance analysieren...")
+    log.info("\n[2/5] Performance analysieren...")
     analyze_instrument_performance()
 
-    log.info("\n[3/7] Marktregime erkennen...")
+    log.info("\n[3/5] Marktregime erkennen...")
     detect_market_regime()
 
-    log.info("\n[4/7] Regeln ableiten...")
-    new_rules = learn_rules()
+    # v37h Tab-Audit-Day-3 (13.05.2026): learn_rules() + optimize_strategy()
+    # aus Cycle entfernt. v6-Era Feature, ueberholt durch WFO + Optimizer-
+    # Cron + Scanner + Regime-Filter + Kelly + Sentiment-Layers. Aktivierungs-
+    # Logik war drei-fach geblockt (siehe Roadmap 13.05.). Funktionen
+    # bleiben in brain.py als Dead-Code (manueller Aufruf moeglich), werden
+    # aber nicht mehr automatisch im 5-Min-Cycle gerufen.
+    # Moderne Ersatz-Features in Q1-Backlog: E11 (Kelly-Vol-Targeting),
+    # E12 (Dynamic-Correlation), E13 (DD-Adaptive-Sizing).
 
-    log.info("\n[5/7] Walk-Forward Validierung...")
-    brain = load_brain()
-    wf_ok, wf_reason = walk_forward_validate(new_rules, brain)
-    log.info(f"  {wf_reason}")
-
-    log.info("\n[6/7] Strategie optimieren...")
-    if wf_ok:
-        changed = optimize_strategy()
-        if changed:
-            log.info("  -> Strategie wurde angepasst!")
-        else:
-            log.info("  -> Keine Anpassung noetig")
-    else:
-        log.info("  -> Walk-Forward hat Aenderungen abgelehnt")
-
-    log.info("\n[7/7] Parameter-Analyse...")
+    log.info("\n[4/5] Parameter-Analyse...")
     param_analysis = analyze_parameter_performance()
     if param_analysis:
         for regime, perf in param_analysis.items():
@@ -837,9 +828,12 @@ def _run_brain_cycle_locked(portfolio):
 
     report = generate_performance_report()
 
+    log.info("\n[5/5] Sortino-Ratio + Backup...")
     # Sortino Ratio ergaenzen
     try:
         from app.execution import calculate_sortino_ratio
+        # v37h: brain hier neu laden (war frueher im learn_rules/wf-Block)
+        brain = load_brain()
         snapshots = brain.get("performance_snapshots", [])
         if len(snapshots) > 2:
             daily_returns = []
