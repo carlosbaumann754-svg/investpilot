@@ -417,16 +417,67 @@ def _learn_rules_locked():
                 "created": datetime.now().isoformat(),
             })
 
-    brain["learned_rules"].extend(new_rules)
+    # v37h Tab-Audit-Day-3 (13.05.2026): Deduplication-Layer.
+    # Vor-Fix: learn_rules wurde alle ~5 Min vom Brain-Cycle aufgerufen.
+    # Bei Bear-Phase entstand JEDESMAL ein neuer REGIME_ADJUSTMENT-Eintrag
+    # — Carlos sah 9x dieselbe Regel innerhalb 40 Min am 05.05. (19:13-19:53).
+    # Fix: pruefe (type, reason, instrument_id) gegen existierende Rules
+    # juenger als 24h. Wenn match -> skip (kein Duplikat). Wenn alt ->
+    # erlaubt (= sinnvolle Erinnerung nach 1 Tag, falls Bear-Phase persistiert).
+    existing = brain.get("learned_rules", [])
+    deduplicated_new = []
+    for nr in new_rules:
+        if not _is_duplicate_rule(existing + deduplicated_new, nr, max_age_hours=24):
+            deduplicated_new.append(nr)
+        else:
+            log.info(f"  SKIP DUPLIKAT-Regel: {nr['type']} - {nr['reason']}")
+
+    brain["learned_rules"].extend(deduplicated_new)
     if len(brain["learned_rules"]) > 50:
         brain["learned_rules"] = brain["learned_rules"][-50:]
 
     save_brain(brain)
 
-    for r in new_rules:
+    for r in deduplicated_new:
         log.info(f"  NEUE REGEL: {r['type']} - {r['reason']} (Conf: {r.get('confidence', 0):.0%})")
 
-    return new_rules
+    return deduplicated_new
+
+
+def _is_duplicate_rule(existing: list, new_rule: dict, max_age_hours: int = 24) -> bool:
+    """v37h: Pruefe ob new_rule semantisch identisch mit einer existing-Regel
+    juenger als max_age_hours ist.
+
+    Match-Kriterien: (type, reason, instrument_id). Wenn die letzte gleiche
+    Regel aelter als max_age_hours ist, gilt das NICHT als Duplikat — Bot
+    soll periodisch erinnern wenn Marktlage persistiert.
+    """
+    from datetime import datetime, timedelta
+    try:
+        cutoff = datetime.now() - timedelta(hours=max_age_hours)
+    except Exception:
+        return False
+    for r in existing:
+        if not isinstance(r, dict):
+            continue
+        if r.get("type") != new_rule.get("type"):
+            continue
+        if r.get("reason") != new_rule.get("reason"):
+            continue
+        # Symbol-spezifisch: instrument_id muss matchen (None==None auch ok)
+        if r.get("instrument_id") != new_rule.get("instrument_id"):
+            continue
+        try:
+            created_str = r.get("created", "")
+            created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            if created.tzinfo is not None:
+                created = created.replace(tzinfo=None)
+            if created < cutoff:
+                continue  # alt -> Duplikat erlaubt (Erinnerung)
+            return True  # frisch -> Duplikat verhindern
+        except Exception:
+            continue
+    return False
 
 
 # ============================================================
