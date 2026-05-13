@@ -1005,7 +1005,11 @@
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>Metrik</th><th>In-Sample</th><th>Out-of-Sample</th></tr>
+                        <tr>
+                            <th>Metrik<span class="tip" data-tip="Die jeweilige Kennzahl (Sharpe, Drawdown, Win-Rate etc.).">?</span></th>
+                            <th>In-Sample<span class="tip" data-tip="Wert auf dem Trainings-Zeitraum den der Bot 'gesehen' hat. Hier sollte er gut sein — sonst funktioniert die Strategie generell nicht.">?</span></th>
+                            <th>Out-of-Sample<span class="tip" data-tip="Wert auf dem unbekannten Validierungs-Zeitraum. Der entscheidende Test: wenn OOS deutlich schlechter als IS = Bot hat 'auswendig gelernt' (Overfitting), Strategie taugt nicht. Wenn beide aehnlich gut = robuste Edge.">?</span></th>
+                        </tr>
                     </thead>
                     <tbody id="bt-wf-table"></tbody>
                 </table>
@@ -1023,7 +1027,12 @@
             <div class="card-title">Kelly Sweep Ergebnisse<span class="tip" data-tip="Vergleich verschiedener Risiko-Stufen: Wie viel Prozent des Kontos der Bot pro Trade einsetzt. Hoeherer Wert = mehr Rendite-Chance, aber auch groessere Verluste in Pechstraehnen. Die gruen markierte Zeile ist der aktuell genutzte Wert.">?</span></div>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>Kelly k</th><th>Return</th><th>Sharpe</th><th>Max DD</th></tr></thead>
+                    <thead><tr>
+                        <th>Kelly k<span class="tip" data-tip="Risk-Faktor fuer Position-Sizing. Hoeher = aggressivere Wetten. Aktueller Live-Wert ist gruen markiert.">?</span></th>
+                        <th>Return<span class="tip" data-tip="Backtest-Total-Return ueber den getesteten Zeitraum mit diesem Kelly-Wert.">?</span></th>
+                        <th>Sharpe<span class="tip" data-tip="Risk-Adjusted-Return. Ueber 1 gut, ueber 2 sehr gut. Optimum suchen bei Sharpe-Plateau.">?</span></th>
+                        <th>Max DD<span class="tip" data-tip="Maximaler Drawdown (Spitze-zu-Tief-Verlust). Bei hoeherem k waechst auch DD — Trade-off Return vs Risiko.">?</span></th>
+                    </tr></thead>
                     <tbody id="kelly-sweep-table"></tbody>
                 </table>
             </div>
@@ -1044,7 +1053,12 @@
                 <div class="card-title" style="color:var(--green)">Top 5 Trades<span class="tip" data-tip="Die 5 profitabelsten Trades aus dem Backtest. Zeigt welche Assets und Situationen besonders gut funktioniert haben.">?</span></div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>Symbol</th><th>P/L%</th><th>Tage</th><th>Exit</th></tr></thead>
+                        <thead><tr>
+                            <th>Symbol<span class="tip" data-tip="Ticker des Wertpapiers.">?</span></th>
+                            <th>P/L%<span class="tip" data-tip="Prozentuale Rendite des Trades (entry zu exit).">?</span></th>
+                            <th>Tage<span class="tip" data-tip="Haltedauer in Kalendertagen.">?</span></th>
+                            <th>Exit<span class="tip" data-tip="Wie der Trade beendet wurde (Stop-Loss, Take-Profit, Trailing, Time-Stop etc.).">?</span></th>
+                        </tr></thead>
                         <tbody id="bt-best-table"></tbody>
                     </table>
                 </div>
@@ -1053,7 +1067,12 @@
                 <div class="card-title" style="color:var(--red)">Worst 5 Trades<span class="tip" data-tip="Die 5 schlechtesten Trades aus dem Backtest. Wichtig zum Lernen: Welche Situationen sollte der Bot in Zukunft vermeiden?">?</span></div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>Symbol</th><th>P/L%</th><th>Tage</th><th>Exit</th></tr></thead>
+                        <thead><tr>
+                            <th>Symbol<span class="tip" data-tip="Ticker des Wertpapiers.">?</span></th>
+                            <th>P/L%<span class="tip" data-tip="Prozentuale Rendite des Trades (entry zu exit).">?</span></th>
+                            <th>Tage<span class="tip" data-tip="Haltedauer in Kalendertagen.">?</span></th>
+                            <th>Exit<span class="tip" data-tip="Wie der Trade beendet wurde (Stop-Loss, Take-Profit, Trailing, Time-Stop etc.).">?</span></th>
+                        </tr></thead>
                         <tbody id="bt-worst-table"></tbody>
                     </table>
                 </div>
@@ -1125,7 +1144,11 @@
             <div class="card-title">Parameter-Aenderungen<span class="tip" data-tip="Zeigt welche Einstellungen vom Optimizer geaendert wurden und wie. So siehst du genau, was sich an der Strategie geaendert hat.">?</span></div>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>Parameter</th><th>Vorher</th><th>Nachher</th></tr></thead>
+                    <thead><tr>
+                        <th>Parameter<span class="tip" data-tip="Welche Einstellung der Optimizer angepasst hat (z.B. stop_loss_pct, take_profit_pct, min_scanner_score).">?</span></th>
+                        <th>Vorher<span class="tip" data-tip="Wert VOR dem Optimizer-Run.">?</span></th>
+                        <th>Nachher<span class="tip" data-tip="Wert NACH dem Optimizer-Run (= aktuell live, sofern nicht WFO-locked).">?</span></th>
+                    </tr></thead>
                     <tbody id="opt-changes-table"></tbody>
                 </table>
             </div>
@@ -1135,7 +1158,11 @@
             <div class="card-title">Optimierungs-Historie<span class="tip" data-tip="Liste aller bisherigen Optimizer-Laeufe mit Datum und was geaendert wurde. Hilft beim Nachvollziehen wie sich die Strategie im Laufe der Zeit entwickelt hat.">?</span></div>
             <div class="table-wrap">
                 <table>
-                    <thead><tr><th>Datum</th><th>Aktion</th><th>Aenderungen</th></tr></thead>
+                    <thead><tr>
+                        <th>Datum<span class="tip" data-tip="Wann der jeweilige Optimizer-Run gelaufen ist (typisch Sonntag 08:00 CEST via Cron).">?</span></th>
+                        <th>Aktion<span class="tip" data-tip="Was der Optimizer entschieden hat: 'applied' = neue Settings live, 'no_change' = alte besser, 'rejected' = Sicherheits-Test (OOS-Sharpe-Decay, Drift-Detection) verhindert Apply.">?</span></th>
+                        <th>Aenderungen<span class="tip" data-tip="Konkret welche Parameter wie geaendert wurden — Kurz-Zusammenfassung. Volle Details in Optimizer-Card oben.">?</span></th>
+                    </tr></thead>
                     <tbody id="opt-history-table"></tbody>
                 </table>
             </div>
@@ -1331,7 +1358,7 @@
     <!-- === LOGS TAB === -->
     <div id="tab-logs" class="tab-content">
         <div class="card">
-            <div class="card-title">Trading Log (Live)</div>
+            <div class="card-title">Trading Log (Live)<span class="tip" data-tip="Live-Stream der letzten 200 Bot-Log-Zeilen. INFO = normale Aktivitaet, WARNING = potentielle Probleme (z.B. yfinance-Hickup), ERROR = echte Fehler. Aktualisiert alle 30 Sek wenn dieser Tab aktiv ist. Vollstaendige Logs auf VPS via 'docker logs investpilot' oder 'tail /var/log/investpilot/*.log'.">?</span></div>
             <div class="log-viewer" id="log-viewer">Lade Logs...</div>
         </div>
     </div>
