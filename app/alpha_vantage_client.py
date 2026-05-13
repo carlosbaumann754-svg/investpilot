@@ -70,12 +70,32 @@ def is_available() -> bool:
     return requests is not None and bool(_get_api_key())
 
 
+_MAX_WAIT_HARD_CAP_SEC = 15.0  # v37h Option-C: niemals länger als 15s blockieren
+
+
 def _rate_limit_wait() -> None:
-    """Free-Tier: max 5 calls/min. Schutz vor 429."""
+    """Free-Tier: max 5 calls/min. Schutz vor 429.
+
+    v37h Option-C Phase 1 (13.05.2026): Hard-Cap auf 15s. Vorher konnte
+    time.sleep(_MIN_INTERVAL_SEC - delta) bis zu 13s blockieren wenn
+    Caller mehrfach hintereinander aufrief. Bei Trade-Path-Integration
+    (Option-C aktiviert AV als primary fuer Forex) wuerde das ganze
+    Bot-Cycle 13s einfrieren. Hard-Cap verhindert Worst-Case.
+
+    Falls Cap erreicht: Caller bekommt None zurueck (im Aufrufer-
+    Pattern: nach _rate_limit_wait dann GET-Call. Wenn Quote AV-rate-
+    limited ist -> Fallback-Chain greift sofort statt 13s zu warten).
+    """
     global _last_call_ts
     delta = time.time() - _last_call_ts
     if delta < _MIN_INTERVAL_SEC:
-        time.sleep(_MIN_INTERVAL_SEC - delta)
+        wait_needed = _MIN_INTERVAL_SEC - delta
+        # Hard-Cap: niemals laenger als _MAX_WAIT_HARD_CAP_SEC blockieren
+        wait_actual = min(wait_needed, _MAX_WAIT_HARD_CAP_SEC)
+        if wait_actual >= _MAX_WAIT_HARD_CAP_SEC:
+            log.warning("AV rate-limit-wait gecappt auf %.1fs (wollte %.1fs) — "
+                        "Fallback-Chain wird greifen", wait_actual, wait_needed)
+        time.sleep(wait_actual)
     _last_call_ts = time.time()
 
 

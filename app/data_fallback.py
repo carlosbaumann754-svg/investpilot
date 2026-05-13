@@ -198,3 +198,165 @@ def get_active_sources() -> dict[str, bool]:
     except Exception:
         pass
     return sources
+
+
+# ============================================================
+# v37h Option-C (13.05.2026): Per-Asset-Class-Routing
+# ============================================================
+#
+# Wo Option A (Fallback-Chain) jede Asset-Klasse durch die gleiche
+# yfinance->AV->Polygon->Finnhub-Sequenz schickt, nutzt Option C die
+# Staerken jeder Quelle spezifisch:
+#
+# - stocks/etf  -> yfinance + Polygon parallel CROSS-VALIDATION
+#                  (Anomaly-Alert wenn Spread > 0.5%)
+# - forex       -> Alpha Vantage primary (Forex-Spezialist, dann yfinance fallback)
+# - crypto      -> Polygon primary (24/7 statt yfinance-WE-Probleme), yfinance fallback
+# - commodities -> Alpha Vantage + Polygon dual-source (Futures-Daten-Staerke)
+#
+# Aktivierung: fetch_quote_for_asset_class(symbol, asset_class) — additiv
+# zu fetch_quote_with_fallback (Option A bleibt fuer Legacy-Aufrufer).
+#
+# Soak-Test-Plan: Mi 13.-So 17.05. — bei 0 Anomaly-Alert-False-Positives
+# in Paper-Phase => Bot's Pricing-Pfad migrieren von Option A auf Option C
+# am Mo 19.05. nach Cutover-Hard-Gate-Check.
+
+
+_ASSET_CLASS_ROUTES: dict[str, list[str]] = {
+    "stocks":      ["yfinance", "polygon", "alpha_vantage", "finnhub"],
+    "etf":         ["yfinance", "polygon", "alpha_vantage", "finnhub"],
+    "forex":       ["alpha_vantage", "yfinance", "polygon"],
+    "crypto":      ["polygon", "yfinance", "alpha_vantage"],
+    "commodities": ["alpha_vantage", "polygon", "yfinance"],
+    "unknown":     ["yfinance", "alpha_vantage", "polygon", "finnhub"],
+}
+
+# Cross-Validation-Asset-Classes: zwei parallele Quellen, Spread-Check.
+_CROSS_VALIDATION_CLASSES = frozenset({"stocks", "etf"})
+
+# Spread-Schwellwert fuer Anomaly-Alert (Prozent).
+_QUOTE_SPREAD_THRESHOLD_PCT = 0.5
+
+# Pushover-Throttle: gleiche Symbol+Anomaly nicht oefter als 1x pro Stunde.
+_ANOMALY_ALERT_LAST: dict[str, float] = {}
+_ANOMALY_ALERT_INTERVAL_SEC = 3600
+
+
+def _fetch_from_source(source: str, symbol: str) -> Optional[float]:
+    """Dispatcher: einzelne Quelle aufrufen, valid price zurueck oder None."""
+    try:
+        if source == "yfinance":
+            return _try_yfinance(symbol)
+        if source == "alpha_vantage":
+            return _try_alpha_vantage(symbol)
+        if source == "polygon":
+            return _try_polygon(symbol)
+        if source == "finnhub":
+            return _try_finnhub(symbol)
+    except Exception as e:
+        log.warning("Source %s failed for %s: %s", source, symbol, e)
+    return None
+
+
+def _check_quote_spread(price_a: float, source_a: str,
+                       price_b: float, source_b: str,
+                       symbol: str,
+                       threshold_pct: float = _QUOTE_SPREAD_THRESHOLD_PCT) -> bool:
+    """Pruefe Cross-Validation-Spread. True wenn ANOMALIE detectiert.
+
+    Spread berechnet als prozentuale Abweichung vs Mittelwert. Bei
+    Anomaly: log.warning + Pushover-Alert via send_alert (Throttle 1h
+    pro Symbol).
+    """
+    if not (price_a and price_b and price_a > 0 and price_b > 0):
+        return False
+    avg = (price_a + price_b) / 2
+    spread_pct = abs(price_a - price_b) / avg * 100
+    if spread_pct <= threshold_pct:
+        return False
+    # ANOMALIE
+    log.warning(
+        "QUOTE-ANOMALY %s: %s=$%.4f vs %s=$%.4f (spread %.2f%% > threshold %.2f%%)",
+        symbol, source_a, price_a, source_b, price_b, spread_pct, threshold_pct,
+    )
+    # Pushover-Alert mit Throttle
+    import time as _t
+    now = _t.time()
+    last = _ANOMALY_ALERT_LAST.get(symbol, 0)
+    if now - last >= _ANOMALY_ALERT_INTERVAL_SEC:
+        _ANOMALY_ALERT_LAST[symbol] = now
+        try:
+            from app.alerts import send_alert
+            msg = (f"⚠️ <b>QUOTE-SPREAD-ANOMALY</b>: {symbol}\n"
+                   f"{source_a}: ${price_a:.4f}\n"
+                   f"{source_b}: ${price_b:.4f}\n"
+                   f"Spread: {spread_pct:.2f}% (Threshold {threshold_pct:.2f}%)\n"
+                   f"Trade-Path sollte vorsichtshalber blocken bis Spread schliesst.")
+            send_alert(msg, level="WARNING")
+        except Exception as e:
+            log.debug("send_alert (quote-anomaly) failed: %s", e)
+    return True
+
+
+def fetch_quote_for_asset_class(symbol: str, asset_class: Optional[str] = None,
+                                cross_validate: bool = True) -> Optional[float]:
+    """v37h Option-C (13.05.2026): Per-Asset-Class-Routing fuer Quotes.
+
+    Args:
+        symbol: Ticker (z.B. 'AAPL', 'EUR=X', 'BTC-USD').
+        asset_class: 'stocks' / 'etf' / 'forex' / 'crypto' / 'commodities'.
+                     None oder 'unknown' -> Generic Fallback-Chain.
+        cross_validate: bei stocks/etf eine zweite Quelle parallel
+                        aufrufen + Anomaly-Spread-Check (Default True).
+
+    Returns:
+        Float-Preis oder None wenn alle Quellen failed.
+
+    Aktivierung-Strategie: additiv zu fetch_quote_with_fallback (Option
+    A bleibt fuer Legacy-Aufrufer). Bot-Code muss EXPLIZIT auf
+    fetch_quote_for_asset_class umschalten — daher Soak-Test-Phase
+    13.-19.05. ohne Live-Trade-Impact.
+    """
+    if not symbol:
+        return None
+
+    asset_class = (asset_class or "unknown").lower()
+    route = _ASSET_CLASS_ROUTES.get(asset_class, _ASSET_CLASS_ROUTES["unknown"])
+
+    # Cross-Validation-Modus fuer stocks/etf
+    if cross_validate and asset_class in _CROSS_VALIDATION_CLASSES and len(route) >= 2:
+        primary_src = route[0]
+        secondary_src = route[1]
+        primary_price = _fetch_from_source(primary_src, symbol)
+        secondary_price = _fetch_from_source(secondary_src, symbol)
+        if _is_valid_price(primary_price) and _is_valid_price(secondary_price):
+            # Beide Quellen liefern -> Cross-Validation-Check
+            _check_quote_spread(
+                primary_price, primary_src,
+                secondary_price, secondary_src,
+                symbol,
+            )
+            # Primary nutzen (yfinance) auch bei Anomalie — Alert ist
+            # Sichtbarkeit, Block-Entscheidung im Trade-Path (separater Layer).
+            return float(primary_price)
+        # Eine Quelle leer -> auf die andere zurueckfallen
+        if _is_valid_price(primary_price):
+            return float(primary_price)
+        if _is_valid_price(secondary_price):
+            log.info("Cross-Val %s: primary %s leer, nutze secondary %s",
+                     symbol, primary_src, secondary_src)
+            return float(secondary_price)
+        # Beide leer -> tiefer in die Chain
+        remaining = route[2:]
+    else:
+        remaining = route
+
+    # Sequential Fallback durch verbleibende Quellen
+    for src in remaining:
+        price = _fetch_from_source(src, symbol)
+        if _is_valid_price(price):
+            return float(price)
+
+    log.error("fetch_quote_for_asset_class %s (class=%s): ALLE Quellen failed",
+              symbol, asset_class)
+    return None

@@ -106,29 +106,50 @@ def _get(path: str, params: Optional[dict[str, Any]] = None) -> Optional[dict]:
 
 
 def fetch_quote(symbol: str) -> Optional[float]:
-    """Vortag-Close-Price.
+    """Vortag-Close-Price (backward-compat wrapper).
 
-    Free-Tier-kompatibel via /v2/aggs/ticker/{symbol}/prev. Liefert
-    den Schlusskurs des letzten geschlossenen Handelstags. Fuer Live-
-    Trading nicht ideal, aber als Fallback wenn yfinance ausfaellt
-    (z.B. Wochenende) ein guter Reality-Check.
+    v37h Option-C Phase 1: Wrapper um fetch_quote_with_meta() der nur
+    den Preis zurueckgibt (Legacy-Signatur). Neuer Code sollte
+    fetch_quote_with_meta() nutzen fuer Staleness-Awareness.
+    """
+    result = fetch_quote_with_meta(symbol)
+    return result[0] if result else None
 
-    Hinweis: /v2/last/trade ist Polygon-Paid-Tier-only (403 fuer Free).
+
+def fetch_quote_with_meta(symbol: str) -> Optional[tuple[float, dict]]:
+    """v37h Option-C Phase 1 (13.05.2026): Vortag-Close-Price MIT Metadata.
+
+    Returnt (price, metadata)-Tuple statt nur price, damit Caller
+    Staleness erkennen kann. Bei Polygon Free-Tier ist /prev der Vortag-
+    Close — fuer Live-Trading-Decisions ist das stale wenn der heutige
+    Markt offen ist. Metadata bringt 'is_stale'-Flag + 'as_of_date'
+    sodass Trade-Path entscheiden kann ob Cross-Validation gegen
+    yfinance/AV nuetzlich ist.
 
     Args:
         symbol: e.g. 'AAPL'
 
     Returns:
-        Float-Close des Vortags oder None.
+        (price, metadata) tuple oder None.
+        metadata-keys:
+          'source': 'polygon'
+          'endpoint': '/v2/aggs/prev'
+          'as_of_date': YYYY-MM-DD string (Vortag, vom Bar)
+          'is_stale': bool — True wenn Markt heute offen ist und Bar
+                       von gestern ist (Live-Decision-relevant)
+          'volume': int (Vortag-Volume, hilfreich fuer Liquidity-Check)
     """
     if not symbol:
         return None
     now = time.time()
     cached = _quote_cache.get(symbol)
     if cached and now - cached["fetched_at"] < _QUOTE_CACHE_TTL:
-        return cached["value"]
+        # Cache enthaelt jetzt {value, meta, fetched_at}
+        if "meta" in cached:
+            return (cached["value"], cached["meta"])
+        # Legacy-Cache-Eintrag ohne meta -> neu fetchen
+        pass
 
-    # /v2/aggs/ticker/{symbol}/prev — Free-Tier-OK
     data = _get(f"/v2/aggs/ticker/{symbol.upper()}/prev",
                 {"adjusted": "true"})
     if not data:
@@ -136,15 +157,36 @@ def fetch_quote(symbol: str) -> Optional[float]:
     results = data.get("results") or []
     if not results:
         return None
-    # results ist Array mit einem Eintrag fuer den Vortag
     last_bar = results[0]
     price = last_bar.get("c")  # 'c' = close
     if price is None:
         return None
     try:
         price_f = float(price)
-        _quote_cache[symbol] = {"value": price_f, "fetched_at": now}
-        return price_f
+        # Metadata sammeln
+        from datetime import datetime, timezone
+        bar_ts_ms = last_bar.get("t")  # Unix-ms timestamp
+        as_of_date = ""
+        if bar_ts_ms:
+            try:
+                as_of_date = datetime.fromtimestamp(
+                    bar_ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        # is_stale: wenn as_of_date != heute UTC, ist es stale
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        is_stale = bool(as_of_date and as_of_date != today)
+        meta = {
+            "source": "polygon",
+            "endpoint": "/v2/aggs/prev",
+            "as_of_date": as_of_date,
+            "is_stale": is_stale,
+            "volume": int(last_bar.get("v") or 0),
+        }
+        _quote_cache[symbol] = {
+            "value": price_f, "meta": meta, "fetched_at": now,
+        }
+        return (price_f, meta)
     except (ValueError, TypeError):
         return None
 
