@@ -110,10 +110,12 @@ def test_detect_drift_finds_mismatch(temp_data_dir):
         "scanner": {"min_scanner_score": None},
     }
     drifts = detect_drift(config)
-    assert "stop_loss_pct" in drifts
-    assert drifts["stop_loss_pct"]["expected"] == -3.0
-    assert drifts["stop_loss_pct"]["actual"] == -5
-    assert "min_scanner_score" in drifts
+    # drifts ist keyed by config_path (Q3-1 fix), nicht param_name
+    assert "demo_trading.stop_loss_pct" in drifts
+    assert drifts["demo_trading.stop_loss_pct"]["expected"] == -3.0
+    assert drifts["demo_trading.stop_loss_pct"]["actual"] == -5
+    assert drifts["demo_trading.stop_loss_pct"]["param"] == "stop_loss_pct"
+    assert "scanner.min_scanner_score" in drifts
 
 
 def test_detect_drift_no_drift(temp_data_dir):
@@ -123,7 +125,8 @@ def test_detect_drift_no_drift(temp_data_dir):
     ] * 5)
 
     config = {
-        "demo_trading": {"stop_loss_pct": -3.0},
+        # min_scanner_score muss in BEIDEN Pfaden matchen (Q3-1 Tab-Audit-Day-2)
+        "demo_trading": {"stop_loss_pct": -3.0, "min_scanner_score": 40},
         "scanner": {"min_scanner_score": 40},
     }
     assert detect_drift(config) == {}
@@ -154,9 +157,12 @@ def test_enforce_locks_corrects_drift(temp_data_dir):
         "scanner": {"min_scanner_score": None},
     }
     changes = enforce_locks(config)
-    assert len(changes) == 2
+    # 3 changes: stop_loss_pct + scanner.min_scanner_score + demo_trading.min_scanner_score
+    # (Q3-1: zweiter Pfad wird konsistent enforced damit Backtester/Live-Scanner synchron sind)
+    assert len(changes) == 3
     assert config["demo_trading"]["stop_loss_pct"] == -3.0
     assert config["scanner"]["min_scanner_score"] == 40
+    assert config["demo_trading"]["min_scanner_score"] == 40
     # take_profit unangetastet
     assert config["demo_trading"]["take_profit_pct"] == 18
     # Audit-Trail dokumentiert
@@ -173,7 +179,8 @@ def test_enforce_locks_idempotent(temp_data_dir):
     config = {"demo_trading": {"stop_loss_pct": -5}, "scanner": {"min_scanner_score": None}}
 
     changes_1 = enforce_locks(config)
-    assert len(changes_1) == 2
+    # 3 changes: stop_loss_pct + beide min_scanner_score-Pfade (Q3-1)
+    assert len(changes_1) == 3
     changes_2 = enforce_locks(config)
     assert len(changes_2) == 0
 
@@ -282,8 +289,9 @@ def test_boot_drift_check_detects_and_restores(temp_data_dir, monkeypatch):
     # Boot-Check fires
     from app.wfo_lock import boot_drift_check
     result = boot_drift_check(send_alert=False, auto_restore=True)
-    assert result["drifts_detected"] == 2
-    assert len(result["restored"]) == 2
+    # 3 Drifts: stop_loss + beide min_scanner_score-Pfade (Q3-1)
+    assert result["drifts_detected"] == 3
+    assert len(result["restored"]) == 3
 
     # Config nun korrigiert
     persisted = load_config()

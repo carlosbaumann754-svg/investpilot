@@ -161,8 +161,12 @@ def detect_drift(config: dict) -> dict[str, dict]:
     """Vergleicht Config gegen WFO-Locks.
 
     Returns:
-        Dict {param_name: {"expected": <wfo>, "actual": <config>, "config_path": ...}}
+        Dict {config_path: {"expected": <wfo>, "actual": <config>, "param": ..., "config_path": ...}}
         nur fuer Keys mit Drift. Leeres Dict wenn alles passt oder keine WFO-Daten.
+
+    Key is config_path (not param_name), weil mehrere LOCKED_KEYS-Eintraege
+    denselben param_name teilen koennen (z.B. min_scanner_score wird sowohl in
+    scanner.* als auch in demo_trading.* gelockt — Q3-1 Tab-Audit-Day-2).
     """
     locked = get_wfo_locked_params()
     if not locked:
@@ -177,14 +181,14 @@ def detect_drift(config: dict) -> dict[str, dict]:
         # Float-Vergleich tolerant
         if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
             if abs(float(expected) - float(actual)) > 1e-6:
-                drifts[param_name] = {
+                drifts[config_path] = {
                     "expected": expected, "actual": actual,
-                    "config_path": config_path,
+                    "param": param_name, "config_path": config_path,
                 }
         elif expected != actual:
-            drifts[param_name] = {
+            drifts[config_path] = {
                 "expected": expected, "actual": actual,
-                "config_path": config_path,
+                "param": param_name, "config_path": config_path,
             }
     return drifts
 
@@ -207,13 +211,13 @@ def enforce_locks(config: dict) -> list[dict]:
         return []
 
     changes = []
-    for param_name, drift in drifts.items():
+    for drift in drifts.values():
         config_path = drift["config_path"]
         old = drift["actual"]
         new = drift["expected"]
         _set_nested(config, config_path, new)
         changes.append({
-            "param": param_name,
+            "param": drift["param"],
             "path": config_path,
             "old": old,
             "new": new,
@@ -275,8 +279,8 @@ def boot_drift_check(*, send_alert: bool = True, auto_restore: bool = True) -> d
 
     # Drift-Details fuer Logs + Alerts
     drift_summary = ", ".join(
-        f"{p}: live={d['actual']} aber WFO empfiehlt {d['expected']}"
-        for p, d in drifts.items()
+        f"{d['param']}@{d['config_path']}: live={d['actual']} aber WFO empfiehlt {d['expected']}"
+        for d in drifts.values()
     )
     logger.warning(f"Boot-Drift-Check: {len(drifts)} Drift(s) — {drift_summary}")
 
