@@ -31,6 +31,7 @@
 - [ ] Final-Backup gezogen: Doppelklick auf `investpilot_local_backups\Pull-BotState.cmd` (zieht `risk_state.json` + `brain_state.json` + `config.json` + `wfo_status.json` frisch vom VPS, zusaetzlich zum nightly tar.gz-Auto-Cron)
 - [ ] config.json broker-Setting checken
 - [ ] Dashboard-Cutover-Readiness-Card alle 8/8 gruen oder gelbe explizit dokumentiert
+- [ ] **Pytest-Suite-Daily-Check Mo-Do 19.-22.05.** — `python -m pytest -q` muss jeden Tag im End-Check-Fenster gruen sein. Lehre aus 14.05.: WFO-Lock-Bug (5 silent Test-Failures) blieb 2 Tage unentdeckt weil Self-Test die pytest-Suite nicht laufen laesst und Carlos pytest nur explizit bei Major-Changes triggerte. **Defensive:** taeglich um 09:00 lokal `cd investpilot && git pull && python -m pytest -q` ausfuehren. Bei FAIL: Cutover verschieben (NO-GO).
 
 ---
 

@@ -17,11 +17,26 @@ from app.broker_base import BrokerBase, get_broker
 
 
 def test_etoro_implements_broker_base():
-    """EtoroClient muss alle abstract Methoden implementieren (sonst TypeError beim init)."""
+    """EtoroClient muss alle abstract Methoden implementieren (sonst TypeError beim init).
+
+    v37cx (05.05.2026): EtoroClient ist deprecated — instanziieren wirft
+    RuntimeError ausser bei explizitem _v37cx_allow=True (Escape-Hatch
+    fuer Tests + falls Carlos je zurueck auf eToro wechseln will).
+    """
     from app.etoro_client import EtoroClient
-    client = EtoroClient({"etoro": {"public_key": "x", "demo_private_key": "y"}})
+    client = EtoroClient(
+        {"etoro": {"public_key": "x", "demo_private_key": "y"}},
+        _v37cx_allow=True,
+    )
     assert isinstance(client, BrokerBase)
     assert client.broker_name == "etoro"
+
+
+def test_etoro_default_raises_after_v37cx_deprecation():
+    """v37cx Regression: EtoroClient() ohne Override muss RuntimeError werfen."""
+    from app.etoro_client import EtoroClient
+    with pytest.raises(RuntimeError, match="v37cx"):
+        EtoroClient({"etoro": {"public_key": "x", "demo_private_key": "y"}})
 
 
 def test_ibkr_implements_broker_base():
@@ -48,10 +63,16 @@ def test_ibkr_write_ops_implemented_w3():
     assert IbkrBroker.close_position.__qualname__.startswith("IbkrBroker.")
 
 
-def test_factory_routes_etoro():
+def test_factory_routes_etoro_raises_after_v37cx():
+    """v37cx: explizites broker=etoro wirft RuntimeError (EtoroClient deprecated).
+
+    Vorher (W2-Migration-Zeit) hat get_broker() einen EtoroClient zurueckgegeben.
+    Seit v37cx (05.05.2026) wirft EtoroClient.__init__ RuntimeError ausser bei
+    _v37cx_allow=True — get_broker() reicht diesen Override nicht durch.
+    """
     cfg = {"broker": "etoro", "etoro": {"public_key": "x", "demo_private_key": "y"}}
-    b = get_broker(cfg)
-    assert b.broker_name == "etoro"
+    with pytest.raises(RuntimeError, match="v37cx"):
+        get_broker(cfg)
 
 
 def test_factory_routes_ibkr():
@@ -60,11 +81,16 @@ def test_factory_routes_ibkr():
     assert b.broker_name == "ibkr"
 
 
-def test_factory_default_is_etoro():
-    """Backwards-compat: ohne `broker`-key wird etoro gewaehlt."""
-    cfg = {"etoro": {"public_key": "x", "demo_private_key": "y"}}
+def test_factory_default_is_ibkr_after_v37cx():
+    """v37cx (05.05.2026): Default geaendert von etoro auf ibkr.
+
+    Begruendung im broker_base.py: 'Fail-safe: bei fehlender Config -> IBKR
+    (Paper) statt eToro. Verhindert dass eine versehentliche Config-Korruption
+    den Bot zurueck zu eToro zwingt.'
+    """
+    cfg = {"ibkr": {"port": 4004}}  # kein 'broker'-key
     b = get_broker(cfg)
-    assert b.broker_name == "etoro"
+    assert b.broker_name == "ibkr"
 
 
 def test_factory_unknown_broker_raises():

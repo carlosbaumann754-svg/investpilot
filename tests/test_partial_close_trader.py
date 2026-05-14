@@ -33,13 +33,21 @@ except ImportError:
 # BrokerBase Default-Implementation
 # ============================================================
 
-@pytest.mark.skipif(not _HAS_IBKR, reason="ib_insync nicht installiert (nur Container)")
 def test_broker_base_partial_close_returns_unsupported():
-    """Default-Impl: alle nicht-IBKR-Broker bekommen _unsupported."""
+    """Default-Impl: alle nicht-IBKR-Broker bekommen _unsupported.
+
+    v37h+1 (14.05.2026): Skip-Decorator entfernt — der Test prueft BrokerBase
+    direkt und braucht ib_insync gar nicht. Vorher fehlerhaft: _HAS_IBKR True
+    in der Voll-Suite (anderer Test mockt ib_insync in sys.modules) -> Test
+    lief -> _MinimalBroker fehlten neue abstract-Methoden. Jetzt: Skip raus,
+    _MinimalBroker um alle abstract-Methoden ergaenzt.
+    """
     from app.broker_base import BrokerBase
 
-    # BrokerBase ist abstract -> wir nutzen Subclass-Bypass
+    # BrokerBase ist abstract -> Subclass-Bypass mit allen abstract-Methoden
     class _MinimalBroker(BrokerBase):
+        broker_name = "minimal"
+
         def configured(self): return True
         def get_portfolio(self): return None
         def buy(self, *a, **kw): return None
@@ -49,6 +57,12 @@ def test_broker_base_partial_close_returns_unsupported():
         def get_instrument_info(self, iid): return None
         def get_quote(self, iid): return None
         def get_history(self, iid, **kw): return None
+        # v37h+1: neue abstract-Methoden seit dem Test
+        def get_available_cash(self): return 0.0
+        def get_equity(self): return 0.0
+        def get_instruments(self): return []
+        def get_pnl(self): return 0.0
+        def get_total_invested(self): return 0.0
 
     b = _MinimalBroker()
     result = b.partial_close("pos-1", 50.0)
