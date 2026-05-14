@@ -104,7 +104,9 @@
     "recovery_mode_max_leverage": 1,
     "concentration_penalty_enabled": true,
     "concentration_threshold": 70,
-    "concentration_size_reduction": 0.7
+    "concentration_size_reduction": 0.7,
+    "min_cash_reserve_chf": 500,
+    "min_cash_reserve_pct": 0.1
   },
   "min_expected_return_pct": 0.78,
   "multi_timeframe": {
@@ -320,7 +322,7 @@
     "wfo_param_restores": [
       {
         "timestamp": "2026-04-29T14:38:43.477555+00:00",
-        "reason": "WFO-Werte (SL=-3.0, min_scanner_score=40) wurden offenbar zurueckgesetzt zwischen 28.04. und 30.04. \u2014 vermutlich von Optimizer/ML-Training-Auto-Run der Cloud-Backup zurueckspielte. Re-Apply manuell durch User-Catch.",
+        "reason": "WFO-Werte (SL=-3.0, min_scanner_score=40) wurden offenbar zurueckgesetzt zwischen 28.04. und 30.04. — vermutlich von Optimizer/ML-Training-Auto-Run der Cloud-Backup zurueckspielte. Re-Apply manuell durch User-Catch.",
         "changes": {
           "stop_loss_pct": {
             "from": -5,

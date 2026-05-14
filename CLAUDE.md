@@ -1176,7 +1176,10 @@ Async-Saga zur Loesung von Loop-Konflikten zwischen FastAPI und ib_insync.
    4 W4-Bugs + W6-Hotfix v21 + W2-Port-4004
 5. **eToro-Container-Cleanup** — bereits clean, nichts zu tun
 6. **IBKR-Setup-Doku** (`docs/IBKR_SETUP.md`) — Quickstart + alle Bug-Hist + Cutover-Liste
-7. **Entnahme-Planer MVP** (`app/withdrawal_planner.py`) + Plan-Card im Dashboard
+7. ~~Entnahme-Planer MVP~~ — am 14.05.2026 ersetzt durch **Cash-Reserve**
+   (`app/cash_reserve.py`, Hybrid Floor + Pct, dauerhaft aktiver Buffer).
+   Carlos's Use-Case (Steuern, planbare Auslagen) ist mit Cash-Buffer
+   einfacher abgedeckt; W8-Auto-Liquidation des Planers wurde verworfen.
 8. **Universe-Reset-Button** (`POST /api/universe/reset` + Card-Button)
 9. **Asset-Class-Erweiterung im Resolver**: IND (Index Read-Only), FUT/CMDTY
    bewusst NotImplementedError mit klarer Begruendung

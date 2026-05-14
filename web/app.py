@@ -405,50 +405,55 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
 # API ENDPOINTS
 # ============================================================
 
-@app.get("/api/withdrawal/status")
-async def api_withdrawal_status(user=Depends(require_auth)):
-    """Status des aktiven Entnahme-Plans (Withdrawal Scheduler)."""
-    try:
-        from app.withdrawal_planner import get_status
-        return get_status()
-    except Exception as e:
-        log.error(f"Withdrawal-Status: {e}", exc_info=True)
-        return {"active": False, "error": f"{type(e).__name__}: {e}"}
+@app.get("/api/cash_reserve/status")
+async def api_cash_reserve_status(user=Depends(require_auth)):
+    """Status der Cash-Reserve (Hybrid Floor + Prozent).
 
-
-@app.post("/api/withdrawal/plan")
-async def api_withdrawal_plan(payload: dict, user=Depends(require_auth)):
-    """Neuen Entnahme-Plan erstellen (ueberschreibt alten falls vorhanden).
-
-    Payload: {"amount": float, "deadline": "YYYY-MM-DD", "strategy": "fifo", "notes": str}
+    Ersetzt v37h+1 (14.05.2026) den W7-Entnahme-Planer. Bot kauft nur
+    wenn nach Abzug der Reserve noch Cash verfuegbar ist. Auto-Refill
+    durch normale Sells.
     """
     try:
-        from app.withdrawal_planner import create_plan
-        plan = create_plan(
-            target_amount_usd=float(payload.get("amount", 0)),
-            deadline=str(payload.get("deadline", "")),
-            strategy=str(payload.get("strategy", "fifo")),
-            notes=str(payload.get("notes", "")),
+        from app.cash_reserve import get_status
+        # Live-Werte aus brain_state-Cache (loop-safe wie /api/portfolio).
+        equity_chf = None
+        cash_chf = None
+        try:
+            portfolio = _portfolio_from_brain_cache()
+            if portfolio:
+                equity_chf = portfolio.get("_base_net_liquidation") or portfolio.get("_equity")
+                cash_chf = portfolio.get("_base_total_cash") or portfolio.get("credit")
+        except Exception as e:
+            log.debug(f"Cash-Reserve Live-Portfolio nicht verfuegbar: {e}")
+        return get_status(available_cash_chf=cash_chf, equity_chf=equity_chf)
+    except Exception as e:
+        log.error(f"Cash-Reserve-Status: {e}", exc_info=True)
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/cash_reserve/update")
+async def api_cash_reserve_update(payload: dict, user=Depends(require_auth)):
+    """Aktualisiert Cash-Reserve-Settings.
+
+    Payload (beide optional):
+        {"floor_chf": float, "pct": float}
+        pct akzeptiert 0..0.5 (Dezimal) ODER 0..50 (Prozent) — auto-detect.
+    """
+    try:
+        from app.cash_reserve import update_reserve_settings
+        floor = payload.get("floor_chf")
+        pct = payload.get("pct")
+        if floor is None and pct is None:
+            return {"status": "noop", "message": "Weder floor_chf noch pct angegeben"}
+        status = update_reserve_settings(
+            floor_chf=float(floor) if floor is not None else None,
+            pct=float(pct) if pct is not None else None,
         )
-        return {"status": "ok", "plan": plan}
+        return {"status": "ok", "settings": status}
     except ValueError as e:
         return {"status": "error", "error": str(e)}
     except Exception as e:
-        log.error(f"Withdrawal-Plan-Create: {e}", exc_info=True)
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
-
-
-@app.delete("/api/withdrawal/plan")
-async def api_withdrawal_cancel(user=Depends(require_auth)):
-    """Aktiven Entnahme-Plan stornieren."""
-    try:
-        from app.withdrawal_planner import cancel_plan
-        plan = cancel_plan()
-        if plan is None:
-            return {"status": "noop", "message": "Kein aktiver Plan vorhanden"}
-        return {"status": "ok", "cancelled_plan": plan}
-    except Exception as e:
-        log.error(f"Withdrawal-Cancel: {e}", exc_info=True)
+        log.error(f"Cash-Reserve-Update: {e}", exc_info=True)
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
 

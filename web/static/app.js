@@ -1814,7 +1814,7 @@ async function loadV15Sizing() {
     loadWatchdog();
     loadV15Sizing();
     loadBrokerStatus();
-    loadWithdrawalStatus();
+    loadCashReserveStatus();
     loadWfoStatus();
     loadSurvivorship();
     loadCostModelStatus();
@@ -1827,7 +1827,7 @@ async function loadV15Sizing() {
     setInterval(loadWatchdog, 300000); // Watchdog alle 5 Min
     setInterval(loadV15Sizing, 60000); // v15 Sizing/DCA alle 1 Min
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
-    setInterval(loadWithdrawalStatus, 120000); // Entnahme-Plan alle 2 Min
+    setInterval(loadCashReserveStatus, 120000); // Cash-Reserve alle 2 Min
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
     setInterval(loadSelfTest, 600000); // Self-Test-Card alle 10 Min refresh
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
@@ -2152,82 +2152,112 @@ async function loadWfoHistory() {
 }
 
 
-async function loadWithdrawalStatus() {
-    const statusEl = document.getElementById('wd-status');
-    const detailsEl = document.getElementById('wd-details');
-    const barEl = document.getElementById('wd-progress-bar');
-    const fillEl = document.getElementById('wd-progress-fill');
-    const noPlanEl = document.getElementById('wd-no-plan');
-    const activeEl = document.getElementById('wd-active');
-    if (!statusEl) return;
+/**
+ * Cash-Reserve — v37h+1 (14.05.2026, ersetzt W7-Entnahme-Planer).
+ * Zeigt aktuelle Reserve (CHF) + Buffer-Fuellgrad + Inline-Editor fuer Floor/Pct.
+ */
+async function loadCashReserveStatus() {
+    const summaryEl = document.getElementById('cr-summary');
+    const detailsEl = document.getElementById('cr-details');
+    const barEl = document.getElementById('cr-progress-bar');
+    const fillEl = document.getElementById('cr-progress-fill');
+    const floorInp = document.getElementById('cr-floor');
+    const pctInp = document.getElementById('cr-pct');
+    if (!summaryEl) return;
     try {
-        const resp = await fetch('/api/withdrawal/status');
+        const resp = await fetch('/api/cash_reserve/status');
         const s = await resp.json();
-        if (!s.active) {
-            statusEl.textContent = 'Kein aktiver Plan';
-            detailsEl.textContent = '';
-            barEl.style.display = 'none';
-            noPlanEl.style.display = 'block';
-            activeEl.style.display = 'none';
-        } else {
-            statusEl.textContent = `$${s.withdrawn_so_far_usd.toLocaleString()} / $${s.target_amount_usd.toLocaleString()} (${s.progress_pct}%)`;
-            barEl.style.display = 'block';
-            fillEl.style.width = Math.min(100, s.progress_pct) + '%';
-            const daysColor = s.days_left < 7 ? 'color:#f59e0b;' : '';
-            detailsEl.innerHTML =
-                `Deadline: <b>${s.deadline}</b> (<span style="${daysColor}">${s.days_left} Tage</span>) · ` +
-                `Strategie: ${s.strategy} · ` +
-                `Empf. Tagesrate: $${s.recommended_daily_liquidation_usd.toLocaleString()}<br>` +
-                (s.notes ? `<i>${s.notes}</i>` : '');
-            noPlanEl.style.display = 'none';
-            activeEl.style.display = 'block';
+        if (s.error) {
+            summaryEl.textContent = `❌ ${s.error}`;
+            return;
         }
+        // Form-Defaults aus aktuellen Settings
+        if (floorInp && (floorInp.value === '' || document.activeElement !== floorInp)) {
+            floorInp.value = s.min_cash_reserve_chf ?? '';
+        }
+        if (pctInp && (pctInp.value === '' || document.activeElement !== pctInp)) {
+            pctInp.value = ((s.min_cash_reserve_pct ?? 0) * 100).toFixed(1);
+        }
+
+        const floor = s.min_cash_reserve_chf ?? 0;
+        const pct = (s.min_cash_reserve_pct ?? 0) * 100;
+
+        if (s.required_reserve_chf == null) {
+            // Kein Live-Portfolio verfuegbar (Bot noch nicht gelaufen / Cache leer)
+            summaryEl.innerHTML = `Soll: <b>max(${floor.toLocaleString()} CHF, ${pct.toFixed(1)}% Equity)</b>`;
+            detailsEl.innerHTML = `<i>Live-Equity noch nicht im Cache — Wartet auf naechsten Bot-Cycle.</i>`;
+            barEl.style.display = 'none';
+            return;
+        }
+
+        const required = s.required_reserve_chf;
+        const cash = s.available_cash_chf ?? 0;
+        const deployable = s.deployable_cash_chf ?? 0;
+        const filled = s.reserve_filled === true;
+        const binding = s.binding === 'floor' ? `Floor ${floor.toLocaleString()} CHF` : `${pct.toFixed(1)}% Equity`;
+
+        const stateColor = filled ? '#10b981' : '#f59e0b';
+        const stateLabel = filled ? '✓ gefuellt' : '⚠ unter Soll — Buys pausiert';
+
+        summaryEl.innerHTML =
+            `<span style="color:${stateColor};font-weight:600;">${stateLabel}</span> · ` +
+            `Reserve <b>${required.toLocaleString(undefined,{maximumFractionDigits:0})} CHF</b> ` +
+            `<span style="opacity:0.7;">(${binding} greift)</span>`;
+
+        barEl.style.display = 'block';
+        const fillPct = Math.min(100, (s.fill_pct ?? 0) * 100);
+        fillEl.style.width = fillPct + '%';
+        fillEl.style.background = filled
+            ? 'linear-gradient(90deg,#10b981,#3b82f6)'
+            : 'linear-gradient(90deg,#f59e0b,#ef4444)';
+
+        detailsEl.innerHTML =
+            `Equity: <b>${(s.equity_chf ?? 0).toLocaleString(undefined,{maximumFractionDigits:0})} CHF</b> · ` +
+            `Cash: <b>${cash.toLocaleString(undefined,{maximumFractionDigits:0})} CHF</b> · ` +
+            `Deploy-bar: <b>${deployable.toLocaleString(undefined,{maximumFractionDigits:0})} CHF</b>`;
     } catch (e) {
-        statusEl.textContent = `❌ Status-Fetch failed: ${e}`;
+        summaryEl.textContent = `❌ Status-Fetch failed: ${e}`;
     }
 }
 
-async function withdrawalCreate() {
-    const amount = parseFloat(document.getElementById('wd-amount').value);
-    const deadline = document.getElementById('wd-deadline').value;
-    const notes = document.getElementById('wd-notes').value;
-    if (!amount || !deadline) {
-        alert('Bitte Zielbetrag und Deadline ausfuellen');
+async function cashReserveUpdate() {
+    const floorInp = document.getElementById('cr-floor');
+    const pctInp = document.getElementById('cr-pct');
+    const msgEl = document.getElementById('cr-update-msg');
+    const floor = floorInp?.value !== '' ? parseFloat(floorInp.value) : null;
+    const pct = pctInp?.value !== '' ? parseFloat(pctInp.value) : null;
+    if (floor === null && pct === null) {
+        msgEl.style.color = '#f59e0b';
+        msgEl.textContent = 'Bitte Floor oder Prozent eingeben';
         return;
     }
-    // v37ci: Confirm-Dialog gegen versehentlichen Mobile-Tap
     if (!confirm(
-        `Entnahme-Plan anlegen?\n\n` +
-        `Zielbetrag: ${amount.toLocaleString()} USD\n` +
-        `Deadline: ${deadline}\n` +
-        `${notes ? 'Notiz: ' + notes + '\n' : ''}` +
-        `\nDer Bot beginnt schrittweise Cash aufzubauen — ist umkehrbar via "Plan stornieren".`
+        `Cash-Reserve aktualisieren?\n\n` +
+        (floor !== null ? `Floor: ${floor} CHF\n` : '') +
+        (pct !== null ? `Prozent: ${pct}%\n` : '') +
+        `\nGreift sofort ab dem naechsten Bot-Cycle.`
     )) return;
     try {
-        const resp = await fetch('/api/withdrawal/plan', {
+        const payload = {};
+        if (floor !== null) payload.floor_chf = floor;
+        if (pct !== null) payload.pct = pct;
+        const resp = await fetch('/api/cash_reserve/update', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({amount, deadline, strategy: 'fifo', notes}),
+            body: JSON.stringify(payload),
         });
         const r = await resp.json();
         if (r.status === 'ok') {
-            await loadWithdrawalStatus();
+            msgEl.style.color = '#10b981';
+            msgEl.textContent = `✓ Gespeichert`;
+            await loadCashReserveStatus();
         } else {
-            alert(`Fehler: ${r.error}`);
+            msgEl.style.color = '#ef4444';
+            msgEl.textContent = `❌ ${r.error || 'Fehler'}`;
         }
     } catch (e) {
-        alert(`Request failed: ${e}`);
-    }
-}
-
-async function withdrawalCancel() {
-    if (!confirm('Aktiven Plan wirklich stornieren?')) return;
-    try {
-        const resp = await fetch('/api/withdrawal/plan', {method: 'DELETE'});
-        await resp.json();
-        await loadWithdrawalStatus();
-    } catch (e) {
-        alert(`Cancel failed: ${e}`);
+        msgEl.style.color = '#ef4444';
+        msgEl.textContent = `❌ Request failed: ${e}`;
     }
 }
 

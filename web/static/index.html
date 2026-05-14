@@ -516,28 +516,30 @@
             </div>
         </div>
 
-        <!-- WITHDRAWAL PLANNER -->
-        <div class="card" id="withdrawal-card">
-            <div class="card-title">Entnahme-Planer<span class="tip" data-tip="Schrittweise Liquidation fuer groessere Ausgaben (Auto, Haus, etc.). Bot reduziert Risiko von 'alles am Tief verkauft' durch zeitliche Verteilung. MVP-Status: Plan-Persistenz aktiv, Trader-Integration folgt in W8 (heute keine automatischen Sells).">?</span></div>
-            <div id="wd-status" class="card-sub" style="margin-bottom:8px;">--</div>
-            <div id="wd-progress-bar" style="display:none;height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin:8px 0;">
-                <div id="wd-progress-fill" style="height:100%;background:linear-gradient(90deg,#10b981,#3b82f6);transition:width 0.5s;"></div>
+        <!-- CASH-RESERVE (v37h+1, 14.05.2026 — ersetzt W7-Entnahme-Planer) -->
+        <div class="card" id="cash-reserve-card">
+            <div class="card-title">Cash-Reserve<span class="tip" data-tip="Mindest-Cash-Buffer fuer planbare Auslagen (Steuern, Versicherung, etc.). Bot kauft nur wenn Cash > Reserve. Bei Unterschreitung pausieren NEUE Buys — bestehende Positionen bleiben aktiv (keine Notverkaeufe). Reserve baut sich auto auf durch normale TP/SL/Dividenden-Sells. Formel: max(Floor in CHF, Prozent x Equity).">?</span></div>
+            <div id="cr-summary" class="card-sub" style="margin-bottom:8px;">--</div>
+            <div id="cr-progress-bar" style="display:none;height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin:8px 0;">
+                <div id="cr-progress-fill" style="height:100%;background:linear-gradient(90deg,#10b981,#3b82f6);transition:width 0.5s;"></div>
             </div>
-            <div id="wd-details" style="font-size:0.85em;opacity:0.85;margin-bottom:10px;"></div>
-            <div id="wd-no-plan" style="display:none;">
-                <details>
-                    <summary style="cursor:pointer;font-size:0.9em;">+ Neuen Plan erstellen</summary>
-                    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
-                        <input type="number" id="wd-amount" placeholder="Zielbetrag USD (z.B. 5000)" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
-                        <input type="date" id="wd-deadline" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
-                        <input type="text" id="wd-notes" placeholder="Notiz (optional, z.B. Auto-Anzahlung)" style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
-                        <button onclick="withdrawalCreate()" class="btn-secondary" style="padding:6px;cursor:pointer;">Plan anlegen</button>
-                    </div>
-                </details>
-            </div>
-            <div id="wd-active" style="display:none;">
-                <button onclick="withdrawalCancel()" class="btn-secondary" style="font-size:0.8em;padding:4px 10px;cursor:pointer;opacity:0.8;">Plan stornieren</button>
-            </div>
+            <div id="cr-details" style="font-size:0.85em;opacity:0.85;margin-bottom:12px;"></div>
+            <details>
+                <summary style="cursor:pointer;font-size:0.9em;opacity:0.9;">⚙ Reserve anpassen</summary>
+                <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">
+                    <label style="font-size:0.85em;opacity:0.85;">
+                        Floor (CHF, absolutes Minimum)
+                        <input type="number" id="cr-floor" min="0" max="100000" step="50" placeholder="500" style="margin-top:3px;width:100%;padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
+                    </label>
+                    <label style="font-size:0.85em;opacity:0.85;">
+                        Prozent vom Equity (0–50)
+                        <input type="number" id="cr-pct" min="0" max="50" step="0.5" placeholder="10" style="margin-top:3px;width:100%;padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;">
+                    </label>
+                    <div style="font-size:0.8em;opacity:0.7;">Effektive Reserve = max(Floor, Prozent x Equity). Beide Werte direkt anpassbar — kein WFO-Lock.</div>
+                    <button onclick="cashReserveUpdate()" class="btn-secondary" style="padding:6px;cursor:pointer;">Speichern</button>
+                    <div id="cr-update-msg" style="font-size:0.85em;"></div>
+                </div>
+            </details>
         </div>
 
         <!-- NEWS SOURCES -->

@@ -230,7 +230,7 @@ ENDPOINTS: list[EndpointSpec] = [
         optional=True,
     ),
     EndpointSpec(
-        "/api/withdrawal/status", "Withdrawal-Planner",
+        "/api/cash_reserve/status", "Cash-Reserve",
         rules=[_rule_not_error],
     ),
     EndpointSpec(

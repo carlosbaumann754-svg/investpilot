@@ -488,6 +488,69 @@ def tc_yfinance_freshness() -> TestResult:
                           duration_ms=int((time.time() - t0) * 1000))
 
 
+def tc_cash_reserve_sane() -> TestResult:
+    """v37h+1 (14.05.2026): Cash-Reserve-Module + Config-Werte konsistent.
+
+    Prueft:
+      - app.cash_reserve importierbar + get_required_reserve_chf liefert > 0
+      - Config-Keys risk_management.min_cash_reserve_chf + _pct vorhanden
+      - Floor + Pct innerhalb Sicherheits-Grenzen
+      - Hybrid-Logik korrekt (max(floor, pct*equity) bei Test-Equity 50000)
+    """
+    t0 = time.time()
+    try:
+        from app.cash_reserve import (
+            get_required_reserve_chf,
+            MIN_PCT,
+            MAX_PCT,
+            MIN_FLOOR_CHF,
+            MAX_FLOOR_CHF,
+        )
+        from app.config_manager import load_config
+    except Exception as e:
+        return TestResult("cash_reserve_sane", False,
+                          f"Import-Fehler: {type(e).__name__}: {e}",
+                          severity="critical", category="config",
+                          duration_ms=int((time.time() - t0) * 1000))
+    try:
+        cfg = load_config() or {}
+        risk = cfg.get("risk_management", {})
+        floor = risk.get("min_cash_reserve_chf")
+        pct = risk.get("min_cash_reserve_pct")
+        if floor is None or pct is None:
+            return TestResult("cash_reserve_sane", False,
+                              "min_cash_reserve_chf oder _pct fehlen in config.risk_management",
+                              severity="warning", category="config",
+                              duration_ms=int((time.time() - t0) * 1000))
+        if not (MIN_FLOOR_CHF <= float(floor) <= MAX_FLOOR_CHF):
+            return TestResult("cash_reserve_sane", False,
+                              f"floor {floor} ausserhalb [{MIN_FLOOR_CHF},{MAX_FLOOR_CHF}]",
+                              severity="critical", category="config",
+                              duration_ms=int((time.time() - t0) * 1000))
+        if not (MIN_PCT <= float(pct) <= MAX_PCT):
+            return TestResult("cash_reserve_sane", False,
+                              f"pct {pct} ausserhalb [{MIN_PCT},{MAX_PCT}]",
+                              severity="critical", category="config",
+                              duration_ms=int((time.time() - t0) * 1000))
+        # Hybrid-Logik bei Test-Equity 50'000: pct=0.10 -> 5000 > floor 500 -> 5000
+        req = get_required_reserve_chf(50000.0)
+        expected = max(float(floor), float(pct) * 50000.0)
+        if abs(req - expected) > 0.01:
+            return TestResult("cash_reserve_sane", False,
+                              f"Hybrid-Berechnung falsch: got {req}, expected {expected}",
+                              severity="critical", category="config",
+                              duration_ms=int((time.time() - t0) * 1000))
+        return TestResult("cash_reserve_sane", True,
+                          f"floor={floor} CHF + pct={pct} (Hybrid bei 50k Equity -> {req:.0f} CHF)",
+                          severity="info", category="config",
+                          duration_ms=int((time.time() - t0) * 1000))
+    except Exception as e:
+        return TestResult("cash_reserve_sane", False,
+                          f"exception: {type(e).__name__}: {e}",
+                          severity="critical", category="config",
+                          duration_ms=int((time.time() - t0) * 1000))
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -502,6 +565,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_ibkr_session_watchdog,
     tc_discovery_freshness,
     tc_yfinance_freshness,  # v37h Q3-2: Stale-yfinance-Detection
+    tc_cash_reserve_sane,   # v37h+1: Cash-Reserve-Config + Hybrid-Logik
 ]
 
 

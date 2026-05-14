@@ -1350,6 +1350,35 @@ def execute_scanner_trades(client, config, scan_results):
         except Exception as e:
             log.warning(f"Cash-DCA Detection fehlgeschlagen (non-fatal): {e}", exc_info=True)
 
+    # v37h+1 (14.05.2026): Cash-Reserve-Guard (Hybrid Floor + %).
+    # Ersetzt den W7-Entnahme-Planer durch dauerhaft aktiven Cash-Buffer.
+    # Reduziert effective_cash um die geforderte Reserve in BASE-Currency (CHF).
+    # Wenn cash < reserve: deployable = 0 -> Bot pausiert Buys ohne Notverkauf.
+    # Auto-Refill durch normale TP/SL/Dividenden-Sells.
+    try:
+        from app.cash_reserve import (
+            get_required_reserve_chf,
+            compute_deployable_cash_chf,
+        )
+        required_reserve_chf = get_required_reserve_chf(total_value, config)
+        if required_reserve_chf > 0:
+            pre_reserve_cash = effective_cash
+            effective_cash = compute_deployable_cash_chf(
+                effective_cash, total_value, config
+            )
+            if abs(pre_reserve_cash - effective_cash) > 0.01:
+                log.info(
+                    f"  Cash-Reserve aktiv: {required_reserve_chf:,.2f} CHF "
+                    f"reserviert (deploy-bar {effective_cash:,.2f}/{pre_reserve_cash:,.2f})"
+                )
+                if effective_cash <= 0.01:
+                    log.info(
+                        "  Cash-Reserve: Cash unter Reserve-Schwelle -> "
+                        "Buys pausiert, warte auf TP/SL/Dividenden-Refill"
+                    )
+    except Exception as e:
+        log.warning(f"Cash-Reserve-Guard fehlgeschlagen (non-fatal): {e}", exc_info=True)
+
     # Risk Manager: Drawdown-Check
     if rm:
         dd_ok, dd_reason = rm.check_drawdown_limits()
