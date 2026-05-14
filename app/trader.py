@@ -186,8 +186,85 @@ def _is_already_closed(result) -> bool:
 
 _PENDING_CLOSE_COOLDOWN_SEC = 300  # 5 Min — eine ganze Cycle-Periode
 
+
+def _parse_iso_safe(ts: str):
+    """v37h Tab-Audit-Day-4 (14.05.2026): robust ISO-parse mit Z-Suffix-Support.
+
+    Vorher: fromisoformat() crasht bei 'Z' (Python<3.11). Resultat: Eintraege
+    mit ISO-Z-Format ueberlebten den Cleanup-Filter (= silent state-bloat).
+    Jetzt: Z -> +00:00 ersetzen, dann tz-naive zurueck (Carlos-Bot nutzt
+    durchgaengig naive datetimes fuer pending_closes).
+    """
+    from datetime import datetime
+    if not ts:
+        return None
+    try:
+        s = str(ts).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _cleanup_pending_closes(max_age_hours: int = 24) -> int:
+    """v37h Tab-Audit-Day-4 (14.05.2026): Periodischer Cleanup-Helper.
+
+    Carlos's Self-Test-FAIL 14.05.: 2 stale-Eintraege in pending_closes
+    blieben 28-30h drin weil Cleanup nur bei neuer Close-Order lief.
+    Plus ISO-Z-Format crashte den Filter silent.
+
+    Cleanup-Kriterien (entfernt Eintrag wenn EINS davon zutrifft):
+      1. submitted_at > max_age_hours her (Default 24h)
+      2. result_summary enthaelt 'Filled' (Order ist final, kein Loop-Risk)
+      3. result_summary enthaelt 'Cancelled' / 'Rejected' (analog final)
+      4. submitted_at unparseable (=alter Bug, sicher zu entfernen)
+
+    Returns:
+        Anzahl entfernter Eintraege.
+
+    Wird in _check_close_idempotent als Pre-Check aufgerufen (idempotent —
+    laeuft einmal pro close-attempt, also typisch < 5x pro Bot-Cycle).
+    """
+    try:
+        pending = load_json("pending_closes.json") or {}
+        if not pending:
+            return 0
+        from datetime import datetime as _dt, timedelta as _td
+        cutoff = _dt.now() - _td(hours=max_age_hours)
+        kept = {}
+        for k, v in pending.items():
+            if not isinstance(v, dict):
+                continue  # garbage entry
+            # Kriterium 2-3: Final-Status -> entfernen
+            summary = str(v.get("result_summary", ""))
+            if any(s in summary for s in ("'Filled'", "'Cancelled'",
+                                            "'Rejected'", "'ApiCancelled'")):
+                continue
+            # Kriterium 1: Age-Check
+            dt = _parse_iso_safe(v.get("submitted_at"))
+            if dt is None:
+                continue  # Kriterium 4: unparseable -> weg
+            if dt < cutoff:
+                continue  # zu alt
+            kept[k] = v
+        removed = len(pending) - len(kept)
+        if removed > 0:
+            save_json("pending_closes.json", kept)
+            log.debug(f"pending_closes Cleanup: {removed} stale-Eintraege entfernt")
+        return removed
+    except Exception as e:
+        log.debug(f"pending_closes Cleanup fehlgeschlagen (non-fatal): {e}")
+        return 0
+
+
 def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
     """v37cu: Pre-Close-Check vor jeder close_position-Aufruf.
+
+    v37h (14.05.2026): ruft jetzt _cleanup_pending_closes() vorab auf
+    um stale-Eintraege zu raeumen — verhindert Self-Test-Warnings und
+    state-file-bloat.
 
     Returns:
         (skip: bool, reason: str)
@@ -196,6 +273,9 @@ def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
     if instrument_id is None:
         return False, ""
 
+    # v37h: periodischer Cleanup vor Pre-Check
+    _cleanup_pending_closes()
+
     # Check 1: persistent pending-close-tracker
     try:
         pending = load_json("pending_closes.json") or {}
@@ -203,9 +283,9 @@ def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
         if key in pending:
             last_ts = pending[key].get("submitted_at")
             if last_ts:
-                from datetime import datetime as _dt2
-                try:
-                    last_dt = _dt2.fromisoformat(last_ts)
+                last_dt = _parse_iso_safe(last_ts)
+                if last_dt is not None:
+                    from datetime import datetime as _dt2
                     age_sec = (_dt2.now() - last_dt).total_seconds()
                     if age_sec < _PENDING_CLOSE_COOLDOWN_SEC:
                         return True, (
@@ -213,8 +293,6 @@ def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
                             f"vor {age_sec:.0f}s submitted (Cooldown "
                             f"{_PENDING_CLOSE_COOLDOWN_SEC}s)"
                         )
-                except Exception:
-                    pass
     except Exception:
         pass
 
@@ -251,20 +329,17 @@ def _track_pending_close(instrument_id, result):
     if isinstance(result, dict) and result.get("_already_closed"):
         return  # Schon geschlossen, kein neuer Submit
     try:
-        from datetime import datetime as _dt3, timedelta as _td3
+        from datetime import datetime as _dt3
         pending = load_json("pending_closes.json") or {}
         key = str(instrument_id)
         pending[key] = {
             "submitted_at": _dt3.now().isoformat(),
             "result_summary": str(result)[:200],
         }
-        # Cleanup: Eintraege > 24h sind irrelevant
-        cutoff = _dt3.now() - _td3(hours=24)
-        pending = {
-            k: v for k, v in pending.items()
-            if _dt3.fromisoformat(v.get("submitted_at", "1900-01-01")) > cutoff
-        }
         save_json("pending_closes.json", pending)
+        # v37h (14.05.2026): Cleanup via _cleanup_pending_closes() — ISO-Z-
+        # robust + status-aware (Filled/Cancelled sofort raus statt 24h warten).
+        _cleanup_pending_closes()
     except Exception as e:
         log.debug(f"Pending-Close-Track fehlgeschlagen (non-fatal): {e}")
 
