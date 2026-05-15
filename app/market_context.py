@@ -22,16 +22,88 @@ from app.config_manager import load_config, load_json, save_json
 log = logging.getLogger("MarketContext")
 
 MARKET_CONTEXT_FILE = "market_context.json"
+# v37h+2 (R-A5, 15.05.2026): Stale-Cache-Threshold. Wenn last_update
+# alter als STALE_HOURS ist, gelten gecachte VIX/F&G-Werte als
+# unzuverlaessig und werden auf None gesetzt -> get_position_size_multiplier
+# und check_regime_filter koennen konservativ reagieren (Default-Multiplier).
+# 6h ist konservativ: laenger als jede Wartezeit zwischen Cron-Updates (1h),
+# kuerzer als Overnight-Gap. Cutover-Morgen Schutz vor 3-Tage-alten Memorial-
+# Day-Cached-Werten.
+MARKET_CONTEXT_STALE_HOURS = 6.0
+
+
+def _parse_iso_safe_local(ts):
+    """Lokaler ISO-Parser analog trader.py — ISO-Z-tolerant + tz-naive-Output."""
+    if not ts:
+        return None
+    try:
+        from datetime import datetime as _dt
+        s = str(ts).replace("Z", "+00:00")
+        dt = _dt.fromisoformat(s)
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _is_context_stale(ctx, max_age_hours=MARKET_CONTEXT_STALE_HOURS):
+    """v37h+2 (R-A5): Prueft ob market_context.json zu alt ist.
+
+    Returns True wenn last_update fehlt ODER > max_age_hours her ODER
+    unparseable. False = Cache ist fresh.
+    """
+    if not ctx:
+        return True
+    last_update = ctx.get("last_update")
+    if not last_update:
+        return True
+    dt = _parse_iso_safe_local(last_update)
+    if dt is None:
+        return True
+    from datetime import datetime as _dt, timedelta as _td
+    return (_dt.now() - dt) > _td(hours=max_age_hours)
 
 
 def _load_context():
-    return load_json(MARKET_CONTEXT_FILE) or {
+    """v37h+2 (R-A5, 15.05.2026): liefert Cache, aber setzt VIX/F&G/Regime
+    auf None wenn Cache > 6h alt. Verhindert dass Bot mit veralteten
+    Regime-Daten tradet wenn fetch_vix/fetch_fear_greed wegen API-Outage
+    nicht aktualisiert wurden.
+
+    Caller (get_position_size_multiplier, check_regime_filter) muessen
+    None-Werte konservativ behandeln (Default-Multiplier 0.5, kein
+    optimistisches Regime-Pass).
+    """
+    ctx = load_json(MARKET_CONTEXT_FILE) or {
         "vix_level": None,
         "fear_greed_index": None,
         "market_regime": "unknown",
         "macro_events_today": [],
         "last_update": None,
     }
+    if _is_context_stale(ctx):
+        # Defensive: Cache ist alt — invalidiere kritische Felder.
+        # last_update + macro_events_today bleiben fuer Audit-Trail.
+        age_hours = None
+        last_update_dt = _parse_iso_safe_local(ctx.get("last_update"))
+        if last_update_dt is not None:
+            from datetime import datetime as _dt
+            age_hours = (_dt.now() - last_update_dt).total_seconds() / 3600
+        log.warning(
+            "Market-Context-Cache STALE (Alter %s h, Threshold %.1f h) "
+            "-> vix_level + fear_greed_index + market_regime auf None gesetzt. "
+            "Caller sollten konservativ reagieren (Position-Size-Multiplier "
+            "Default 0.5, kein optimistisches Regime-Pass).",
+            f"{age_hours:.1f}" if age_hours is not None else "?",
+            MARKET_CONTEXT_STALE_HOURS,
+        )
+        ctx = dict(ctx)  # copy damit Original-File nicht versehentlich modifiziert
+        ctx["vix_level"] = None
+        ctx["fear_greed_index"] = None
+        ctx["market_regime"] = "unknown"
+        ctx["_stale"] = True  # Audit-Flag fuer Caller die genau wissen wollen
+    return ctx
 
 
 def _save_context(ctx):
@@ -317,6 +389,10 @@ def get_position_size_multiplier(events=None, vix_level=None):
     0.0 = Nicht handeln
     0.5 = Halbe Groesse
     1.0 = Normal
+
+    v37h+2 (R-A5, 15.05.2026): Wenn vix_level=None UND Cache ist als Stale
+    markiert (_stale=True), reduziere konservativ auf 0.5. Verhindert dass
+    Bot mit unbekanntem Regime mit voller Position-Size weitertradet.
     """
     multiplier = 1.0
 
@@ -333,6 +409,15 @@ def get_position_size_multiplier(events=None, vix_level=None):
         elif vix_level > 25:
             multiplier *= 0.75
             log.info(f"  Marktkontext: Reduziere um 25% (VIX={vix_level})")
+    else:
+        # R-A5: VIX unbekannt — pruefe ob Cache stale ist
+        ctx = _load_context()
+        if ctx.get("_stale"):
+            multiplier *= 0.5
+            log.warning(
+                "  Marktkontext: VIX unbekannt + Cache STALE -> "
+                "konservativer Multiplier x0.5 (Safety-Default)"
+            )
 
     return round(multiplier, 2)
 

@@ -49,10 +49,42 @@ def check_hedge_needed(regime_data, positions, config):
     try:
         brain_regime = regime_data.get("brain_regime", "unknown")
         combined_score = regime_data.get("combined_score", 0)
+        # v37h+2 (R-A4, 15.05.2026): Trigger-Erweiterung gegen "Hedging-Dead"-
+        # Bug. brain_regime kommt aus brain.detect_market_regime() basierend
+        # auf >=3 Portfolio-Snapshots. Bei Cutover wird brain_state.json reset
+        # -> regime="unknown" fuer die ersten ~10 Cycles -> Hedging feuerte NIE
+        # selbst bei Crash-Tag. Fix: zwei Backup-Trigger ueber VIX und
+        # combined_score, unabhaengig von brain_regime.
+        # regime_data nutzt 'vix_level' als Key (siehe market_context.py:575).
+        # Fallback auf 'vix' falls Caller alternative Naming verwendet.
+        vix_level = regime_data.get("vix_level") or regime_data.get("vix")
+        vix_crisis_threshold = config.get("regime_filter", {}).get(
+            "vix_crisis_threshold", 35)
+        # Crash-Indikator 1: VIX > vix_crisis_threshold (Default 35)
+        vix_crisis = vix_level is not None and float(vix_level) >= vix_crisis_threshold
+        # Crash-Indikator 2: combined_score sehr negativ (Default <= -3)
+        score_crisis_threshold = hedge_config.get("score_crisis_threshold", -3)
+        score_crisis = combined_score <= score_crisis_threshold
 
-        if brain_regime != "bear":
-            result["reason"] = f"Regime={brain_regime}, kein Bear-Markt"
+        is_bear = brain_regime == "bear"
+        if not (is_bear or vix_crisis or score_crisis):
+            triggers = []
+            triggers.append(f"brain={brain_regime}")
+            if vix_level is not None:
+                triggers.append(f"VIX={float(vix_level):.1f}/{vix_crisis_threshold}")
+            triggers.append(f"score={combined_score}/{score_crisis_threshold}")
+            result["reason"] = f"Kein Bear-Signal ({', '.join(triggers)})"
             return result
+
+        # Welcher Trigger hat gefeuert? Fuer Log + Audit.
+        trigger_source = []
+        if is_bear:
+            trigger_source.append("brain=bear")
+        if vix_crisis:
+            trigger_source.append(f"VIX={float(vix_level):.1f}>={vix_crisis_threshold}")
+        if score_crisis:
+            trigger_source.append(f"score={combined_score}<={score_crisis_threshold}")
+        result["hedge_trigger"] = ", ".join(trigger_source)
 
         # Calculate total exposure
         total_exposure = sum(
@@ -70,7 +102,8 @@ def check_hedge_needed(regime_data, positions, config):
         result["hedge_amount"] = total_exposure * (1 - bear_multiplier)
         result["hedge_instrument"] = "SPY"  # Reference instrument
         result["reason"] = (
-            f"Bear-Regime aktiv: Positionsgroessen x{bear_multiplier}, "
+            f"Hedging aktiv ({result.get('hedge_trigger', 'bear-Regime')}): "
+            f"Positionsgroessen x{bear_multiplier}, "
             f"defensive Sektoren bevorzugt"
         )
 
