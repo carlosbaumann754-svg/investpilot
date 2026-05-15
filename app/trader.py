@@ -1251,15 +1251,57 @@ def check_stop_loss_take_profit(client, config):
 
 
 def _cleanup_partial_close_state(portfolio):
-    """Entferne Partial-Close-State fuer Positionen die nicht mehr offen sind."""
+    """Entferne Partial-Close-State fuer Positionen die nicht mehr offen sind.
+
+    v37h+2 (15.05.2026, Q3-8): Defensive-Guard gegen None / leeres portfolio.
+    Vorher: Wenn portfolio=None (IBKR-Portfolio-Fetch-Fail, z.B. waehrend
+    der 08:33 CEST IBKR-Connectivity-Drops vom 15.05.), wurde open_ids leer
+    -> cleaned={} -> ALLE partial_state-Eintraege geloescht. Worst-Case:
+    Bot vergisst dass Tranche 1 (50%) schon getriggert wurde, schliesst bei
+    Tranche 3 die volle 50% statt der geplanten 20%.
+    Fix: bei nicht-validem portfolio den Cleanup SKIPPEN statt zu clearen.
+    """
     partial_state = load_json("partial_close_state.json") or {}
     if not partial_state:
         return
+
+    # Defensive: kein Cleanup wenn Portfolio-Fetch unzuverlaessig war.
+    # Besser ein paar stale-Eintraege als verlorene Tranchen-State.
+    if not portfolio or not isinstance(portfolio, dict):
+        log.warning(
+            "  partial_close_state-Cleanup geskippt: portfolio=None/invalid "
+            f"({type(portfolio).__name__}). {len(partial_state)} Eintraege "
+            "bleiben unveraendert (Safety-Guard gegen falsche Tranchen-Resets)."
+        )
+        return
+    positions = portfolio.get("positions")
+    if positions is None:
+        log.warning(
+            "  partial_close_state-Cleanup geskippt: portfolio['positions']=None. "
+            f"{len(partial_state)} Eintraege bleiben unveraendert."
+        )
+        return
+
     open_ids = set()
-    if portfolio:
-        for pos in portfolio.get("positions", []):
+    for pos in positions:
+        try:
             p = EtoroClient.parse_position(pos)
             open_ids.add(str(p["position_id"]))
+        except Exception as e:
+            log.debug(f"parse_position skipped (non-fatal): {e}")
+            continue
+
+    # Zweite Defensive-Schicht: wenn nach Parsing immer noch keine open_ids
+    # (z.B. alle Position-Parse-Fails), nicht clearen — wahrscheinlich
+    # Schema-Drift / Edge-Case, kein legitimer "alle Positionen zu" Fall.
+    if not open_ids and len(positions) > 0:
+        log.warning(
+            f"  partial_close_state-Cleanup geskippt: {len(positions)} Positionen "
+            "im Portfolio aber 0 erfolgreich geparsed. Schema-Drift? "
+            f"{len(partial_state)} Eintraege bleiben unveraendert."
+        )
+        return
+
     cleaned = {pid: data for pid, data in partial_state.items() if pid in open_ids}
     if len(cleaned) != len(partial_state):
         save_json("partial_close_state.json", cleaned)
@@ -1611,16 +1653,28 @@ def execute_scanner_trades(client, config, scan_results):
     cooldown_state = load_json("buy_cooldown.json") or {}
     now_iso = datetime.now().isoformat()
     # Stale-Eintraege bereinigen (>24h)
-    cooldown_state = {
-        k: v for k, v in cooldown_state.items()
-        if (datetime.now() - datetime.fromisoformat(v["last_attempt"])).total_seconds() < 86400
-    }
+    # v37h+2 (15.05.2026, Q3-9): _parse_iso_safe statt datetime.fromisoformat
+    # damit ISO-Z-Format-Eintraege nicht silent crashen (gleicher Bug der
+    # am 14.05. bei pending_closes geknackt wurde).
+    def _cooldown_fresh(rec_value):
+        """Returns True wenn Eintrag <24h alt + parsbar. False -> entfernen."""
+        if not isinstance(rec_value, dict):
+            return False
+        dt = _parse_iso_safe(rec_value.get("last_attempt"))
+        if dt is None:
+            return False
+        return (datetime.now() - dt).total_seconds() < 86400
+
+    cooldown_state = {k: v for k, v in cooldown_state.items() if _cooldown_fresh(v)}
 
     def _in_cooldown(sym_id: int) -> tuple[bool, str]:
         rec = cooldown_state.get(str(sym_id))
         if not rec:
             return False, ""
-        elapsed_cycles = (datetime.now() - datetime.fromisoformat(rec["last_attempt"])).total_seconds() / 300
+        dt = _parse_iso_safe(rec.get("last_attempt"))
+        if dt is None:
+            return False, ""  # defensiv: unparseable -> kein Cooldown-Block
+        elapsed_cycles = (datetime.now() - dt).total_seconds() / 300
         if elapsed_cycles < cooldown_cycles:
             return True, f"cooldown {elapsed_cycles:.1f}/{cooldown_cycles} cycles, {rec.get('attempts',1)} prev attempts"
         return False, ""
