@@ -1287,6 +1287,151 @@ class IbkrBroker(BrokerBase):
             result["leverage_actual"] = 1
         return result
 
+    def _place_close_order_adaptive(
+        self, contract, action: str, qty: int,
+        fill_timeout: float = 30.0,
+        purpose: str = "close",
+    ) -> Optional[dict]:
+        """v37h+2 (15.05.2026, Q3-10): Adaptive LIMIT->MARKET Close-Order.
+
+        Carlos's SLV-Bug 14.05.2026: close_position platzierte LimitOrder mit
+        0.5%% Slippage-Buffer. In schnell fallenden Maerkten verfehlt der
+        Limit-Preis den Markt sofort -> Order haengt 'Submitted' ohne Fill.
+        SLV-Position blieb ~21h ungefuellt waehrend Preis weiter fiel von
+        $77.72 auf $70.16 (-9.7%%). Bei Cutover mit echtem Geld waere das
+        ein verlorener SL = unbeschraenkter Drawdown.
+
+        Loesung: 2-Phasen-Adaptive:
+          Phase 1: LIMIT mit Slippage-Buffer (besserer Preis bei normalen
+                   Maerkten, paper-account-kompatibel)
+          Phase 2: Bei Timeout/0-Fill -> Cancel LIMIT + MARKET-Fallback
+                   (garantierter Fill, Slippage akzeptiert)
+
+        Bei partial-fill aus LIMIT wird der Rest via MARKET nachgefuellt.
+        Aggregiert weighted-avg-Preis ueber beide Fills.
+
+        Args:
+            contract: ib_insync.Contract
+            action: 'SELL' oder 'BUY' (opposite-side fuer Close)
+            qty: Anzahl Aktien/Kontrakte zu schliessen
+            fill_timeout: Sekunden bis MARKET-Fallback (Default 30)
+            purpose: Logging-Label ('close', 'partial_close', 'sl_close', etc.)
+
+        Returns:
+            Dict mit orderForOpen + Aggregat-Metadaten + _used_market_fallback,
+            None bei Setup-Fehler (kein Quote, kein contract).
+        """
+        from ib_insync import LimitOrder, MarketOrder
+        from app.ibkr_contract_resolver import get_quote
+
+        ib = self._get_ib()
+
+        quote = get_quote(ib, contract)
+        if quote is None or quote <= 0:
+            log.error("%s: kein Quote fuer %s — abgebrochen", purpose, contract.symbol)
+            return None
+
+        slippage_sign = 1 if action == "BUY" else -1
+        limit_price = round(quote * (1 + slippage_sign * self.limit_slippage_pct / 100.0), 2)
+
+        # Phase 1: LIMIT mit Slippage-Buffer
+        log.info("%s LIMIT %s %d %s @ $%.2f (quote $%.2f, slip %s%%)",
+                 purpose.upper(), action, qty, contract.symbol, limit_price,
+                 quote, self.limit_slippage_pct)
+        limit_order = LimitOrder(action, qty, limit_price)
+        limit_trade = ib.placeOrder(contract, limit_order)
+
+        deadline = time.time() + fill_timeout
+        while time.time() < deadline:
+            ib.sleep(0.2)
+            if limit_trade.isDone():
+                break
+
+        limit_fill_qty = int(limit_trade.orderStatus.filled or 0)
+        limit_avg_price = float(limit_trade.orderStatus.avgFillPrice or 0.0)
+        used_market_fallback = False
+        market_fill_qty = 0
+        market_avg_price = 0.0
+        market_order_id = None
+
+        # Phase 2: MARKET-Fallback wenn nicht vollstaendig gefuellt
+        if limit_fill_qty < qty:
+            remaining_qty = qty - limit_fill_qty
+            # Erst LIMIT canceln falls noch aktiv
+            if not limit_trade.isDone():
+                log.warning(
+                    "%s LIMIT-Order nach %.0fs noch %s (fill %d/%d) — Cancel + MARKET-Fallback",
+                    purpose, fill_timeout, limit_trade.orderStatus.status,
+                    limit_fill_qty, qty,
+                )
+                try:
+                    ib.cancelOrder(limit_trade.order)
+                    cancel_deadline = time.time() + 5.0
+                    while time.time() < cancel_deadline and not limit_trade.isDone():
+                        ib.sleep(0.2)
+                    # Final-State nach Cancel lesen
+                    limit_fill_qty = int(limit_trade.orderStatus.filled or 0)
+                    limit_avg_price = float(limit_trade.orderStatus.avgFillPrice or 0.0)
+                    remaining_qty = qty - limit_fill_qty
+                except Exception as e:
+                    log.error("%s Cancel-LIMIT failed: %s", purpose, e)
+
+            # MARKET fuer den Rest (falls > 0)
+            if remaining_qty > 0:
+                log.warning(
+                    "%s MARKET-Fallback %s %d %s (LIMIT-fill %d/%d, Q3-10 Safety-Net)",
+                    purpose.upper(), action, remaining_qty, contract.symbol,
+                    limit_fill_qty, qty,
+                )
+                market_order = MarketOrder(action, remaining_qty)
+                market_trade = ib.placeOrder(contract, market_order)
+                used_market_fallback = True
+
+                deadline = time.time() + 30.0
+                while time.time() < deadline:
+                    ib.sleep(0.2)
+                    if market_trade.isDone():
+                        break
+
+                market_fill_qty = int(market_trade.orderStatus.filled or 0)
+                market_avg_price = float(market_trade.orderStatus.avgFillPrice or 0.0)
+                market_order_id = str(market_trade.order.orderId)
+
+        # Aggregiere Fills aus beiden Orders (weighted-avg-Preis)
+        total_fill_qty = limit_fill_qty + market_fill_qty
+        if total_fill_qty > 0:
+            agg_avg_price = (
+                (limit_fill_qty * limit_avg_price + market_fill_qty * market_avg_price)
+                / total_fill_qty
+            )
+        else:
+            agg_avg_price = 0.0
+
+        # Status: Filled wenn alles weg, sonst der finale LIMIT-Status
+        if total_fill_qty >= qty:
+            agg_status = "Filled"
+        elif total_fill_qty > 0:
+            agg_status = "PartiallyFilled"
+        else:
+            agg_status = limit_trade.orderStatus.status or "Submitted"
+
+        return {
+            "orderForOpen": {
+                "orderID": str(limit_trade.order.orderId),
+                "statusID": agg_status,
+                "filledQuantity": total_fill_qty,
+                "avgFillPrice": agg_avg_price,
+                "intendedPrice": float(limit_price),
+                "refQuote": float(quote),
+            },
+            "_broker": "ibkr",
+            "_action": purpose,
+            "_used_market_fallback": used_market_fallback,
+            "_limit_fill_qty": limit_fill_qty,
+            "_market_fill_qty": market_fill_qty,
+            "_market_order_id": market_order_id,
+        }
+
     def close_position(self, position_id, instrument_id=None):
         """
         Position schliessen via opposite-side Market-Order.
@@ -1294,6 +1439,11 @@ class IbkrBroker(BrokerBase):
         IBKR braucht Contract+qty; position_id allein reicht nicht.
         Wir suchen die Position via ib.positions() und feuern eine
         Closing-Order in entgegengesetzter Richtung.
+
+        v37h+2 (Q3-10, 15.05.2026): Nutzt _place_close_order_adaptive
+        statt direkter LimitOrder. LIMIT-First mit MARKET-Fallback bei
+        Timeout. Verhindert SLV-style stuck-Submitted bei fallenden
+        Maerkten.
 
         Args:
             position_id: bei eToro UUID, bei IBKR string-form von conId.
@@ -1364,42 +1514,19 @@ class IbkrBroker(BrokerBase):
             qty = abs(int(pos.position))
             action = "SELL" if pos.position > 0 else "BUY"
 
-            # LimitOrder (statt MarketOrder) — siehe _place_market_order Doku
-            from app.ibkr_contract_resolver import get_quote
-            from ib_insync import LimitOrder
-            quote = get_quote(ib, pos.contract)
-            if quote is None or quote <= 0:
-                log.error("Kein Quote fuer Close von %s — Order abgebrochen", pos.contract.symbol)
+            # v37h+2 (Q3-10): Adaptive LIMIT->MARKET via Helper.
+            # Verhindert haengende Submitted-Orders in fallenden Maerkten.
+            result = self._place_close_order_adaptive(
+                contract=pos.contract,
+                action=action,
+                qty=qty,
+                fill_timeout=self.fill_timeout_s,
+                purpose="close",
+            )
+            if result is None:
                 return None
-            slippage_sign = 1 if action == "BUY" else -1
-            limit_price = round(quote * (1 + slippage_sign * self.limit_slippage_pct / 100.0), 2)
-
-            log.info("CLOSE Position %s qty=%d %s @ limit $%.2f (quote $%.2f)",
-                     pos.contract.symbol, qty, action, limit_price, quote)
-            order = LimitOrder(action, qty, limit_price)
-            trade = ib.placeOrder(pos.contract, order)
-
-            # Wait for fill
-            deadline = time.time() + 30.0
-            while time.time() < deadline:
-                ib.sleep(0.2)
-                if trade.isDone():
-                    break
-
-            return {
-                "orderForOpen": {
-                    "orderID": str(trade.order.orderId),
-                    "statusID": trade.orderStatus.status,
-                    "filledQuantity": int(trade.orderStatus.filled),
-                    "avgFillPrice": float(trade.orderStatus.avgFillPrice or 0),
-                    # E2-Calibrator: intended vs. realisiert beim Close
-                    "intendedPrice": float(limit_price or 0),
-                    "refQuote": float(quote or 0),
-                },
-                "_broker": "ibkr",
-                "_action": "close",
-                "_closed_position_id": str(target_con_id),
-            }
+            result["_closed_position_id"] = str(target_con_id)
+            return result
         except Exception as e:
             log.exception("close_position failed: %s", e)
             return None
@@ -1505,45 +1632,27 @@ class IbkrBroker(BrokerBase):
             remaining_qty = full_qty - qty_close
             action = "SELL" if pos.position > 0 else "BUY"
 
-            # Quote + LimitOrder (gleicher Mechanismus wie close_position)
-            from app.ibkr_contract_resolver import get_quote
-            quote = get_quote(ib, pos.contract)
-            if quote is None or quote <= 0:
-                log.error("partial_close: kein Quote fuer %s — Order abgebrochen",
-                          pos.contract.symbol)
-                return None
-            slippage_sign = 1 if action == "BUY" else -1
-            limit_price = round(quote * (1 + slippage_sign * self.limit_slippage_pct / 100.0), 2)
-
-            log.info("PARTIAL_CLOSE %s qty=%d (%.1f%% von %d, %d bleibt) %s @ $%.2f",
+            log.info("PARTIAL_CLOSE %s qty=%d (%.1f%% von %d, %d bleibt) %s",
                      pos.contract.symbol, qty_close, pct_of_position, full_qty,
-                     remaining_qty, action, limit_price)
-            order = LimitOrder(action, qty_close, limit_price)
-            trade = ib.placeOrder(pos.contract, order)
+                     remaining_qty, action)
 
-            deadline = time.time() + 30.0
-            while time.time() < deadline:
-                ib.sleep(0.2)
-                if trade.isDone():
-                    break
-
-            return {
-                "orderForOpen": {
-                    "orderID": str(trade.order.orderId),
-                    "statusID": trade.orderStatus.status,
-                    "filledQuantity": int(trade.orderStatus.filled),
-                    "avgFillPrice": float(trade.orderStatus.avgFillPrice or 0),
-                    "intendedPrice": float(limit_price or 0),
-                    "refQuote": float(quote or 0),
-                },
-                "_broker": "ibkr",
-                "_action": "partial_close",
-                "_close_qty": qty_close,
-                "_remaining_qty": remaining_qty,
-                "_full_qty": full_qty,
-                "_pct_closed": pct_of_position,
-                "_closed_position_id": str(target_con_id),
-            }
+            # v37h+2 (Q3-10): Adaptive LIMIT->MARKET via Helper (gleich wie close_position).
+            result = self._place_close_order_adaptive(
+                contract=pos.contract,
+                action=action,
+                qty=qty_close,
+                fill_timeout=self.fill_timeout_s,
+                purpose="partial_close",
+            )
+            if result is None:
+                return None
+            # partial_close-spezifische Metadaten ergaenzen
+            result["_close_qty"] = qty_close
+            result["_remaining_qty"] = remaining_qty
+            result["_full_qty"] = full_qty
+            result["_pct_closed"] = pct_of_position
+            result["_closed_position_id"] = str(target_con_id)
+            return result
         except Exception as e:
             log.exception("partial_close failed: %s", e)
             return None
