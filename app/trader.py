@@ -406,6 +406,32 @@ def _close_position_safe(client, position_id, instrument_id, action_name="CLOSE"
     return result
 
 
+def _partial_close_safe(client, position_id, close_pct, instrument_id, action_name="PARTIAL_CLOSE"):
+    """v37h+2 (Q3-16, 15.05.2026): Idempotency-safe Wrapper um partial_close().
+
+    Carlos's Trade-Logic-Audit (15.05.) hat Risk R4 identifiziert:
+    PARTIAL_CLOSE rief client.partial_close DIREKT, ohne _check_close_idempotent
+    -> kann doppelte Tranchen-Close-Orders feuern wenn vorheriger Versuch
+    noch pending. Plus: tranche_consumed wurde bei Submitted-Result True
+    gesetzt, wenn IBKR spaeter Cancelled meldet ist State falsch (Tranche
+    dauerhaft 'verbrannt').
+
+    Returns:
+        Dict wie partial_close() oder {_skipped_idempotent: True, reason: ...}.
+    """
+    skip, reason = _check_close_idempotent(client, instrument_id)
+    if skip:
+        log.warning(f"  {action_name} SKIP fuer {instrument_id}: {reason}")
+        return {"_skipped_idempotent": True, "reason": reason}
+
+    if not hasattr(client, "partial_close"):
+        return {"_unsupported": True, "_broker": getattr(client, "broker_name", "?")}
+
+    result = client.partial_close(position_id, close_pct, instrument_id)
+    _track_pending_close(instrument_id, result)
+    return result
+
+
 def _is_skipped_idempotent(result) -> bool:
     """v37cu: True wenn close_position vom Anti-Loop-Wrapper geskipped wurde."""
     return isinstance(result, dict) and result.get("_skipped_idempotent") is True
@@ -975,6 +1001,7 @@ def check_stop_loss_take_profit(client, config):
                     trade_entry = {
                         "timestamp": datetime.now().isoformat(),
                         "action": "TRAILING_SL_CLOSE",
+                        "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
                         "instrument_id": p["instrument_id"],
                         "position_id": p["position_id"],
                         "pnl_pct": p["pnl_pct"],
@@ -1023,6 +1050,7 @@ def check_stop_loss_take_profit(client, config):
                     trade_entry = {
                         "timestamp": datetime.now().isoformat(),
                         "action": "TIME_STOP_CLOSE",
+                        "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
                         "instrument_id": p["instrument_id"],
                         "position_id": p["position_id"],
                         "pnl_pct": p["pnl_pct"],
@@ -1089,13 +1117,24 @@ def check_stop_loss_take_profit(client, config):
                                             f"Tranche wird NICHT als erledigt markiert")
                         elif hasattr(client, "partial_close"):
                             # IBKR-Pfad: echter Teil-Verkauf via partial_close
+                            # v37h+2 (Q3-16, 15.05.2026): nutzt _partial_close_safe
+                            # Wrapper statt direkten Call — _check_close_idempotent
+                            # verhindert doppelte Tranchen-Close-Orders.
                             try:
-                                result = client.partial_close(
-                                    p["position_id"], close_pct, p["instrument_id"],
+                                result = _partial_close_safe(
+                                    client, p["position_id"], close_pct,
+                                    p["instrument_id"], "PARTIAL_CLOSE",
                                 )
                             except Exception as e:
                                 log.error(f"  PARTIAL_CLOSE Exception: {e}")
                                 result = None
+                            if _is_skipped_idempotent(result):
+                                # Anti-Loop: vorheriger Versuch ist noch pending,
+                                # Tranche NICHT als verbraucht markieren
+                                log.info(f"  PARTIAL_CLOSE skip (idempotent): "
+                                         f"Tranche {tranche_idx+1} wartet auf "
+                                         f"pending close-Resolution")
+                                continue
                             if result and result.get("_unsupported"):
                                 # eToro-Fallback: nur Signal loggen
                                 log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} "
@@ -1204,6 +1243,7 @@ def check_stop_loss_take_profit(client, config):
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "action": "STOP_LOSS_CLOSE",
+                    "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
                     "instrument_id": p["instrument_id"],
                     "position_id": p["position_id"],
                     "pnl_pct": p["pnl_pct"],
@@ -1237,6 +1277,7 @@ def check_stop_loss_take_profit(client, config):
                 trade_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "action": "TAKE_PROFIT_CLOSE",
+                    "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
                     "instrument_id": p["instrument_id"],
                     "position_id": p["position_id"],
                     "pnl_pct": p["pnl_pct"],
@@ -2265,8 +2306,30 @@ def check_overnight_positions(client, config):
         weekend_close = rm.check_weekend_fee_impact(parsed, config)
         to_close.extend(weekend_close)
 
+    # v37h+2 (Q3-17, 15.05.2026): Market-Hours-Guard analog SL/TP-Loop.
+    # Verhindert STOP_LOSS_CLOSE_FAILED-Spam wenn Bot waehrend off-hours
+    # eine Position schliessen will (kein Live-Quote -> close_position
+    # returnt None -> _log_close_failure -> trade_history mit FAILED).
+    try:
+        from app.asset_classes import is_asset_class_tradeable as _is_tradeable
+    except ImportError:
+        _is_tradeable = None
+    overnight_skipped_off_hours: set[str] = set()
+
     closed = []
     for pos in to_close:
+        # Q3-17: Market-Hours-Check vor Close-Attempt
+        if _is_tradeable is not None:
+            ac = pos.get("asset_class") or _lookup_asset_class(pos.get("instrument_id"))
+            if not _is_tradeable(ac):
+                if ac not in overnight_skipped_off_hours:
+                    log.info(
+                        f"  OVERNIGHT_CLOSE: Markt geschlossen fuer Klasse '{ac}' — "
+                        "Close-Versuche werden uebersprungen (retry naechster RTH-Open)."
+                    )
+                    overnight_skipped_off_hours.add(ac)
+                continue
+
         result = _close_position_safe(client, pos["position_id"], pos.get("instrument_id"), "OVERNIGHT_CLOSE")
         if _is_skipped_idempotent(result):
             continue
@@ -2278,6 +2341,7 @@ def check_overnight_positions(client, config):
             trade_entry = {
                 "timestamp": datetime.now().isoformat(),
                 "action": "OVERNIGHT_CLOSE",
+                "symbol": pos.get("symbol"),  # Q3-15: fuer Reports/Filter
                 "instrument_id": pos["instrument_id"],
                 "position_id": pos["position_id"],
                 "pnl_pct": pos.get("pnl_pct", 0),

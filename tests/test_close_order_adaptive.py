@@ -66,6 +66,9 @@ def mock_broker(mock_ib_insync):
     broker.limit_slippage_pct = 0.5
     broker.fill_timeout_s = 0.5  # schnell fuer Tests
     broker.cancel_on_timeout = True
+    # Q3-14: E27-Tracker-Felder fuer register-Calls
+    broker._e27_enabled = False  # disabled fuer die meisten Tests
+    broker._tracker = None
 
     # Mock _get_ib
     mock_ib = MagicMock()

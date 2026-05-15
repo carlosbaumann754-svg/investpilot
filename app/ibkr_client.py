@@ -1379,6 +1379,30 @@ class IbkrBroker(BrokerBase):
         limit_order.outsideRth = outside_rth
         limit_trade = ib.placeOrder(contract, limit_order)
 
+        # v37h+2 (Q3-14, 15.05.2026): E27-Tracker-Register fuer Close-Orders.
+        # Vorher fehlte das im Adaptive Helper -> Close-Orders verloren Real-
+        # Time-Status-Updates, trade_history inkonsistent Buy-vs-Close-Pfade.
+        # Defensive: nur registrieren wenn Tracker aktiv.
+        if self._e27_enabled and self._tracker is not None:
+            try:
+                self._tracker.register(
+                    order_id=limit_trade.order.orderId,
+                    trade_entry={
+                        "symbol": contract.symbol,
+                        "action": action,
+                        "order_id": str(limit_trade.order.orderId),
+                        "instrument_id": instrument_id,
+                        "status": "submitted",
+                        "purpose": purpose,  # 'close' / 'partial_close'
+                        "ibkr_status_raw": (
+                            limit_trade.orderStatus.status
+                            if limit_trade.orderStatus else ""
+                        ),
+                    },
+                )
+            except Exception as e:
+                log.warning("E27 register fuer close-LIMIT failed (non-fatal): %s", e)
+
         deadline = time.time() + fill_timeout
         while time.time() < deadline:
             ib.sleep(0.2)
@@ -1425,6 +1449,28 @@ class IbkrBroker(BrokerBase):
                 market_order.outsideRth = outside_rth  # Q3-12: gleicher Hours-Mode wie LIMIT
                 market_trade = ib.placeOrder(contract, market_order)
                 used_market_fallback = True
+
+                # Q3-14: auch MARKET-Fallback registrieren
+                if self._e27_enabled and self._tracker is not None:
+                    try:
+                        self._tracker.register(
+                            order_id=market_trade.order.orderId,
+                            trade_entry={
+                                "symbol": contract.symbol,
+                                "action": action,
+                                "order_id": str(market_trade.order.orderId),
+                                "instrument_id": instrument_id,
+                                "status": "submitted",
+                                "purpose": f"{purpose}_market_fallback",
+                                "ibkr_status_raw": (
+                                    market_trade.orderStatus.status
+                                    if market_trade.orderStatus else ""
+                                ),
+                            },
+                        )
+                    except Exception as e:
+                        log.warning(
+                            "E27 register fuer close-MARKET failed (non-fatal): %s", e)
 
                 deadline = time.time() + 30.0
                 while time.time() < deadline:
