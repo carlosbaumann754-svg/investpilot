@@ -6,7 +6,7 @@ Korrelationschecks, Margin-Ueberwachung, Exposure-Limits.
 
 import logging
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.config_manager import load_config, load_json, save_json
 
@@ -14,6 +14,51 @@ log = logging.getLogger("RiskManager")
 
 RISK_STATE_FILE = "risk_state.json"
 CASH_DCA_STATE_FILE = "cash_dca_state.json"
+
+
+# v37h+2 (R-A1, 15.05.2026): Timezone-aware datetime fuer paused_until.
+# VPS loggt UTC, Carlos lebt in CEST. Vorher: datetime.now() ohne TZ
+# -> isoformat() schreibt naive ISO -> bei State-Sync zwischen VPS (UTC)
+# und Local-Box (CEST) verschob sich paused_until um 2h. Daily-Drawdown-
+# Stop konnte 2h zu frueh aufheben.
+# Loesung: ZoneInfo('Europe/Zurich') konsistent ueberall. Caller die
+# datetime.now() mit paused_until vergleichen wollen muessen _now_local()
+# nutzen damit Mixed-Naive-Aware vermieden wird.
+try:
+    from zoneinfo import ZoneInfo
+    _LOCAL_TZ = ZoneInfo("Europe/Zurich")
+except ImportError:
+    # Fallback fuer aeltere Python-Versionen ohne zoneinfo (sollte nicht
+    # vorkommen, Python>=3.9 hat zoneinfo). Defensiv UTC.
+    _LOCAL_TZ = timezone.utc
+
+
+def _now_local():
+    """Returns aktuelle Zeit in Europe/Zurich-TZ (CEST/CET).
+
+    Konsistent ueberall fuer paused_until-Berechnungen + Vergleiche.
+    isoformat() schreibt mit Offset (z.B. '+02:00'), fromisoformat
+    liest das korrekt zurueck.
+    """
+    return datetime.now(_LOCAL_TZ)
+
+
+def _parse_paused_until(ts):
+    """Parse paused_until-ISO-String tolerant.
+
+    Behandelt sowohl alte (naive) als auch neue (tz-aware) Eintraege.
+    Returns tz-aware datetime in Local-TZ oder None bei Parse-Fail.
+    """
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        # Alte naive Eintraege als Local-TZ interpretieren (= bisheriges Verhalten)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_LOCAL_TZ)
+        return dt.astimezone(_LOCAL_TZ)
+    except (ValueError, TypeError):
+        return None
 
 
 # ============================================================
@@ -93,7 +138,7 @@ def resolve_max_positions(portfolio_value, config):
 # v15: CASH-DEPOSIT-DCA (Staffel bei neuen Einzahlungen)
 # ============================================================
 
-def detect_cash_deposit(current_cash, config):
+def detect_cash_deposit(current_cash, config, currency=None):
     """Detect monatliche Einzahlung und initiiere DCA-Staffel.
 
     Liest den letzten bekannten Cash-Stand aus cash_dca_state.json. Wenn
@@ -123,6 +168,34 @@ def detect_cash_deposit(current_cash, config):
     state = load_json(CASH_DCA_STATE_FILE) or {}
     prev_cash = float(state.get("last_seen_cash_usd", current_cash))
     active_plan = state.get("active_plan")
+
+    # v37h+2 (R-A2, 15.05.2026): Currency-Mismatch-Detection.
+    # current_cash kann je nach IBKR-Reporting-Modus mal USD-Wert, mal
+    # BASE-Wert (CHF) sein (siehe Q3-13 _get_account_value-Praeferenzen).
+    # Wenn die Currency zwischen zwei Cycles wechselt, ist `delta = current_cash
+    # - prev_cash` keine echte Einzahlung sondern ein FX-Reval — Phantom-DCA-
+    # Plan. Vorbeugung: pruefe currency-Hint aus Caller (Default 'USD' fuer
+    # Backward-Compat). Bei Mismatch: State-Reset, kein DCA-Plan.
+    saved_currency = state.get("last_seen_currency")
+    if currency and saved_currency and saved_currency != currency:
+        log.warning(
+            "Cash-DCA Currency-Mismatch erkannt: gespeichert=%s aktuell=%s. "
+            "State-Reset (kein Phantom-DCA aus FX-Reval). Naechster Cycle "
+            "startet mit aktuellem Cash als Baseline.",
+            saved_currency, currency,
+        )
+        state = {
+            "last_seen_cash_usd": current_cash,
+            "last_seen_currency": currency,
+            "last_seen_at": _now_local().isoformat(),
+            "active_plan": None,
+        }
+        try:
+            save_json(CASH_DCA_STATE_FILE, state)
+        except Exception as e:
+            log.warning(f"Cash-DCA state save fehlgeschlagen: {e}", exc_info=True)
+        return {"dca_active": False, "remaining_budget_usd": current_cash,
+                "remaining_cycles": 0}
 
     # v37cd: Trade-Settlement-Adjustment.
     # Schaue letzten Cycle (~6h Worst-Case Cron-Drift) und summiere SELL/
@@ -188,6 +261,9 @@ def detect_cash_deposit(current_cash, config):
     state["last_seen_cash_usd"] = current_cash
     state["last_seen_at"] = datetime.now().isoformat()
     state["active_plan"] = active_plan
+    # v37h+2 (R-A2): Currency-Hint persistieren fuer Mismatch-Detection
+    if currency:
+        state["last_seen_currency"] = currency
     try:
         save_json(CASH_DCA_STATE_FILE, state)
     except Exception as e:
@@ -310,17 +386,19 @@ def check_drawdown_limits():
     weekly_limit = risk_cfg.get("weekly_drawdown_stop_pct", -10)
 
     # Pause noch aktiv?
+    # v37h+2 (R-A1): tz-aware Vergleich via _now_local() + _parse_paused_until.
+    # Verhindert CEST/UTC-Drift wenn State zwischen VPS und Local synct.
     if state.get("paused_until"):
-        try:
-            pause_end = datetime.fromisoformat(state["paused_until"])
-            if datetime.now() < pause_end:
-                return False, f"Bot pausiert bis {state['paused_until']}: {state.get('pause_reason', '')}"
-            else:
-                state["paused_until"] = None
-                state["pause_reason"] = ""
-                _save_risk_state(state)
-        except (ValueError, TypeError):
+        pause_end = _parse_paused_until(state["paused_until"])
+        if pause_end is None:
+            # Unparseable -> Pause zuruecksetzen (defensiv, bisheriges Verhalten)
             state["paused_until"] = None
+            _save_risk_state(state)
+        elif _now_local() < pause_end:
+            return False, f"Bot pausiert bis {state['paused_until']}: {state.get('pause_reason', '')}"
+        else:
+            state["paused_until"] = None
+            state["pause_reason"] = ""
             _save_risk_state(state)
 
     # v36f: None-Safe — wenn Baseline frisch geresetted wurde (z.B. nach
@@ -332,8 +410,11 @@ def check_drawdown_limits():
         reason = (f"TAGES-DRAWDOWN-STOP: {daily_pct:.1f}% "
                   f"(Limit: {daily_limit}%, Verlust: ${daily_usd:,.2f})")
         log.warning(f"  {reason}")
-        # Pause bis naechsten Tag 09:00
-        tomorrow = datetime.now().replace(hour=9, minute=0, second=0) + timedelta(days=1)
+        # Pause bis naechsten Tag 09:00 (Local-Time CEST/CET)
+        # v37h+2 (R-A1): _now_local() statt datetime.now() -> isoformat
+        # schreibt mit TZ-Offset -> kein UTC/CEST-Drift bei State-Sync.
+        tomorrow = _now_local().replace(
+            hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
         state["paused_until"] = tomorrow.isoformat()
         state["pause_reason"] = reason
         _save_risk_state(state)
@@ -346,9 +427,12 @@ def check_drawdown_limits():
         reason = (f"WOCHEN-DRAWDOWN-STOP: {weekly_pct:.1f}% "
                   f"(Limit: {weekly_limit}%, Verlust: ${weekly_usd:,.2f})")
         log.warning(f"  {reason}")
-        # Pause bis naechsten Montag
-        days_to_monday = (7 - datetime.now().weekday()) % 7 or 7
-        next_monday = (datetime.now() + timedelta(days=days_to_monday)).replace(hour=9, minute=0, second=0)
+        # Pause bis naechsten Montag (Local-Time)
+        # v37h+2 (R-A1): _now_local() konsistent
+        now = _now_local()
+        days_to_monday = (7 - now.weekday()) % 7 or 7
+        next_monday = (now + timedelta(days=days_to_monday)).replace(
+            hour=9, minute=0, second=0, microsecond=0)
         state["paused_until"] = next_monday.isoformat()
         state["pause_reason"] = reason
         _save_risk_state(state)
@@ -890,7 +974,8 @@ def emergency_close_all(client, reason="Emergency Kill Switch"):
     pause_set = False
     try:
         state = _load_risk_state()
-        state["paused_until"] = (datetime.now() + timedelta(hours=24)).isoformat()
+        # v37h+2 (R-A1): tz-aware Pause-Setzen
+        state["paused_until"] = (_now_local() + timedelta(hours=24)).isoformat()
         state["pause_reason"] = reason
         _save_risk_state(state)
         pause_set = True

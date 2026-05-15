@@ -62,6 +62,60 @@ _vola_cache: dict[str, tuple[float, float]] = {}  # symbol -> (vola_pct, fetched
 _VOLA_CACHE_TTL_SEC = 3600  # 1h cache, Earnings-Filter laeuft pro Cycle
 
 
+# ============================================================
+# Earnings-Date-Cache (R-A6) — Defensive bei yfinance-Outage
+# ============================================================
+
+# Module-Level-Cache: erfolgreiche _fetch_earnings_date-Resultate.
+# Wenn yfinance/Finnhub bei einem spaeteren Cycle None liefert
+# (API-Outage), kann der Bot auf den letzten bekannten Wert
+# zurueckgreifen und defensive entscheiden. Verhindert ROKU-30.04.-
+# Pattern: Bot blieb in Position weil API-Lookup silent failed.
+_earnings_date_cache: dict[str, tuple[Optional[datetime], float]] = {}
+# Wie lange ein Cache-Eintrag als "vertrauenswuerdig" gilt fuer
+# Defensive-Decisions. 72h = 3 Tage, sodass Memorial-Day-Wochenende
+# nicht zur falschen Cache-Expiry fuehrt.
+_EARNINGS_CACHE_TRUST_TTL_SEC = 72 * 3600
+
+
+def _fetch_earnings_date_with_cache(symbol: str):
+    """v37h+2 (R-A6, 15.05.2026): Wrapper um _fetch_earnings_date mit Cache-
+    Persistenz fuer Defensive-Decisions bei API-Outage.
+
+    Returns:
+      - (dt, "fresh") wenn API erfolgreich → Cache wird geupdated
+      - (dt_cached, "stale_cache") wenn API None aber recent Cache-Hit
+        innerhalb _EARNINGS_CACHE_TRUST_TTL_SEC
+      - (None, "no_data") wenn weder API noch Cache verwertbar
+    """
+    sym_key = (symbol or "").upper()
+    try:
+        from app.events_calendar import _fetch_earnings_date
+        dt = _fetch_earnings_date(symbol)
+    except Exception as e:
+        logger.debug(f"_fetch_earnings_date Exception fuer {symbol}: {e}")
+        dt = None
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+
+    if dt is not None:
+        # Fresh-API-Result: Cache updaten
+        _earnings_date_cache[sym_key] = (dt, now_ts)
+        return dt, "fresh"
+
+    # API lieferte None — pruefe Cache
+    cached = _earnings_date_cache.get(sym_key)
+    if cached is None:
+        return None, "no_data"
+    cached_dt, cached_at_ts = cached
+    if cached_dt is None:
+        return None, "no_data"
+    age_sec = now_ts - cached_at_ts
+    if age_sec > _EARNINGS_CACHE_TRUST_TTL_SEC:
+        return None, "no_data"  # Cache zu alt fuer Trust
+    return cached_dt, "stale_cache"
+
+
 def _fetch_volatility_proxy(symbol: str, lookback_days: int = DEFAULT_LOOKBACK_DAYS_VOLA) -> Optional[float]:
     """30-Tage Standard-Deviation der Daily-Returns in Prozent.
 
@@ -308,16 +362,10 @@ def check_earnings_exit(
     min_pos_pct = float(cfg.get("earnings_exit_min_position_pct", DEFAULT_MIN_POSITION_PCT))
     min_vola = float(cfg.get("earnings_exit_min_vola_pct", DEFAULT_MIN_VOLA_PCT))
 
-    # 1. Earnings-Datum holen
-    try:
-        from app.events_calendar import _fetch_earnings_date
-        earnings_dt = _fetch_earnings_date(symbol)
-    except Exception as e:
-        logger.debug(f"Earnings-Date Lookup fehlgeschlagen fuer {symbol}: {e}")
-        return False, None
-
+    # 1. Earnings-Datum holen — mit Cache-Fallback bei API-Outage (R-A6)
+    earnings_dt, source = _fetch_earnings_date_with_cache(symbol)
     if earnings_dt is None:
-        return False, None  # kein Earnings-Termin bekannt
+        return False, None  # weder API noch Cache verwertbar
 
     # Tage bis Earnings (negativ = Earnings schon vorbei)
     now = datetime.now()
@@ -328,6 +376,23 @@ def check_earnings_exit(
 
     if days_until < 0 or days_until > max_days:
         return False, None  # ausserhalb Trigger-Fenster
+
+    # R-A6: bei Stale-Cache + Earnings imminent -> defensive Close,
+    # auch wenn andere Trigger-Kriterien (Vola, Position-Pct) wegen
+    # API-Outage nicht zuverlaessig bewertet werden koennen.
+    # Threshold: <= max_days (Default 1) Tage entfernt UND Cache-Hit.
+    if source == "stale_cache":
+        logger.warning(
+            "Earnings-Exit DEFENSIVE-MODE fuer %s: API lieferte None, "
+            "aber Cache zeigt Earnings in %d Tag(en) (%s). Earnings-Exit "
+            "wird ausgeloest unabhaengig von Vola/Position-Pct-Trigger.",
+            symbol, days_until, earnings_dt.strftime("%Y-%m-%d"),
+        )
+        return True, (
+            f"Earnings in {days_until} Tag(en) "
+            f"({earnings_dt.strftime('%Y-%m-%d')}) + Defensive-Close "
+            "(yfinance/Finnhub API down, Cache-Trust-Fallback aktiv)"
+        )
 
     # 2. Trigger-Kriterien Variante E
     pos_pct = (position_value_usd / portfolio_value_usd * 100) if portfolio_value_usd > 0 else 0
@@ -374,8 +439,9 @@ def get_pending_earnings_for_positions(
         if not symbol:
             continue
         try:
-            from app.events_calendar import _fetch_earnings_date
-            earnings_dt = _fetch_earnings_date(symbol)
+            # R-A6: nutze Cache-aware Wrapper damit Watchlist-Calls
+            # die Cache fuellen, von der check_earnings_exit profitiert.
+            earnings_dt, _ = _fetch_earnings_date_with_cache(symbol)
             if earnings_dt is None:
                 continue
             now = datetime.now()

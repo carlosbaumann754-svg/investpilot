@@ -1477,7 +1477,12 @@ def execute_scanner_trades(client, config, scan_results):
     effective_cash = credit
     if rm:
         try:
-            dca_info = rm.detect_cash_deposit(credit, config)
+            # v37h+2 (R-A2): currency-Hint mitgeben damit DCA Phantom-Plans
+            # bei FX-Reval verhindert. Bei IBKR Multi-Currency-Konten ist
+            # portfolio['_base_currency'] (= z.B. 'CHF') der zuverlaessige Hint;
+            # Top-Level 'credit' kann USD oder BASE sein (siehe Q3-13).
+            _base_curr = portfolio.get("_base_currency")
+            dca_info = rm.detect_cash_deposit(credit, config, currency=_base_curr)
             effective_cash = dca_info.get("remaining_budget_usd", credit)
             if dca_info.get("dca_active"):
                 log.info(
