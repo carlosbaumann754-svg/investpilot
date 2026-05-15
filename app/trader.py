@@ -208,46 +208,67 @@ def _parse_iso_safe(ts: str):
         return None
 
 
-def _cleanup_pending_closes(max_age_hours: int = 24) -> int:
+def _cleanup_pending_closes(
+    max_age_hours: int = 24,
+    presubmitted_stuck_hours: float = 4.0,
+) -> int:
     """v37h Tab-Audit-Day-4 (14.05.2026): Periodischer Cleanup-Helper.
+    v37h+2 (15.05.2026): erweitert um PreSubmitted-Stuck-Detection (Q3-7).
 
     Carlos's Self-Test-FAIL 14.05.: 2 stale-Eintraege in pending_closes
     blieben 28-30h drin weil Cleanup nur bei neuer Close-Order lief.
     Plus ISO-Z-Format crashte den Filter silent.
+
+    Carlos's Self-Test-FAIL 15.05.: 1 stale 'PreSubmitted' mit
+    filledQuantity=0 hing 23h drin weil PreSubmitted nicht in der
+    Final-Status-Liste war und das Age-Gate (24h) noch nicht griff.
+    IBKR-Standard: PreSubmitted-Orders ohne Fortschritt sind nach
+    ~4h faktisch tot (Cancellation-Window).
 
     Cleanup-Kriterien (entfernt Eintrag wenn EINS davon zutrifft):
       1. submitted_at > max_age_hours her (Default 24h)
       2. result_summary enthaelt 'Filled' (Order ist final, kein Loop-Risk)
       3. result_summary enthaelt 'Cancelled' / 'Rejected' (analog final)
       4. submitted_at unparseable (=alter Bug, sicher zu entfernen)
+      5. NEU v37h+2 (Q3-7): 'PreSubmitted' + filledQuantity=0 +
+         age > presubmitted_stuck_hours -> entfernen (stuck order)
 
     Returns:
         Anzahl entfernter Eintraege.
 
-    Wird in _check_close_idempotent als Pre-Check aufgerufen (idempotent —
-    laeuft einmal pro close-attempt, also typisch < 5x pro Bot-Cycle).
+    Aufruf-Stellen:
+      - run_trading_cycle() bei Cycle-Start (NEU v37h+2: periodischer GC)
+      - _check_close_idempotent() bei Close-Attempt (existierend)
+      - _track_pending_close() nach Close-Submit (existierend)
+    Idempotent — kann mehrmals pro Cycle laufen ohne Side-Effects.
     """
     try:
         pending = load_json("pending_closes.json") or {}
         if not pending:
             return 0
         from datetime import datetime as _dt, timedelta as _td
-        cutoff = _dt.now() - _td(hours=max_age_hours)
+        cutoff_age = _dt.now() - _td(hours=max_age_hours)
+        cutoff_presubmitted = _dt.now() - _td(hours=presubmitted_stuck_hours)
         kept = {}
         for k, v in pending.items():
             if not isinstance(v, dict):
                 continue  # garbage entry
-            # Kriterium 2-3: Final-Status -> entfernen
             summary = str(v.get("result_summary", ""))
+            # Kriterium 2-3: Final-Status -> entfernen
             if any(s in summary for s in ("'Filled'", "'Cancelled'",
                                             "'Rejected'", "'ApiCancelled'")):
                 continue
-            # Kriterium 1: Age-Check
+            # Kriterium 4: submitted_at unparseable -> weg
             dt = _parse_iso_safe(v.get("submitted_at"))
             if dt is None:
-                continue  # Kriterium 4: unparseable -> weg
-            if dt < cutoff:
-                continue  # zu alt
+                continue
+            # Kriterium 1: 24h Age-Limit (Default-Hard-Cap)
+            if dt < cutoff_age:
+                continue
+            # Kriterium 5 (Q3-7): stuck PreSubmitted mit filledQuantity=0 + age > 4h
+            if "'PreSubmitted'" in summary:
+                if _is_zero_filled(summary) and dt < cutoff_presubmitted:
+                    continue
             kept[k] = v
         removed = len(pending) - len(kept)
         if removed > 0:
@@ -257,6 +278,30 @@ def _cleanup_pending_closes(max_age_hours: int = 24) -> int:
     except Exception as e:
         log.debug(f"pending_closes Cleanup fehlgeschlagen (non-fatal): {e}")
         return 0
+
+
+def _is_zero_filled(summary: str) -> bool:
+    """v37h+2 (Q3-7): Robust-Detection von 'filledQuantity: 0' im result_summary.
+
+    Das result_summary-Feld ist ein str() vom IBKR-Order-Dict, daher
+    diverse Quoting-Stile moeglich. Tolerant gegen Leerzeichen, Quotes,
+    int vs float.
+
+    Returns True wenn 'filledQuantity' explizit als 0 (oder 0.0) gefunden.
+    Returns False wenn nicht gefunden oder > 0 (sicherer Default — bleibt
+    drin solange wir nicht sicher sind dass nichts gefuellt wurde).
+    """
+    import re
+    if not summary:
+        return False
+    # Matches: 'filledQuantity': 0, "filledQuantity":0, 'filledQuantity' : 0.0
+    m = re.search(r"['\"]filledQuantity['\"]\s*:\s*([\d.]+)", summary)
+    if not m:
+        return False
+    try:
+        return float(m.group(1)) == 0.0
+    except ValueError:
+        return False
 
 
 def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
@@ -2176,6 +2221,18 @@ def run_trading_cycle():
     log.info("InvestPilot Trading-Zyklus startet...")
     log.info(f"Zeit: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     log.info("=" * 55)
+
+    # v37h+2 (15.05.2026, Q3-7): Periodischer pending_closes-Cleanup als
+    # Garbage-Collector — laeuft bei jedem Cycle-Start (alle 5 Min),
+    # nicht mehr nur bei Close-Attempts. Verhindert dass stale-Eintraege
+    # 23h+ unentdeckt bleiben wenn Bot keine Sell-Signale generiert.
+    # Idempotent + non-fatal (eigene try/except in der Funktion).
+    try:
+        _removed = _cleanup_pending_closes()
+        if _removed > 0:
+            log.info(f"  pending_closes-GC: {_removed} stale-Eintraege entfernt")
+    except Exception as e:
+        log.debug(f"pending_closes-GC fehlgeschlagen (non-fatal): {e}")
 
     config = load_config()
     client = get_broker(config)  # broker-agnostic: 'etoro' (default) oder 'ibkr' aus config.json

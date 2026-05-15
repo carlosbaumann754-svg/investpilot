@@ -199,3 +199,130 @@ def test_cleanup_custom_max_age(mock_state):
         "12345": {"submitted_at": _ago_iso(10), "result_summary": "Submitted"},
     }
     assert _cleanup_pending_closes(max_age_hours=20) == 0
+
+
+# ============================================================
+# v37h+2 (Q3-7) — Kriterium 5: stuck PreSubmitted mit filledQuantity=0
+# ============================================================
+
+def test_cleanup_removes_stale_presubmitted_zero_fills(mock_state):
+    """Kriterium 5 (Q3-7): PreSubmitted + filledQuantity=0 + age > 4h -> weg.
+
+    Carlos's Self-Test-FAIL 15.05.: Order #97462781 hing 23h als
+    PreSubmitted mit 0 Fills weil 'PreSubmitted' nicht in Final-Status-
+    Liste war und 24h-Age-Gate noch nicht griff.
+    """
+    from app.trader import _cleanup_pending_closes
+    mock_state["pending_closes.json"] = {
+        "97462781": {
+            "submitted_at": _ago_iso(5),  # 5h alt = > 4h Stuck-Limit
+            "result_summary": "{'orderForOpen': {'statusID': 'PreSubmitted', "
+                              "'filledQuantity': 0}}",
+        },
+    }
+    removed = _cleanup_pending_closes()
+    assert removed == 1
+    assert "97462781" not in mock_state["pending_closes.json"]
+
+
+def test_cleanup_keeps_presubmitted_with_partial_fill(mock_state):
+    """Negativ-Test: PreSubmitted MIT partial-fill bleibt drin (laeuft noch).
+
+    Wenn filledQuantity > 0 ist, ist die Order aktiv und darf nicht
+    versehentlich aus dem Tracking entfernt werden.
+    """
+    from app.trader import _cleanup_pending_closes
+    mock_state["pending_closes.json"] = {
+        "12345": {
+            "submitted_at": _ago_iso(5),
+            "result_summary": "{'orderForOpen': {'statusID': 'PreSubmitted', "
+                              "'filledQuantity': 50}}",  # partial-fill!
+        },
+    }
+    removed = _cleanup_pending_closes()
+    assert removed == 0
+    assert "12345" in mock_state["pending_closes.json"]
+
+
+def test_cleanup_keeps_fresh_presubmitted_zero_fills(mock_state):
+    """Negativ-Test: PreSubmitted + 0 fills aber FRISCH (<4h) bleibt drin.
+
+    Order braucht Zeit um durch IBKR-Routing zu fliessen. Erst nach 4h
+    ist sie sicher tot.
+    """
+    from app.trader import _cleanup_pending_closes
+    mock_state["pending_closes.json"] = {
+        "12345": {
+            "submitted_at": _ago_iso(2),  # 2h alt = < 4h Stuck-Limit
+            "result_summary": "{'statusID': 'PreSubmitted', 'filledQuantity': 0}",
+        },
+    }
+    removed = _cleanup_pending_closes()
+    assert removed == 0
+    assert "12345" in mock_state["pending_closes.json"]
+
+
+def test_cleanup_presubmitted_custom_stuck_hours(mock_state):
+    """presubmitted_stuck_hours-Parameter respektiert."""
+    from app.trader import _cleanup_pending_closes
+    mock_state["pending_closes.json"] = {
+        "12345": {
+            "submitted_at": _ago_iso(3),  # 3h alt
+            "result_summary": "{'statusID': 'PreSubmitted', 'filledQuantity': 0}",
+        },
+    }
+    # 2h Stuck-Limit: 3h-alter PreSubmitted -> entfernt
+    assert _cleanup_pending_closes(presubmitted_stuck_hours=2) == 1
+    # Wieder setzen, 6h Stuck-Limit: 3h-alter -> bleibt
+    mock_state["pending_closes.json"] = {
+        "12345": {
+            "submitted_at": _ago_iso(3),
+            "result_summary": "{'statusID': 'PreSubmitted', 'filledQuantity': 0}",
+        },
+    }
+    assert _cleanup_pending_closes(presubmitted_stuck_hours=6) == 0
+
+
+# ============================================================
+# _is_zero_filled — Robustness gegen Quoting-Varianten
+# ============================================================
+
+def test_is_zero_filled_single_quotes():
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled("{'filledQuantity': 0}") is True
+
+
+def test_is_zero_filled_double_quotes():
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled('{"filledQuantity": 0}') is True
+
+
+def test_is_zero_filled_float_zero():
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled("{'filledQuantity': 0.0}") is True
+
+
+def test_is_zero_filled_with_whitespace():
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled("{'filledQuantity' :  0}") is True
+
+
+def test_is_zero_filled_nonzero_returns_false():
+    """Bei >0 -> False (sicher: Order laeuft noch)."""
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled("{'filledQuantity': 50}") is False
+    assert _is_zero_filled("{'filledQuantity': 0.5}") is False
+
+
+def test_is_zero_filled_missing_returns_false():
+    """Kein filledQuantity-Key -> False (sicher: nicht löschen)."""
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled("{'statusID': 'PreSubmitted'}") is False
+    assert _is_zero_filled("") is False
+    assert _is_zero_filled(None) is False
+
+
+def test_is_zero_filled_garbage_returns_false():
+    """Defensiv: garbage input -> False, kein Crash."""
+    from app.trader import _is_zero_filled
+    assert _is_zero_filled("'filledQuantity': abc") is False
