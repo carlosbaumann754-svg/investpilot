@@ -1005,7 +1005,16 @@ def check_stop_loss_take_profit(client, config):
                 log.info(f"  TIME_STOP: Position {p['position_id']} "
                          f"(Instrument {p['instrument_id']}) — "
                          f"{age_days:.1f}d offen, PnL {p['pnl_pct']:+.2f}% < {ts_stale_thr}%")
-                result = client.close_position(p["position_id"], p["instrument_id"])
+                # v37h+2 (Q3-11, 15.05.2026): TIME_STOP nutzt jetzt
+                # _close_position_safe statt direktem close_position-Call.
+                # Vorher: kein _check_close_idempotent / pending_closes-Tracker
+                # -> bei langsamem Fill (off-hours, partial) feuerte Time-Stop
+                # alle 5 Min eine neue Close-Order. Gleicher Anti-Loop-Bug-
+                # Pattern wie BA/CPER vom 04.05.
+                result = _close_position_safe(
+                    client, p["position_id"], p["instrument_id"], "TIME-STOP")
+                if _is_skipped_idempotent(result):
+                    continue  # Anti-Loop-Skip
                 if _is_already_closed(result):
                     log.info(f"  TIME_STOP skip {p['instrument_id']}: bei IBKR bereits "
                              f"geschlossen (stale Bot-Cache)")
@@ -1438,7 +1447,11 @@ def execute_scanner_trades(client, config, scan_results):
             log.warning(f"Cash-DCA Detection fehlgeschlagen (non-fatal): {e}", exc_info=True)
 
     # v37h+1 (14.05.2026): Cash-Reserve-Guard (Hybrid Floor + %).
-    # Ersetzt den W7-Entnahme-Planer durch dauerhaft aktiven Cash-Buffer.
+    # v37h+2 (15.05.2026, Q3-13): explizit BASE-Currency-Quellen lesen statt
+    # `credit`/`_equity`. Verhindert dass Cash-Reserve gegen USD-Cash
+    # verglichen wird waehrend Reserve in CHF gerechnet ist (~14% Drift bei
+    # FX-Bewegungen). Wenn _base_*-Felder fehlen (eToro-Fallback, alte
+    # Snapshots): fallback auf Top-Level Werte.
     # Reduziert effective_cash um die geforderte Reserve in BASE-Currency (CHF).
     # Wenn cash < reserve: deployable = 0 -> Bot pausiert Buys ohne Notverkauf.
     # Auto-Refill durch normale TP/SL/Dividenden-Sells.
@@ -1447,22 +1460,40 @@ def execute_scanner_trades(client, config, scan_results):
             get_required_reserve_chf,
             compute_deployable_cash_chf,
         )
-        required_reserve_chf = get_required_reserve_chf(total_value, config)
+        # Q3-13: BASE-Werte explizit fuer Cash-Reserve. Fallback auf Top-Level.
+        equity_chf = portfolio.get("_base_net_liquidation") or total_value
+        cash_chf = portfolio.get("_base_total_cash")
+        # Wenn _base_total_cash fehlt UND `credit` in derselben Currency wie
+        # equity_chf ist (typisch CHF=BASE-Konto ohne Multi-Currency-Reporting):
+        # nutze credit als Fallback. Sonst lieber konservativ 0.
+        if cash_chf is None:
+            cash_chf = effective_cash  # Best-Effort Fallback
+        required_reserve_chf = get_required_reserve_chf(equity_chf, config)
         if required_reserve_chf > 0:
-            pre_reserve_cash = effective_cash
-            effective_cash = compute_deployable_cash_chf(
-                effective_cash, total_value, config
+            deployable_chf = compute_deployable_cash_chf(
+                cash_chf, equity_chf, config
             )
-            if abs(pre_reserve_cash - effective_cash) > 0.01:
-                log.info(
-                    f"  Cash-Reserve aktiv: {required_reserve_chf:,.2f} CHF "
-                    f"reserviert (deploy-bar {effective_cash:,.2f}/{pre_reserve_cash:,.2f})"
-                )
-                if effective_cash <= 0.01:
+            # effective_cash ist in USD/Top-Level — wir muessen die Reserve-
+            # Kuerzung in derselben Currency anwenden. Annahme: cash_chf und
+            # effective_cash haben dasselbe Verhaeltnis (= IBKR-FX-Rate).
+            # Wenn cash_chf > 0: scale down effective_cash by ratio.
+            if cash_chf > 0:
+                deploy_ratio = deployable_chf / cash_chf
+                pre_reserve_cash = effective_cash
+                effective_cash = max(0.0, effective_cash * deploy_ratio)
+                if abs(pre_reserve_cash - effective_cash) > 0.01:
                     log.info(
-                        "  Cash-Reserve: Cash unter Reserve-Schwelle -> "
-                        "Buys pausiert, warte auf TP/SL/Dividenden-Refill"
+                        f"  Cash-Reserve aktiv: {required_reserve_chf:,.2f} CHF "
+                        f"reserviert (Equity {equity_chf:,.0f} CHF, "
+                        f"Cash {cash_chf:,.0f} CHF, "
+                        f"deploy-Ratio {deploy_ratio:.3f}, "
+                        f"effective_cash {effective_cash:,.2f}/{pre_reserve_cash:,.2f})"
                     )
+                    if effective_cash <= 0.01:
+                        log.info(
+                            "  Cash-Reserve: Cash unter Reserve-Schwelle -> "
+                            "Buys pausiert, warte auf TP/SL/Dividenden-Refill"
+                        )
     except Exception as e:
         log.warning(f"Cash-Reserve-Guard fehlgeschlagen (non-fatal): {e}", exc_info=True)
 

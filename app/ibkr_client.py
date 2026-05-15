@@ -723,13 +723,34 @@ class IbkrBroker(BrokerBase):
             base_currency = self._get_base_currency()
             base_unrealized = self._get_account_value_base("UnrealizedPnL") or 0.0
             base_realized = self._get_account_value_base("RealizedPnL") or 0.0
-            # NetLiquidation, TotalCashValue, GrossPositionValue sind sowieso
-            # nur BASE-denominiert (Single-Account-Sicht), wiederverwenden:
-            base_net_liquidation = equity
-            base_total_cash = cash
-            base_gross_position_value = gross_pos_value
+            # v37h+2 (Q3-13, 15.05.2026): explizit BASE-Werte fuer Cash + GrossPosVal
+            # statt _get_account_value (das USD bevorzugt). Bug-Risk: bei Multi-
+            # Currency-Konten wo IBKR sowohl USD- als auch BASE-Eintraege liefert,
+            # haette der Bot bislang USD-Cash bevorzugt -> Position-Sizing falsch
+            # kalibriert + Cash-Reserve gegen falsche Currency abgezogen.
+            base_total_cash = self._get_account_value_base("TotalCashValue") or cash
+            base_gross_position_value = (
+                self._get_account_value_base("GrossPositionValue") or gross_pos_value
+            )
+            base_net_liquidation = equity  # NetLiquidation kommt nur in BASE
             # Implizite Cost-Basis in BASE = GrossPositionValue - UnrealizedPnL
             base_cost_basis = base_gross_position_value - base_unrealized
+
+            # v37h+2 (Q3-13, 15.05.2026): Defensive-Logging bei Currency-Drift.
+            # Wenn cash (_get_account_value USD-pref) != base_total_cash, ist
+            # IBKR Multi-Currency-Reporting im Spiel. Bot's Top-Level credit
+            # behaelt USD-pref-Wert fuer Backward-Compat (positions sind in
+            # USD), aber Cash-Reserve + Sizing-Stellen muessen _base_total_cash
+            # nutzen. Drift > 1%% = Warning damit sichtbar.
+            if base_total_cash > 0 and cash > 0:
+                drift_pct = abs(cash - base_total_cash) / base_total_cash * 100
+                if drift_pct > 1.0:
+                    log.warning(
+                        "Currency-Drift TotalCashValue: USD-pref=%.2f vs BASE=%.2f "
+                        "(%.1f%% Drift). Bot's `credit` zeigt USD-pref; "
+                        "Cash-Reserve/Sizing nutzen _base_total_cash.",
+                        cash, base_total_cash, drift_pct,
+                    )
 
             # eToro-kompatible Top-Level-Keys (Bot-Konsumenten lesen diese!):
             #   credit         = Cash-Balance (eToro Standard, jetzt TotalCashValue)
@@ -1291,6 +1312,7 @@ class IbkrBroker(BrokerBase):
         self, contract, action: str, qty: int,
         fill_timeout: float = 30.0,
         purpose: str = "close",
+        instrument_id=None,
     ) -> Optional[dict]:
         """v37h+2 (15.05.2026, Q3-10): Adaptive LIMIT->MARKET Close-Order.
 
@@ -1331,14 +1353,30 @@ class IbkrBroker(BrokerBase):
             log.error("%s: kein Quote fuer %s — abgebrochen", purpose, contract.symbol)
             return None
 
+        # v37h+2 (Q3-12, 15.05.2026): outsideRth analog zu _place_market_order.
+        # Vorher fehlte das im Q3-10-Helper -> Close-Versuche waehrend Pre-/Post-
+        # Market wurden silent nicht gefuellt, MARKET-Fallback auch nicht ->
+        # SL effektiv tot in off-hours. Bug der Q3-10's Daseinszweck untergrub.
+        # Asset-Class-aware: bei US-Stocks rth_only, bei Forex/Crypto outsideRth=True.
+        # instrument_id ist optional — wenn nicht gegeben: Default-Behavior (False).
+        outside_rth = False
+        if instrument_id is not None:
+            try:
+                settings = self._resolve_order_settings(instrument_id, None)
+                outside_rth = settings.get("outside_rth", False)
+            except Exception as e:
+                log.debug("%s: _resolve_order_settings fehlgeschlagen "
+                          "(non-fatal, default outsideRth=False): %s", purpose, e)
+
         slippage_sign = 1 if action == "BUY" else -1
         limit_price = round(quote * (1 + slippage_sign * self.limit_slippage_pct / 100.0), 2)
 
         # Phase 1: LIMIT mit Slippage-Buffer
-        log.info("%s LIMIT %s %d %s @ $%.2f (quote $%.2f, slip %s%%)",
+        log.info("%s LIMIT %s %d %s @ $%.2f (quote $%.2f, slip %s%%, outsideRth=%s)",
                  purpose.upper(), action, qty, contract.symbol, limit_price,
-                 quote, self.limit_slippage_pct)
+                 quote, self.limit_slippage_pct, outside_rth)
         limit_order = LimitOrder(action, qty, limit_price)
+        limit_order.outsideRth = outside_rth
         limit_trade = ib.placeOrder(contract, limit_order)
 
         deadline = time.time() + fill_timeout
@@ -1379,11 +1417,12 @@ class IbkrBroker(BrokerBase):
             # MARKET fuer den Rest (falls > 0)
             if remaining_qty > 0:
                 log.warning(
-                    "%s MARKET-Fallback %s %d %s (LIMIT-fill %d/%d, Q3-10 Safety-Net)",
+                    "%s MARKET-Fallback %s %d %s (LIMIT-fill %d/%d, Q3-10 Safety-Net, outsideRth=%s)",
                     purpose.upper(), action, remaining_qty, contract.symbol,
-                    limit_fill_qty, qty,
+                    limit_fill_qty, qty, outside_rth,
                 )
                 market_order = MarketOrder(action, remaining_qty)
+                market_order.outsideRth = outside_rth  # Q3-12: gleicher Hours-Mode wie LIMIT
                 market_trade = ib.placeOrder(contract, market_order)
                 used_market_fallback = True
 
@@ -1516,12 +1555,14 @@ class IbkrBroker(BrokerBase):
 
             # v37h+2 (Q3-10): Adaptive LIMIT->MARKET via Helper.
             # Verhindert haengende Submitted-Orders in fallenden Maerkten.
+            # Q3-12: instrument_id propagiert fuer outsideRth-Bestimmung.
             result = self._place_close_order_adaptive(
                 contract=pos.contract,
                 action=action,
                 qty=qty,
                 fill_timeout=self.fill_timeout_s,
                 purpose="close",
+                instrument_id=target_con_id,
             )
             if result is None:
                 return None
@@ -1637,12 +1678,14 @@ class IbkrBroker(BrokerBase):
                      remaining_qty, action)
 
             # v37h+2 (Q3-10): Adaptive LIMIT->MARKET via Helper (gleich wie close_position).
+            # Q3-12: instrument_id propagiert fuer outsideRth-Bestimmung.
             result = self._place_close_order_adaptive(
                 contract=pos.contract,
                 action=action,
                 qty=qty_close,
                 fill_timeout=self.fill_timeout_s,
                 purpose="partial_close",
+                instrument_id=target_con_id,
             )
             if result is None:
                 return None

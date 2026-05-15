@@ -340,6 +340,113 @@ def test_adaptive_close_purpose_propagates_to_action(mock_broker):
 
 
 # ============================================================
+# Q3-12: outsideRth-Propagation (BLOCKER B2 Fix)
+# ============================================================
+
+def test_adaptive_close_outsiderth_via_instrument_id(mock_broker):
+    """Q3-12: instrument_id triggert _resolve_order_settings -> outsideRth gesetzt."""
+    broker, mock_ib = mock_broker
+    contract = MagicMock(symbol="SLV")
+
+    limit_trade = _make_trade_mock(filled=100, status="Filled", avg_price=70.16)
+    mock_ib.placeOrder.return_value = limit_trade
+
+    # Mock _resolve_order_settings -> outside_rth=True (z.B. fuer Forex/Crypto)
+    broker._resolve_order_settings = MagicMock(return_value={
+        "slippage_pct": 0.5,
+        "outside_rth": True,
+        "asset_class": "forex",
+        "trading_hours_mode": "always",
+    })
+
+    with patch("app.ibkr_contract_resolver.get_quote", return_value=70.0):
+        broker._place_close_order_adaptive(
+            contract=contract, action="SELL", qty=100,
+            purpose="close", instrument_id=39039301,
+        )
+
+    # _resolve_order_settings wurde aufgerufen
+    broker._resolve_order_settings.assert_called_once_with(39039301, None)
+    # LIMIT-Order wurde mit outsideRth=True erstellt
+    placed_order = mock_ib.placeOrder.call_args[0][1]
+    assert placed_order.outsideRth is True
+
+
+def test_adaptive_close_outsiderth_default_false_without_instrument_id(mock_broker):
+    """Wenn instrument_id=None: Default outsideRth=False (backward-compat)."""
+    broker, mock_ib = mock_broker
+    contract = MagicMock(symbol="AAPL")
+
+    limit_trade = _make_trade_mock(filled=10, status="Filled")
+    mock_ib.placeOrder.return_value = limit_trade
+    broker._resolve_order_settings = MagicMock()
+
+    with patch("app.ibkr_contract_resolver.get_quote", return_value=200.0):
+        broker._place_close_order_adaptive(
+            contract=contract, action="SELL", qty=10,
+            purpose="close",  # kein instrument_id
+        )
+
+    # _resolve_order_settings nicht gerufen
+    broker._resolve_order_settings.assert_not_called()
+    # outsideRth Default False
+    placed_order = mock_ib.placeOrder.call_args[0][1]
+    assert placed_order.outsideRth is False
+
+
+def test_adaptive_close_outsiderth_settings_error_falls_back_safe(mock_broker):
+    """Wenn _resolve_order_settings crashed: Default outsideRth=False, kein Abort."""
+    broker, mock_ib = mock_broker
+    contract = MagicMock(symbol="AAPL")
+
+    limit_trade = _make_trade_mock(filled=10, status="Filled")
+    mock_ib.placeOrder.return_value = limit_trade
+    broker._resolve_order_settings = MagicMock(side_effect=Exception("config broken"))
+
+    with patch("app.ibkr_contract_resolver.get_quote", return_value=200.0):
+        result = broker._place_close_order_adaptive(
+            contract=contract, action="SELL", qty=10,
+            purpose="close", instrument_id=265598,
+        )
+
+    # Trotz Exception: Order wurde platziert mit Default outsideRth=False
+    assert result is not None
+    placed_order = mock_ib.placeOrder.call_args[0][1]
+    assert placed_order.outsideRth is False
+
+
+def test_adaptive_close_market_fallback_inherits_outsiderth(mock_broker):
+    """MARKET-Fallback muss gleichen outsideRth-Mode haben wie LIMIT."""
+    broker, mock_ib = mock_broker
+    contract = MagicMock(symbol="EUR.USD")
+
+    limit_trade = _make_trade_mock(filled=0, status="Submitted")
+    limit_trade.isDone = MagicMock(return_value=False)
+    market_trade = _make_trade_mock(filled=10000, status="Filled", avg_price=1.085)
+
+    mock_ib.placeOrder.side_effect = [limit_trade, market_trade]
+    broker._resolve_order_settings = MagicMock(return_value={
+        "slippage_pct": 0.5,
+        "outside_rth": True,
+        "asset_class": "forex",
+        "trading_hours_mode": "always",
+    })
+
+    with patch("app.ibkr_contract_resolver.get_quote", return_value=1.085):
+        broker._place_close_order_adaptive(
+            contract=contract, action="SELL", qty=10000,
+            fill_timeout=0.1, purpose="close", instrument_id=12345,
+        )
+
+    # 2 Orders platziert, beide mit outsideRth=True
+    assert mock_ib.placeOrder.call_count == 2
+    limit_order_placed = mock_ib.placeOrder.call_args_list[0][0][1]
+    market_order_placed = mock_ib.placeOrder.call_args_list[1][0][1]
+    assert limit_order_placed.outsideRth is True
+    assert market_order_placed.outsideRth is True
+
+
+# ============================================================
 # Statuscodes bei nicht-vollstaendigem Fill
 # ============================================================
 
