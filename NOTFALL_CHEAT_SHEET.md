@@ -166,4 +166,4 @@ docker compose -f /opt/investpilot/docker-compose.vps.yml --env-file /opt/invest
 - Hetzner Support: console.hetzner.cloud (Login mit Carlos's Mail)
 - Pushover-Status: status.pushover.net
 
-**Wichtigste Erinnerung: Bei Pushover-Alerts ist NICHTS akut.** IBKR Paper = Spielgeld. Real-Cutover ist 28.05. — bis dahin ist jeder Alert ein Geschenk an die Robustheit. Ruhig bleiben, durchatmen, Schritt 1-3 abarbeiten.
+**Wichtigste Erinnerung: Bei Pushover-Alerts ist NICHTS akut.** IBKR Paper = Spielgeld. Real-Cutover ist 01.06.2026 (Mo, verschoben von 28.05. am 17.05.) — bis dahin ist jeder Alert ein Geschenk an die Robustheit. Ruhig bleiben, durchatmen, Schritt 1-3 abarbeiten.

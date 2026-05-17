@@ -4839,7 +4839,7 @@ def api_selftest_history(_user=Depends(require_auth)):
 async def api_cutover_readiness():
     """v37p: Aggregierter Status aller Cutover-Hard-Gates + Sub-Komponenten.
 
-    Eine zentrale Seite die fuer den Cutover-Tag (28.05.2026) alle wichtigen
+    Eine zentrale Seite die fuer den Cutover-Tag (01.06.2026) alle wichtigen
     Health-Indikatoren zusammenfasst. Liefert pro Gate:
       - status: 'green' / 'yellow' / 'red'
       - title, detail, last_check (wenn anwendbar)
@@ -4851,7 +4851,7 @@ async def api_cutover_readiness():
     import json as _json
     from pathlib import Path as _Path
 
-    cutover_date = _date(2026, 5, 28)
+    cutover_date = _date(2026, 6, 1)  # v37h+2 (17.05.2026): verschoben von 28.05 auf 01.06 (Mo Cutover statt Do)
     today = _dt.now(_tz.utc).date()
     days_to_cutover = (cutover_date - today).days
 

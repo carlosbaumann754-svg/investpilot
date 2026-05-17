@@ -15,7 +15,7 @@ Warum:
      2. Regime-Bias - Bull-2023 in Train kann Bear-2024 in Test perfekt
         slappen lassen. Mit Rolling-Windows sehen wir beides ehrlich.
 
-   Real-Money-Cutover ist 28.05.2026. WFO sagt uns *vorher*: ist Sharpe 3.5
+   Real-Money-Cutover ist 01.06.2026 (Mo, verschoben von 28.05. am 17.05.). WFO sagt uns *vorher*: ist Sharpe 3.5
    nur Lucky-Backtest oder echte Edge?
 
 Roadmap-Plan:

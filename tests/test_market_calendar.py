@@ -47,20 +47,20 @@ def test_day_before_memorial_day_2026_is_normal():
 
 
 def test_day_after_memorial_day_2026_is_normal():
-    """Tuesday 26.05.2026 = normaler Handelstag (Cutover-Tag wuerde der 28.05. sein!)."""
+    """Tuesday 26.05.2026 = normaler Handelstag (Cutover-Runbook-End-Check-Tag-1!)."""
     tuesday_after = datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc)
     assert is_market_holiday(date(2026, 5, 26)) is False
     assert is_asset_class_tradeable("stocks", now_utc=tuesday_after) is True
 
 
 # ============================================================
-# Cutover-Tag selbst (28.05.2026 = Donnerstag)
+# Cutover-Tag selbst (01.06.2026 = Montag, v37h+2 verschoben von 28.05.)
 # ============================================================
 
 def test_cutover_day_2026_is_normal_trading():
-    """Real-Money Cutover = Do 28.05.2026 — muss normaler Handelstag sein."""
-    cutover = datetime(2026, 5, 28, 14, 0, tzinfo=timezone.utc)  # 10:00 EDT
-    assert is_market_holiday(date(2026, 5, 28)) is False
+    """Real-Money Cutover = Mo 01.06.2026 — muss normaler Handelstag sein."""
+    cutover = datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)  # 10:00 EDT
+    assert is_market_holiday(date(2026, 6, 1)) is False
     assert is_asset_class_tradeable("stocks", now_utc=cutover) is True
 
 

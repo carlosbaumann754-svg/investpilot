@@ -1,19 +1,23 @@
-# Cutover-Runbook (v37bb, Stand 30.04.2026)
+# Cutover-Runbook (v37h+2, Stand 17.05.2026)
 
 > **Zweck:** Schritt-fuer-Schritt-Anleitung fuer den Real-Money-Cutover am
-> **Donnerstag 28.05.2026** und Notfall-Pfade fuer die ersten 6 Wochen
+> **Montag 01.06.2026** und Notfall-Pfade fuer die ersten 6 Wochen
 > Live-Trading. Alles in **Schweizer Zeit (CEST/CET)**.
+>
+> **Datums-Aenderung 17.05.2026:** Cutover verschoben von Do 28.05. auf
+> Mo 01.06.2026. Begruendung: 4 zusaetzliche Soak-Test-Tage, Memorial-Day
+> 25.05. als natuerliche Pause, Mo-Cutover = volle Trading-Woche ab Tag 1.
 
 ---
 
-## 1. Cutover-Tag (Do 28.05.2026)
+## 1. Cutover-Tag (Mo 01.06.2026)
 
 ### Zeitplan
 
 | Zeit (CEST) | Schritt | Wer | Erwartung |
 |---|---|---|---|
 | Morgens 09:00 | **GO/NO-GO-Check** vor Cutover | du | siehe Section 2 unten |
-| 14:00-15:00 | Pre-Cutover-Snapshot | du | `Pull-BotState.cmd` (Doppelklick) + Dashboard-Screenshot. **DST-Hinweis:** 28.05. ist Sommerzeit (CEST = UTC+2), Markt-Open daher 15:30 CEST |
+| 14:00-15:00 | Pre-Cutover-Snapshot | du | `Pull-BotState.cmd` (Doppelklick) + Dashboard-Screenshot. **DST-Hinweis:** 01.06. ist Sommerzeit (CEST = UTC+2), Markt-Open daher 15:30 CEST |
 | **15:00** | **Cutover-Switch in docker-compose.yml** | du | `TRADING_MODE: paper -> live` |
 | 15:01 | `docker compose up -d --force-recreate investpilot` | du | Container restart |
 | 15:02-15:05 | Pushover-Alert: "Bot connected zu IBKR Real-Account" | passiv | bot-broker-status |
@@ -22,16 +26,22 @@
 | 16:30 | Erstes Pushover-Trade-Alert (oder kein Trade = OK) | passiv | wenn alles ok |
 | 22:00 | US-Markt schliesst | passiv | Tagesabschluss-Pushover |
 
-### Pre-Cutover-Aktionen (W4: 18.-24.05.)
+### Pre-Cutover-Aktionen (W4: 18.-22.05. + W5: 25.-31.05.)
 
+**W4 (diese Woche) — IBKR-Setup-Reste:**
 - [ ] IBKR Real-Account oeffnet (U-Prefix, nicht DU-Paper)
-- [ ] 2'000 CHF eingezahlt + bestaetigt im Konto
+- [ ] 2'000 CHF eingezahlt + bestaetigt im Konto (**Settlement 3-5d** — Mi 27.05. spaetester Eingang)
 - [ ] **IBKR Master-Account-2FA aktiviert** (Pre-Cutover-Aktion, NICHT Tag-Gate. Erscheint als Item in der Cutover-Readiness-Card als Visibility-Anker)
 - [ ] Read-Only Second-User `cbaumann_view` angelegt
-- [ ] Final-Backup gezogen: Doppelklick auf `investpilot_local_backups\Pull-BotState.cmd` (zieht `risk_state.json` + `brain_state.json` + `config.json` + `wfo_status.json` frisch vom VPS, zusaetzlich zum nightly tar.gz-Auto-Cron)
 - [ ] config.json broker-Setting checken
 - [ ] Dashboard-Cutover-Readiness-Card alle 8/8 gruen oder gelbe explizit dokumentiert
-- [ ] **Pytest-Suite-Daily-Check Mo-Do 19.-22.05.** — `python -m pytest -q` muss jeden Tag im End-Check-Fenster gruen sein. Lehre aus 14.05.: WFO-Lock-Bug (5 silent Test-Failures) blieb 2 Tage unentdeckt weil Self-Test die pytest-Suite nicht laufen laesst und Carlos pytest nur explizit bei Major-Changes triggerte. **Defensive:** taeglich um 09:00 lokal `cd investpilot && git pull && python -m pytest -q` ausfuehren. Bei FAIL: Cutover verschieben (NO-GO).
+
+**W5 (Cutover-Woche, 25.-31.05.) — Final-Verify:**
+- [ ] **Mo 25.05. Memorial Day** — US-Markt zu, Bot pausiert via Holiday-Filter (= Test des Filter-Pfads)
+- [ ] **Di 26.05. — Cutover-Runbook-End-Check Tag 1** + Final-Backup gezogen: Doppelklick auf `investpilot_local_backups\Pull-BotState.cmd` (zieht `risk_state.json` + `brain_state.json` + `config.json` + `wfo_status.json` frisch vom VPS)
+- [ ] **Mi-Do 27.-28.05. — Pre-Cutover-Freeze** (keine Code-Aenderungen mehr)
+- [ ] **Fr 29.05. — letzter Verify** (Hard-Gates 8/8, IBKR-Settlement bestaetigt, alle Auto-Crons gruen)
+- [ ] **Pytest-Suite-Daily-Check Mo-Fr 26.-29.05.** — `python -m pytest -q` muss jeden Tag gruen sein. Lehre aus 14.05.: WFO-Lock-Bug (5 silent Test-Failures) blieb 2 Tage unentdeckt. **Defensive:** taeglich um 09:00 lokal `cd investpilot && git pull && python -m pytest -q`. Bei FAIL: Cutover verschieben (NO-GO).
 
 ---
 
@@ -260,7 +270,7 @@ curl -X POST https://bot.cbaumann.ch/api/alerts/test/pushover \
 
 | Was | Wann | Betrag |
 |---|---|---|
-| Initial-Einzahlung | Cutover-Tag (28.05.2026) | **2'000 CHF** |
+| Initial-Einzahlung | Cutover-Tag (01.06.2026) | **2'000 CHF** |
 | Standing-Order monatlich | Ab 28.06.2026, jeweils am Monats-28. | **1'800 CHF** |
 
 **Disziplin-Regel:** DCA-Standing-Order **NIE pausieren** (auch nicht bei Bot-Drawdown oder Markt-Crash). Nur bei Hard-Stop-Kriterien (siehe "Wann eingreifen" unten). Markt-Timing via DCA-Pausen oder Sprung-Einzahlungen ist verboten — DCA-Mathematik funktioniert nur durch Konsistenz.
@@ -280,7 +290,7 @@ Der Bot skaliert die Anzahl paralleler Positionen automatisch mit dem Kapital-St
 
 | Datum | Kapital (CHF) | ≈ USD | Phase |
 |---|---|---|---|
-| 28.05.2026 | 2'000 | 2'180 | Phase 1 |
+| 01.06.2026 | 2'000 | 2'180 | Phase 1 |
 | 28.06.2026 | 3'800 | 4'140 | Phase 2 (3k-Schwelle erreicht) |
 | 28.10.2026 | 11'000 | 12'000 | Phase 3 (10k-Schwelle erreicht) |
 | 28.04.2027 | 23'600 | 25'700 | Phase 3 |
@@ -326,7 +336,7 @@ Der Bot skaliert die Anzahl paralleler Positionen automatisch mit dem Kapital-St
 
 ### Steuer-Export (jaehrlich)
 
-**Wann:** Januar 2027 fuer Steuerjahr 2026 (Cutover 28.05.).
+**Wann:** Januar 2027 fuer Steuerjahr 2026 (Cutover 01.06.).
 
 **Wie:**
 1. IBKR Client Portal → Reports → Activity → Annual Statement → Format: CSV + PDF
@@ -357,7 +367,7 @@ Der Bot skaliert die Anzahl paralleler Positionen automatisch mit dem Kapital-St
 | v37bb | 30.04.2026 | Initial Cutover-Runbook |
 | v37cv-doc1 | 06.05.2026 | Polish (F1-F12): Pull-BotState-Refs (F3, F4), pytest-Pfad konkret (F2), Phase 1-2-3 Kill-Switch-Definition (F5), Pushover-Token-Quelle (F6), Network-Failure-Section 5.5a (F12), Dividenden + Steuer-Sections (F12), DST-Hinweis (F12), CH+UK-Hotline (F8), Cutover-Readiness-Card-Verweis (F7) |
 
-**Naechste Updates** vor Cutover-Tag (28.05.) bei:
+**Naechste Updates** vor Cutover-Tag (01.06.) bei:
 - Neuen Failure-Modes die wir live entdecken
 - Neuen Recovery-Pfaden
 - W4-Setup-Erfahrungen
