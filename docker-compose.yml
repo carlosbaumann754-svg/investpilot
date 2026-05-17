@@ -9,6 +9,12 @@ services:
       - "8443:8000"
     volumes:
       - ./data:/app/data
+      # v37h+2 (17.05.2026): Backup-Verzeichnis read-only mounten damit
+      # Cutover-Readiness-Card Hard-Gate #4 last_backup.json lesen kann
+      # (Container/Host-Split-Bug Fix). Konsistenz mit docker-compose.vps.yml.
+      # Lokal-Dev: erstelle leeren Ordner via `mkdir -p ./backups_stub` und
+      # ersetze den Source-Pfad temporaer wenn Docker-Local-Test gebraucht.
+      - /var/backups/investpilot:/backups:ro
     env_file:
       - .env
     environment:
