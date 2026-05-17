@@ -323,11 +323,39 @@ def _detect_market_regime_locked():
 # 4. REGELN LERNEN
 # ============================================================
 
-def learn_rules():
-    """Leite Regeln aus der Performance-Historie ab.
+class BrainDeprecatedError(RuntimeError):
+    """v37h+2 (17.05.2026): eigene Exception fuer deprecated Brain-Funktionen.
 
-    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK.
+    Wird geraised wenn jemand learn_rules() oder optimize_strategy() versehentlich
+    direkt aufruft — die schreiben auf eToro-Legacy-Felder und sind nicht
+    IBKR-kompatibel.
     """
+    pass
+
+
+def learn_rules():
+    """DEPRECATED (v37h Tab-Audit-Day-3, 13.05.2026).
+
+    Function wurde aus dem aktiven Brain-Cycle ENTFERNT (siehe brain.py:813-820).
+    Sie schreibt auf demo_trading.portfolio_targets (= eToro-Era-Schluessel),
+    bei IBKR-Live-Trading wuerde sie keine Wirkung haben oder im schlimmsten
+    Fall stale Daten erzeugen.
+
+    Seit v37h+2 (17.05.2026): wirft BrainDeprecatedError statt zu laufen,
+    um versehentliche manuelle Aufrufe abzufangen. Wenn du diese Funktion
+    je wieder brauchst (post-Cutover, IBKR-aware-Rewrite): umbenennen +
+    auf IBKR-conIds umstellen + neuen Entry-Point freischalten.
+    """
+    raise BrainDeprecatedError(
+        "brain.learn_rules() ist seit v37h Tab-Audit-Day-3 (13.05.2026) "
+        "deaktiviert. Schreibt auf eToro-Legacy-Felder (portfolio_targets) "
+        "und ist nicht IBKR-kompatibel. Siehe brain.py:813-820 fuer "
+        "Begruendung. Im Notfall siehe _legacy_learn_rules_unused()."
+    )
+
+
+def _legacy_learn_rules_unused():
+    """Original learn_rules — bleibt nur fuer historische Referenz."""
     with _BRAIN_LOCK:
         return _learn_rules_locked()
 
@@ -485,10 +513,26 @@ def _is_duplicate_rule(existing: list, new_rule: dict, max_age_hours: int = 24) 
 # ============================================================
 
 def optimize_strategy():
-    """Passe Strategie basierend auf gelernten Regeln an.
+    """DEPRECATED (v37h Tab-Audit-Day-3, 13.05.2026).
 
-    v37h Race-Fix (11.05.2026): wrapped in _BRAIN_LOCK.
+    Analog learn_rules(): schreibt auf demo_trading.portfolio_targets
+    (eToro-Era). Aus aktivem Brain-Cycle entfernt am 13.05.2026.
+
+    Seit v37h+2 (17.05.2026): wirft BrainDeprecatedError statt zu laufen.
+    Verhindert versehentliche manuelle Aufrufe die Live-Config korrumpieren
+    koennten (besonders kritisch da WFO-Lock zwar SL/TP/Score schuetzt aber
+    nicht portfolio_targets).
     """
+    raise BrainDeprecatedError(
+        "brain.optimize_strategy() ist seit v37h Tab-Audit-Day-3 "
+        "(13.05.2026) deaktiviert. Schreibt auf eToro-Legacy-Felder "
+        "(portfolio_targets) und ist nicht IBKR-kompatibel. "
+        "Im Notfall siehe _legacy_optimize_strategy_unused()."
+    )
+
+
+def _legacy_optimize_strategy_unused():
+    """Original optimize_strategy — bleibt nur fuer historische Referenz."""
     with _BRAIN_LOCK:
         return _optimize_strategy_locked()
 

@@ -445,11 +445,73 @@ def check_drawdown_limits():
 # POSITION SIZING (1-2% Risiko pro Trade)
 # ============================================================
 
+def _get_kelly_recommendation(config):
+    """v37h+2 (9B, 17.05.2026): Liest Kelly-Sweep-Empfehlung aus
+    kelly_sweep_results.json wenn aktiv + verlaesslich.
+
+    Returns:
+        (kelly_fraction, kelly_max_position_pct) oder (None, None) wenn
+        Empfehlung nicht verfuegbar / nicht trustworthy / Feature aus.
+
+    Auto-Apply ist standardmaessig AUS (`risk_management.kelly_auto_apply: false`)
+    bis Carlos das explizit aktiviert. Empfehlung wird nur dann konsumiert.
+    """
+    risk_cfg = (config or {}).get("risk_management", {}) if config else {}
+    if not risk_cfg.get("kelly_auto_apply", False):
+        return None, None
+
+    try:
+        ks = load_json("kelly_sweep_results.json") or {}
+    except Exception:
+        return None, None
+
+    rec = ks.get("recommended") or ks.get("recommendation") or {}
+    if not isinstance(rec, dict):
+        return None, None
+
+    # Trust-Check: braucht min_trades (Default 30) damit Statistik valide
+    n_trades = rec.get("n_trades") or ks.get("n_trades") or 0
+    min_trades_trust = risk_cfg.get("kelly_min_trades_trust", 30)
+    if n_trades < min_trades_trust:
+        log.info(
+            f"Kelly-Auto-Apply: Empfehlung n_trades={n_trades} < "
+            f"min_trust {min_trades_trust} — ignoriert (statistik nicht valide)"
+        )
+        return None, None
+
+    # Kelly-Fraction safety-clamping (Half-Kelly als Default-Konservativismus)
+    raw_fraction = rec.get("kelly_fraction") or rec.get("fraction") or 0
+    try:
+        raw_fraction = float(raw_fraction)
+    except (TypeError, ValueError):
+        return None, None
+    # Hard-Cap: nicht mehr als 25% Half-Kelly (= ueber 50% Full-Kelly extrem
+    # aggressiv, wird nie zugelassen)
+    kelly_fraction = max(0.0, min(0.25, raw_fraction * 0.5))  # Half-Kelly
+
+    # Optional: Kelly-spezifischer max-position-pct-override
+    raw_max_pos = rec.get("max_position_pct")
+    try:
+        kelly_max_pos_pct = float(raw_max_pos) if raw_max_pos is not None else None
+    except (TypeError, ValueError):
+        kelly_max_pos_pct = None
+    if kelly_max_pos_pct is not None:
+        kelly_max_pos_pct = max(1.0, min(15.0, kelly_max_pos_pct))  # Safety-Clamp 1-15%
+
+    return kelly_fraction, kelly_max_pos_pct
+
+
 def calculate_position_size(portfolio_value, stop_loss_pct, config=None):
     """Berechne maximale Positionsgroesse basierend auf Risiko pro Trade.
 
     Formel: Position = (Portfolio * Risiko%) / |Stop-Loss%|
     Beispiel: $100k * 2% / 3% = $666 max Verlust -> Position = $2,222
+
+    v37h+2 (9B, 17.05.2026): Optional Kelly-Auto-Apply. Wenn config.
+    risk_management.kelly_auto_apply=True UND kelly_sweep_results.json
+    enthaelt eine trustworthy Empfehlung, wird die Standard-Risk-Per-Trade-Berechnung
+    durch Half-Kelly-Fraction ueberschrieben (mit Hard-Cap 25%% Half-Kelly).
+    Default: AUS (Backward-Compat, Kelly nur Analytics).
     """
     if config is None:
         config = load_config()
@@ -462,14 +524,27 @@ def calculate_position_size(portfolio_value, stop_loss_pct, config=None):
     if stop_loss_pct == 0:
         stop_loss_pct = -3  # Fallback
 
+    # v37h+2 (9B): Kelly-Auto-Apply (wenn enabled + trustworthy)
+    kelly_fraction, kelly_max_pos_pct = _get_kelly_recommendation(config)
+    if kelly_fraction is not None and kelly_fraction > 0:
+        # Half-Kelly als Risiko-Per-Trade nutzen — ersetzt risk_per_trade_pct
+        kelly_risk_pct = kelly_fraction * 100
+        log.info(
+            f"Kelly-Auto-Apply: risk_per_trade {risk_per_trade_pct}%% -> "
+            f"Half-Kelly {kelly_risk_pct:.2f}%%"
+        )
+        risk_per_trade_pct = kelly_risk_pct
+
     max_risk_usd = portfolio_value * (risk_per_trade_pct / 100)
     position_size = max_risk_usd / (abs(stop_loss_pct) / 100)
 
     # Nie mehr als konfiguriertes Maximum
     position_size = min(position_size, max_single_trade)
 
-    # Nie mehr als 10% des Portfolios in einer Position
+    # Nie mehr als 10% des Portfolios in einer Position (Kelly kann das ueberschreiben)
     max_position_pct = risk_cfg.get("max_single_position_pct", 10)
+    if kelly_max_pos_pct is not None:
+        max_position_pct = kelly_max_pos_pct
     position_size = min(position_size, portfolio_value * max_position_pct / 100)
 
     return round(max(position_size, 0), 2)

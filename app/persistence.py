@@ -509,9 +509,13 @@ def check_and_reload_optimizer_output():
             f"local_applied={local_applied}) — lade Optimizer-Output neu"
         )
 
-        # Pull OPTIMIZER_OUTPUT_FILES from Gist. Preserve disabled_symbols
-        # from local config.json (git-authoritative) so the optimizer's config
-        # push doesn't accidentally clear our universe filter.
+        # v37h+2 (8A, 17.05.2026): Optimizer schreibt jetzt nur eine WHITELIST
+        # an Keys in config.json. Verhindert dass alte Optimizer-Schema-Versionen
+        # neue Live-Keys (Cash-Reserve, IBKR-Block, Audit-Phase-2-Felder) ueberschreiben.
+        # Vorher: gesamte config.json wurde overwriten (mit local_disabled-Schutz);
+        # Risiko bei jedem Schema-Drift Cutover-relevanter Felder.
+        # Jetzt: load local config, extrahiere nur whitelisted Optimizer-Keys aus
+        # gist-parsed, applye in local config, save local.
         local_cfg = load_json("config.json") or {}
         local_disabled = local_cfg.get("disabled_symbols")
 
@@ -542,11 +546,43 @@ def check_and_reload_optimizer_output():
                 )
                 continue
 
-            # Preserve local disabled_symbols in config.json
-            if (filename == "config.json"
-                    and local_disabled is not None
-                    and isinstance(parsed, dict)):
-                parsed["disabled_symbols"] = local_disabled
+            # v37h+2 (8A): Whitelist-Apply fuer config.json statt Full-Overwrite.
+            # Optimizer darf nur SL/TP/Score modifizieren — alles andere bleibt
+            # local. Verhindert dass alte Schema-Versionen neue Felder wegblasen.
+            if filename == "config.json" and isinstance(parsed, dict):
+                merged = dict(local_cfg)  # Start mit local als Baseline
+                # Whitelisted nested paths (Optimizer darf diese ueberschreiben)
+                allowed_paths = [
+                    ("demo_trading", "stop_loss_pct"),
+                    ("demo_trading", "take_profit_pct"),
+                    ("demo_trading", "min_scanner_score"),
+                    ("scanner", "min_scanner_score"),
+                ]
+                applied_keys = []
+                for parent, child in allowed_paths:
+                    p_section = parsed.get(parent)
+                    if isinstance(p_section, dict) and child in p_section:
+                        merged.setdefault(parent, {})
+                        if not isinstance(merged[parent], dict):
+                            continue  # Schema-Drift im Local — skip
+                        new_val = p_section[child]
+                        if merged[parent].get(child) != new_val:
+                            merged[parent][child] = new_val
+                            applied_keys.append(f"{parent}.{child}={new_val}")
+                if applied_keys:
+                    log.info(
+                        f"Optimizer-Whitelist applied: {', '.join(applied_keys)} "
+                        "(andere Config-Felder bleiben local-protected)"
+                    )
+                else:
+                    log.info(
+                        "Optimizer-Output enthielt keine Whitelist-Aenderungen "
+                        "— config.json bleibt unveraendert"
+                    )
+                # disabled_symbols immer aus local (war auch im Original-Code)
+                if local_disabled is not None:
+                    merged["disabled_symbols"] = local_disabled
+                parsed = merged  # gefiltertes Result an save_json weitergeben
 
             to_write[filename] = parsed
 

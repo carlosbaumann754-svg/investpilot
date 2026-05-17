@@ -56,6 +56,14 @@
 
 ## 3. Notfall-Pfade waehrend Live-Trading
 
+> ⚠️ **WICHTIG — Mobile-Killswitch via Telegram-Command FUNKTIONIERT NICHT.**
+> Telegram-Bot ist in der Config zwar `enabled: true`, aber `bot_token` ist leer.
+> Pushover liefert nur Alerts (read-only), KEINE Commands.
+> **Killswitch geht NUR via Web-Dashboard** (`bot.cbaumann.ch` auf Handy oder Laptop).
+> Wenn du unterwegs bist + Notfall: Browser oeffnen, Dashboard, Toggle/Button druecken.
+> Post-Cutover-Item: Telegram-Bot-Token einrichten (~30 Min, BotFather → config) — bis dahin
+> ist Web-Dashboard der einzige Mobile-Notbremse-Pfad.
+
 ### 3.1 Soft-Stop ("Bot pausieren, Positionen halten")
 
 **Wann:** unsicheres Setup, Markt wird wild, du willst nichts neues kaufen.

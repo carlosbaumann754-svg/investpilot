@@ -247,6 +247,22 @@ _BG_HEARTBEAT_SNAPSHOT_S = 3600  # 1 Std — Brain-Snapshot heartbeat damit
                                  # performance_snapshots nicht explodieren
                                  # (365-Eintrag-Limit + tagliche Backups OK)
 
+# v37h+2 (7A, 17.05.2026): Universe-Health-Watcher Auto-Run.
+# Vorher: update_counters() lief NUR via Dashboard-API (web/app.py:480).
+# universe_health.json.last_update war None — Watcher lief seit Setup nie
+# automatisch. Folge: delisted/stale Symbols werden nie als to_disable
+# vorgeschlagen, Bot tradet weiterhin yfinance-Errors-Symbole.
+# Fix: 1x taeglich (86400s) in BG-Maintenance.
+_BG_UNIVERSE_HEALTH_S = 86400  # 1 Tag
+
+# v37h+2 (1C, 17.05.2026): Asset-Discovery in Live-Container statt GH-Action.
+# Vorher: Discovery wurde wochentlich an GH-Actions dispatched -> dort kein
+# IBKR-Gateway erreichbar -> client.configured=False -> 0/0/0-Resultate.
+# Jetzt: Live-Bot ruft run_weekly_discovery() direkt mit echter IBKR-Connection.
+# Frequency: 1x pro Woche (Freitag 17:00 UTC, gleicher Slot wie GH-Dispatch).
+# Defensive: in separate Thread, damit Trader-Cycle nicht blockiert.
+_BG_LIVE_DISCOVERY_S = 7 * 86400  # 7 Tage
+
 # Review-Fix #1 (10.05.2026): GitHub-Token-Expiration silent-fail
 # Detection. Wenn ein Watchdog 401/403 wirft -> Token wahrscheinlich
 # expired. Bei 3 consecutive failures -> log.error (-> Sentry) +
@@ -255,6 +271,60 @@ _BG_HEARTBEAT_SNAPSHOT_S = 3600  # 1 Std — Brain-Snapshot heartbeat damit
 _BG_TOKEN_FAIL_COUNT = {"count": 0, "alerted_at": 0.0}
 _BG_TOKEN_FAIL_THRESHOLD = 3        # 3 Watchdog-Calls in Folge fehlgeschlagen
 _BG_TOKEN_REALERT_AFTER_S = 21600   # 6h zwischen Pushover-Re-Alerts
+
+
+def is_friday_discovery_time():
+    """Top-Level-Wrapper damit BG-Maintenance ohne Lazy-Import auskommt."""
+    try:
+        from app.asset_discovery import is_friday_discovery_time as _is_fri
+        return _is_fri()
+    except Exception:
+        return False
+
+
+def _run_live_discovery_safely():
+    """v37h+2 (1C, 17.05.2026): Live-Discovery-Wrapper mit eigenem Status-Write.
+
+    Wird in Background-Thread aus _run_background_maintenance() gestartet.
+    Defensive: alle Fehler werden gefangen + in discovery_status.json
+    persistiert. Bricht den Trader-Cycle nicht ab.
+    """
+    from datetime import datetime as _dt
+    started_at = _dt.now().isoformat()
+
+    def _status(**fields):
+        try:
+            from app.config_manager import load_json, save_json
+            status = load_json("discovery_status.json") or {}
+            status.update(fields)
+            status["updated_at"] = _dt.now().isoformat()
+            save_json("discovery_status.json", status)
+        except Exception as e:
+            log.warning(f"Live-Discovery status-write fehlgeschlagen: {e}")
+
+    _status(state="running", phase="live", message="Live-Bot Discovery startet",
+            started_at=started_at, finished_at=None,
+            triggered_by="scheduler-live-1C", error=None,
+            mode="live-container")
+
+    try:
+        from app.asset_discovery import run_weekly_discovery
+        result = run_weekly_discovery()
+        _status(
+            state="done", phase="done",
+            message=f"Live-Discovery abgeschlossen: {result}",
+            finished_at=_dt.now().isoformat(),
+            result=result, error=None,
+        )
+        log.info(f"Live-Discovery OK: {result}")
+    except Exception as e:
+        log.error(f"Live-Discovery FAILED: {e}", exc_info=True)
+        _status(
+            state="error", phase="failed",
+            message=f"Live-Discovery Fehler: {e}",
+            finished_at=_dt.now().isoformat(),
+            error=str(e),
+        )
 
 
 def _run_background_maintenance() -> None:
@@ -295,6 +365,35 @@ def _run_background_maintenance() -> None:
                         log.info(f"BG-Watchdog {name}: neue Werte uebernommen")
             except Exception as e:
                 log.warning(f"BG-Watchdog {name} Fehler (non-fatal): {e}")
+
+    # ----- Live Asset-Discovery: 1x pro Woche (1C, 17.05.2026) -----
+    # Ersetzt GH-Action-Discovery die mit broker=ibkr 0/0/0 lieferte. Live-
+    # Bot hat IBKR-Connection -> echte Resultate.
+    if (is_friday_discovery_time()
+            and now - _BG_MAINT_LAST_RUN.get("live_discovery", 0) >= _BG_LIVE_DISCOVERY_S):
+        _BG_MAINT_LAST_RUN["live_discovery"] = now
+        log.info("BG-Discovery: starte Live-Discovery in separate Thread...")
+        try:
+            t = threading.Thread(target=_run_live_discovery_safely, daemon=True)
+            t.start()
+        except Exception as e:
+            log.warning(f"BG-Discovery Thread-Start fehlgeschlagen: {e}")
+
+    # ----- Universe-Health-Watcher: 1x taeglich (7A, 17.05.2026) -----
+    if now - _BG_MAINT_LAST_RUN.get("universe_health", 0) >= _BG_UNIVERSE_HEALTH_S:
+        _BG_MAINT_LAST_RUN["universe_health"] = now
+        try:
+            from app.universe_health_watcher import update_counters
+            result = update_counters()
+            sugg = result.get("suggestions", {}) or {}
+            to_disable = len(sugg.get("to_disable", []) or [])
+            to_enable = len(sugg.get("to_enable", []) or [])
+            log.info(
+                f"BG-Universe-Health: counters updated. "
+                f"Suggestions: {to_disable} to_disable, {to_enable} to_enable"
+            )
+        except Exception as e:
+            log.warning(f"BG-Universe-Health Fehler (non-fatal): {e}")
 
     # ----- Heartbeat-Snapshot: alle 60 Min, nur wenn Markt zu -----
     # Bei offenem Markt macht der Trader-Cycle eh Snapshots ueber record_snapshot
@@ -517,8 +616,14 @@ def scheduler_loop():
             # Ergebnisse kommen via Gist + Watchdog zurueck. Guard via
             # discovery_last_dispatched.flag verhindert Mehrfach-Dispatch
             # innerhalb des 1-Stunden-Slots (Scheduler tickt alle 5 Min).
+            # v37h+2 (1C, 17.05.2026): GH-Action-Dispatch DEAKTIVIERT.
+            # Live-Discovery laeuft jetzt in _run_background_maintenance() direkt
+            # im Container (echte IBKR-Connection statt GH-Action ohne Gateway).
+            # Block bleibt als FALSE-Guard fuer historische Referenz — wenn
+            # je nochmal aktiviert: `if False and is_friday_discovery_time():`
+            # zu `if is_friday_discovery_time():` aendern.
             from app.asset_discovery import is_friday_discovery_time
-            if is_friday_discovery_time():
+            if False and is_friday_discovery_time():
                 guard = get_data_path("discovery_last_dispatched.flag")
                 # UTC, damit der Day-Key zum UTC-Slot der Stundenpruefung passt
                 # (sonst kann nahe Mitternacht der Local-Day-Key abweichen).

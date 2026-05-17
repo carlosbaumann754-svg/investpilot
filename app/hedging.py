@@ -96,15 +96,33 @@ def check_hedge_needed(regime_data, positions, config):
         defensive_sectors = hedge_config.get("defensive_sectors",
                                              DEFAULT_DEFENSIVE_SECTORS)
 
+        # v37h+2 (5B, 17.05.2026): hedge_instrument war hartkodiert "SPY".
+        # Bei aktivem Bear-Regime brauchen wir eher defensive Hedges (Gold,
+        # Bonds, Health) statt SPY (= broad market = was wir gerade hedgen
+        # WOLLEN). get_hedge_instruments() lieferte die richtige Liste,
+        # wurde aber nirgendwo aufgerufen. Jetzt: hedge_instruments enthaelt
+        # vollstaendige Liste, hedge_instrument ist der primaere Vorschlag
+        # passend zu den ersten defensive_sectors.
+        all_instruments = get_hedge_instruments()
+        primary_hedge = "GLD"  # Default: Gold als universeller Crisis-Hedge
+        # Wenn defensive_sectors-Config einen passenden Match hat, nutzen
+        sectors_lower = [s.lower() for s in defensive_sectors]
+        for inst in all_instruments:
+            inst_type = (inst.get("type") or "").lower()
+            if any(s in inst_type for s in sectors_lower):
+                primary_hedge = inst["symbol"]
+                break
+
         result["hedge_needed"] = True
         result["bear_position_multiplier"] = bear_multiplier
         result["defensive_sectors"] = defensive_sectors
         result["hedge_amount"] = total_exposure * (1 - bear_multiplier)
-        result["hedge_instrument"] = "SPY"  # Reference instrument
+        result["hedge_instrument"] = primary_hedge  # 5B: defensive statt SPY
+        result["hedge_instruments"] = all_instruments  # 5B: volle Liste fuer Dashboard
         result["reason"] = (
             f"Hedging aktiv ({result.get('hedge_trigger', 'bear-Regime')}): "
             f"Positionsgroessen x{bear_multiplier}, "
-            f"defensive Sektoren bevorzugt"
+            f"defensive Sektoren bevorzugt (Primaer-Hedge: {primary_hedge})"
         )
 
         log.info(f"HEDGING: {result['reason']}")
