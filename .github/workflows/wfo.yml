@@ -29,16 +29,48 @@ on:
         default: "5"
   schedule:
     # 1. Sonntag jedes Monats 12:00 UTC = 14:00 CEST
-    # GH-Cron-Trick: dom 1-7 + dow 0 = "first Sunday"
-    - cron: '0 12 1-7 * 0'
+    # v37h+2 (17.05.2026): GH-Actions-Cron-Falle korrigiert.
+    # FRUEHER: '0 12 1-7 * 0' — wurde als OR ausgewertet (POSIX-Standard)
+    # statt AND -> Workflow lief JEDEN Tag 1-7 ODER JEDEN Sonntag (10+ Runs/Monat).
+    # JETZT: '0 12 * * 0' (jeden Sonntag) + Skript-Check ob 1.-7. (= 1. Sonntag).
+    # Bei nicht-1. Sonntag: workflow-Step macht early-exit mit success.
+    - cron: '0 12 * * 0'
 
 concurrency:
   group: investpilot-wfo
   cancel-in-progress: false
 
 jobs:
+  # v37h+2 (17.05.2026): Gating-Job prueft ob 1. Sonntag im Monat.
+  # Bei Schedule + nicht-1.-Sonntag -> wfo-Job wird skipped via needs.gate.
+  # Bei Manual-Trigger -> wfo laeuft immer.
+  gate:
+    name: "Gate: First Sunday Check"
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check first Sunday
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger -> always run"
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          DOM=$(date -u +%-d)
+          if [ "$DOM" -le 7 ]; then
+            echo "Heute ist 1. Sonntag im Monat (DOM=$DOM) -> run WFO"
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "Nicht 1. Sonntag (DOM=$DOM > 7) -> skip WFO"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
   wfo:
     name: "Run Walk-Forward-Optimization"
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 

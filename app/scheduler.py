@@ -255,6 +255,12 @@ _BG_HEARTBEAT_SNAPSHOT_S = 3600  # 1 Std — Brain-Snapshot heartbeat damit
 # Fix: 1x taeglich (86400s) in BG-Maintenance.
 _BG_UNIVERSE_HEALTH_S = 86400  # 1 Tag
 
+# v37h+2 (Sharpe-Drift, 17.05.2026): WFO-Drift-Watchdog.
+# Taeglicher Sanity-Check zwischen WFO-Runs (monatlich). Vergleicht Live-Sharpe
+# letzte 30d mit WFO-Mean-OOS-Sharpe. Bei Decay > 30% -> Pushover-WARNING.
+# Keine Auto-WFO-Trigger (Curve-Fitting-Risiko bei kleinem Sample).
+_BG_WFO_DRIFT_S = 86400  # 1 Tag
+
 # v37h+2 (1C, 17.05.2026): Asset-Discovery in Live-Container statt GH-Action.
 # Vorher: Discovery wurde wochentlich an GH-Actions dispatched -> dort kein
 # IBKR-Gateway erreichbar -> client.configured=False -> 0/0/0-Resultate.
@@ -378,6 +384,29 @@ def _run_background_maintenance() -> None:
             t.start()
         except Exception as e:
             log.warning(f"BG-Discovery Thread-Start fehlgeschlagen: {e}")
+
+    # ----- WFO-Drift-Watchdog: 1x taeglich (Sharpe-Drift, 17.05.2026) -----
+    if now - _BG_MAINT_LAST_RUN.get("wfo_drift", 0) >= _BG_WFO_DRIFT_S:
+        _BG_MAINT_LAST_RUN["wfo_drift"] = now
+        try:
+            from app.wfo_drift_watchdog import check_wfo_drift
+            result = check_wfo_drift()
+            if result.get("alert_triggered"):
+                log.warning(
+                    f"BG-WFO-Drift: ALERT! live={result['live_sharpe']:.2f} "
+                    f"vs wfo={result['wfo_sharpe']:.2f}, "
+                    f"drift={result['drift_pct']:+.1f}%"
+                )
+            elif result.get("skip_reason"):
+                log.info(f"BG-WFO-Drift: skip ({result['skip_reason']})")
+            else:
+                log.info(
+                    f"BG-WFO-Drift: gesund (live={result['live_sharpe']:.2f}, "
+                    f"wfo={result['wfo_sharpe']:.2f}, "
+                    f"drift={result['drift_pct']:+.1f}%, n={result['n_trades']})"
+                )
+        except Exception as e:
+            log.warning(f"BG-WFO-Drift Fehler (non-fatal): {e}")
 
     # ----- Universe-Health-Watcher: 1x taeglich (7A, 17.05.2026) -----
     if now - _BG_MAINT_LAST_RUN.get("universe_health", 0) >= _BG_UNIVERSE_HEALTH_S:
