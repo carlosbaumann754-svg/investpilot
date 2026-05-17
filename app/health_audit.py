@@ -338,37 +338,46 @@ def _check_file_age(path: str, max_age_h: float, name: str, severity: str,
 
 def check_cron_freshness() -> list[HealthCheckResult]:
     out = []
-    # 4a: heutiger Backup vorhanden?
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_backup = Path(_BACKUP_DIR) / f"state_{today}_040001.tar.gz"
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    yesterday_backup = Path(_BACKUP_DIR) / f"state_{yesterday}_040001.tar.gz"
-    if today_backup.exists():
+    # 4a: heutiger Backup vorhanden? (Host-Pfad — Container-tolerant)
+    backup_dir = Path(_BACKUP_DIR)
+    if not backup_dir.exists():
+        # Container kann /var/backups nicht sehen — info-Status, Host-Cron prueft
         out.append(HealthCheckResult(
             name="cron_backup_today", category="cron", passed=True,
             severity="info",
-            message=f"Heute-Backup vorhanden: {today_backup.name}",
+            message=(f"{_BACKUP_DIR} nicht im Container reachable. "
+                     "Status wird via Host-Cron + Restore-Test geprueft."),
         ))
-    elif yesterday_backup.exists():
-        # OK wenn heute < 04:00 UTC + gestern OK
-        if datetime.utcnow().hour < 4:
+    else:
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_backup = backup_dir / f"state_{today}_040001.tar.gz"
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        yesterday_backup = backup_dir / f"state_{yesterday}_040001.tar.gz"
+        if today_backup.exists():
             out.append(HealthCheckResult(
                 name="cron_backup_today", category="cron", passed=True,
                 severity="info",
-                message=f"Heute-Backup pending (04:00 UTC), gestern OK",
+                message=f"Heute-Backup vorhanden: {today_backup.name}",
             ))
+        elif yesterday_backup.exists():
+            if datetime.utcnow().hour < 4:
+                out.append(HealthCheckResult(
+                    name="cron_backup_today", category="cron", passed=True,
+                    severity="info",
+                    message=f"Heute-Backup pending (04:00 UTC), gestern OK",
+                ))
+            else:
+                out.append(HealthCheckResult(
+                    name="cron_backup_today", category="cron", passed=False,
+                    severity="critical",
+                    message=f"Heute-Backup FEHLT (heute>04:00 UTC)! Hard-Gate #4 broken",
+                ))
         else:
             out.append(HealthCheckResult(
                 name="cron_backup_today", category="cron", passed=False,
                 severity="critical",
-                message=f"Heute-Backup FEHLT (heute>04:00 UTC)! Hard-Gate #4 broken",
+                message="Backup-Cron broken: weder heute noch gestern Backup",
             ))
-    else:
-        out.append(HealthCheckResult(
-            name="cron_backup_today", category="cron", passed=False,
-            severity="critical",
-            message="Backup-Cron broken: weder heute noch gestern Backup",
-        ))
 
     # 4b: Self-Test-Log frisch?
     out.append(_check_file_age(
