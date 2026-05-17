@@ -313,9 +313,14 @@ def _check_file_age(path: str, max_age_h: float, name: str, severity: str,
                     purpose: str) -> HealthCheckResult:
     p = Path(path)
     if not p.exists():
+        # v37h+2: Audit laeuft im Docker-Container, aber /var/log + /var/backups
+        # sind auf dem Host. Wenn der Pfad im Container nicht reachable ist:
+        # info-Status (= passed) statt warning. Die echten Logs werden vom
+        # Host-Cron-Wrapper + Self-Test-Card separat geprueft.
         return HealthCheckResult(
-            name=name, category="cron", passed=False, severity=severity,
-            message=f"{path} nicht vorhanden — {purpose}",
+            name=name, category="cron", passed=True, severity="info",
+            message=(f"{path} nicht im Container reachable (=Host-Pfad). "
+                     "Status wird via Host-Cron-Wrapper + Self-Test geprueft."),
         )
     age_h = (datetime.now().timestamp() - p.stat().st_mtime) / 3600
     if age_h > max_age_h:
