@@ -3068,6 +3068,13 @@ function renderSelfTest(suite) {
     badge.textContent = (suite.overall_status || "unknown").toUpperCase();
     document.getElementById("selftest-summary").innerHTML =
         `<strong>${suite.passed}/${suite.total}</strong> bestanden, ${suite.failed} fehlgeschlagen.`;
+    // v37h+2 (18.05.2026): Details-Summary dynamisch mit Test-Anzahl
+    // updaten — vorher hardcoded "(12 Tests)" das veraltete falls Tests
+    // hinzugefuegt werden (heute 14, aber Label sagte 12).
+    const detailsSummary = document.getElementById("selftest-details-summary");
+    if (detailsSummary && suite.total) {
+        detailsSummary.textContent = `Details (${suite.total} Tests) — klicken zum Ausklappen`;
+    }
     const tbody = document.getElementById("selftest-results");
     tbody.innerHTML = (suite.results || []).map(r => {
         const sevColor = r.passed ? "var(--green)" : (r.severity === "critical" ? "var(--red)" : "var(--orange,orange)");

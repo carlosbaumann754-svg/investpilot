@@ -128,14 +128,14 @@
         <div class="card" id="selftest-card" style="border-left:4px solid #10b981;">
             <div class="card-title">
                 Self-Test (Anti-Regression)
-                <span class="tip" data-tip="Bot prueft sich selbst stuendlich auf 12 kritische Punkte: broker=ibkr, Trading-Flag-Persistenz, IB-Gateway erreichbar (via Connection-Pool), Heartbeat frisch, keine eToro-Reste in Logs, kritische Files lesbar, Asset-Klassen-Config sane, Health-Endpoint OK, Pending-Closes frisch, IBKR-Session-Watchdog, Discovery-Freshness, keine Legacy-Files aktiv. Bei NEUEM Fail kommt Pushover-Alert. Card zeigt aktuellen Stand."></span>
+                <span class="tip" data-tip="Bot prueft sich selbst stuendlich auf 14 kritische Punkte: broker=ibkr, Trading-Flag-Persistenz, kritische Files lesbar, IB-Gateway erreichbar (Connection-Pool, dedizierter clientId=199), keine Legacy-Files aktiv, Asset-Klassen-Config sane, Scheduler-Heartbeat frisch, Health-Endpoint OK, Pending-Closes frisch (kein Stale-Bloat), keine eToro-Reste in Logs, IBKR-Session-Watchdog OK, Discovery-Freshness (<7d), yfinance-Freshness (SPY-Bar <4d), Cash-Reserve sane (Hybrid Floor+Pct). Bei NEUEM Fail kommt Pushover-Alert. Card zeigt aktuellen Stand."></span>
                 <button onclick="runSelfTest()" style="float:right;font-size:11px;padding:4px 10px;cursor:pointer;">Jetzt pruefen</button>
             </div>
             <div id="selftest-status-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
             <div id="selftest-summary" class="card-sub" style="margin-bottom:8px;">Lade…</div>
             <details id="selftest-details">
-            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
-                Details (12 Tests) — klicken zum Ausklappen
+            <summary id="selftest-details-summary" style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                Details — klicken zum Ausklappen
             </summary>
             <div class="table-wrap" style="max-height:280px;overflow-y:auto;">
                 <table>
