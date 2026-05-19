@@ -169,16 +169,72 @@ def _scrub_dict(d: dict, depth: int = 0) -> dict:
     return out
 
 
+# R-A20 (Sprint-Tag-9, 19.05.2026): Sentry-Noise-Filter.
+# Bekannte ib_insync-Library-Quirks die als ERROR geloggt werden aber
+# KEIN echter Bot-Bug sind. Reduziert Sentry-Issue-Noise damit nur
+# actionable Events durchkommen.
+#
+# Anlass: Carlos's Beobachtung 19.05. abend - "diverse Fehlermeldungen
+# in Sentry". Inspektion zeigte: 8 Events in 6h, davon 4 unique:
+#   2x Error 300 (ib_insync cancelMktData-Quirk, harmlos)
+#   1x Hohe Latenz 2019ms (Performance-Warning, kein Bug)
+#   3x Stale ib.portfolio()-Eintrag USO (Boot-Race-Detection wirkt, OK)
+# Alle 4 sind erwartete Patterns -> filter sie aus Sentry raus.
+
+_SENTRY_NOISE_PATTERNS = (
+    # IBKR-Quirk nach cancelMktData (Error-Code 300): tickerId existiert
+    # nicht mehr weil Quote-Snapshot bereits cancelled. Harmlos, Order
+    # geht trotzdem durch (siehe Logs: Pending→PreSubmitted→Submitted→Filled).
+    "Error 300, reqId",
+    "Can't find EId with tickerId",
+    # Boot-Race-Detection (v37ce-Filter wirkt korrekt): Filter ueberspringt
+    # stale ib.portfolio()-Eintraege nach Close-Fill ohne updatePortfolio-
+    # Event. Das ist erwuenschtes Verhalten, kein Bug.
+    "Stale ib.portfolio()-Eintrag uebersprungen",
+    # Performance-Warning bei Quote-Fetch — kein Bot-Fehler, nur Latency-Info.
+    # Wenn das systematisch wird, separater Alert via watchdog/cron.
+    "Hohe Latenz:",
+    # Uvicorn-HTTP-Warnings von externen Health-Probes (random scanners,
+    # CDN-Health-Checks). Nichts mit Bot-Logik zu tun.
+    "Invalid HTTP request received",
+)
+
+
+def _is_noise(message: str) -> bool:
+    """True wenn Event als bekannter, harmloser Pattern erkannt wird."""
+    if not isinstance(message, str):
+        return False
+    return any(pattern in message for pattern in _SENTRY_NOISE_PATTERNS)
+
+
 def _before_send(event: dict, hint: dict) -> Optional[dict]:
-    """Sentry before_send-Hook: PII-Scrub vor jeder Event-Sendung.
+    """Sentry before_send-Hook: PII-Scrub + Noise-Filter vor Event-Sendung.
 
     Returns None → Event wird verworfen.
 
     v37g-review-fix HIGH 1: Bei Filter-Crash WIRD Event GEDROPPED (None
     statt unscrubbed Event durchlassen). Vor Real-Money-Phase ist das
     konservativ-default — lieber Visibility-Verlust als PII-Leak.
+
+    R-A20 (19.05.2026): zusaetzlich Noise-Filter fuer bekannte ib_insync-
+    Library-Quirks die als ERROR geloggt werden aber kein echter Bot-Bug.
     """
     try:
+        # R-A20 Noise-Filter (vor PII-Scrub, spart Aufwand)
+        msg = event.get("message") or ""
+        # Auch in logentry-Format (LoggingIntegration) checken
+        logentry = event.get("logentry") or {}
+        log_msg = (logentry.get("message") if isinstance(logentry, dict) else "") or ""
+        # Plus exception-Values
+        exc_msgs = []
+        for exc in (event.get("exception", {}) or {}).get("values", []) or []:
+            if isinstance(exc, dict) and exc.get("value"):
+                exc_msgs.append(str(exc["value"]))
+
+        combined = " | ".join([msg, log_msg] + exc_msgs)
+        if _is_noise(combined):
+            return None  # Event komplett drop, kein Sentry-Spam
+
         # Scrub message
         if isinstance(event.get("message"), str):
             event["message"] = _redact_string(event["message"])

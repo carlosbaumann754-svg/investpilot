@@ -326,3 +326,76 @@ def test_redact_bytes_with_account():
     else:
         # Falls Decode fehlschlug, bleibt's bytes — auch akzeptabel
         assert "DUP108015" not in out.decode("utf-8", errors="replace")
+
+
+# ============================================================
+# R-A20 (19.05.2026): Sentry-Noise-Filter Tests
+# ============================================================
+# 4 unique Library-Quirks die als ERROR landen aber kein Bot-Bug sind
+# muessen aus Sentry-Stream gefiltert werden.
+
+def test_noise_filter_drops_ibkr_error_300():
+    """Error 300 (cancelMktData-Quirk) muss gedroppt werden."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Error 300, reqId 197: Can't find EId with tickerId:197") is True
+    assert _is_noise("Can't find EId with tickerId:42") is True
+
+
+def test_noise_filter_drops_stale_portfolio_filter():
+    """v37ce Boot-Race-Detection ist erwuenscht, kein Bug."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise(
+        "Stale ib.portfolio()-Eintrag uebersprungen: USO conId=418893644 qty=354.0"
+    ) is True
+
+
+def test_noise_filter_drops_high_latency_warn():
+    """Latency-Warnings sind nicht-actionable, kein Bot-Crash."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Hohe Latenz: 2019ms fuer Instrument 5001") is True
+
+
+def test_noise_filter_drops_uvicorn_http_warns():
+    """Uvicorn-HTTP-Warnings von externen Scanners."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("WARNING:  Invalid HTTP request received.") is True
+
+
+def test_noise_filter_keeps_real_errors():
+    """Echte Bot-Errors muessen DURCH den Filter."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("ValueError: invalid literal for int()") is False
+    assert _is_noise("Kein Quote fuer instrument_id=5001 (USO)") is False
+    assert _is_noise("ConnectionRefusedError: ib_gateway") is False
+    assert _is_noise("CONCENTRATION-BLOCK OIL: max_positions_per_symbol") is False
+
+
+def test_noise_filter_handles_none_and_empty():
+    """Defensive: None/leerer String crashen nicht."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise(None) is False
+    assert _is_noise("") is False
+    assert _is_noise(0) is False  # int statt str
+
+
+def test_before_send_drops_noise_event(monkeypatch):
+    """before_send returnt None bei Noise-Pattern -> Event geht NICHT an Sentry."""
+    from app.sentry_setup import _before_send
+    event = {
+        "message": "Error 300, reqId 197: Can't find EId with tickerId:197",
+        "level": "error",
+    }
+    result = _before_send(event, {})
+    assert result is None  # gedroppt
+
+
+def test_before_send_keeps_real_event():
+    """before_send returnt event bei echtem Error."""
+    from app.sentry_setup import _before_send
+    event = {
+        "message": "ValueError: x must be positive",
+        "level": "error",
+    }
+    result = _before_send(event, {})
+    assert result is not None
+    assert result.get("message")  # event durchgelassen

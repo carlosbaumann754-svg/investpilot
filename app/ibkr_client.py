@@ -686,10 +686,13 @@ class IbkrBroker(BrokerBase):
                     continue
                 con_id = getattr(contract, "conId", None)
                 if live_con_ids is not None and con_id not in live_con_ids:
-                    log.warning(
+                    # R-A20 (19.05.2026): WARNING -> INFO. Filter wirkt
+                    # erwuenscht (v37ce Anti-META-Loop). Kein Bot-Problem,
+                    # erzeugt nur Log-Noise + Sentry-Spam wenn als WARN.
+                    log.info(
                         "Stale ib.portfolio()-Eintrag uebersprungen: %s conId=%s "
                         "qty=%s (nicht in ib.positions(), wahrscheinlich nach "
-                        "Close-Fill ohne updatePortfolio-Event)",
+                        "Close-Fill ohne updatePortfolio-Event — Filter wirkt erwuenscht)",
                         getattr(contract, "symbol", "?"), con_id, qty,
                     )
                     continue
