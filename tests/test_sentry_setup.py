@@ -446,3 +446,35 @@ def test_before_send_drops_container_restart_event():
     ]:
         event = {"message": msg, "level": "error"}
         assert _before_send(event, {}) is None, f"Should drop: {msg}"
+
+
+# ============================================================
+# R-A29 (19.05.2026 abend): CancelledError-Patterns ergaenzen
+# ============================================================
+
+def test_noise_filter_drops_cancelled_error_api_connection():
+    """API connection failed: CancelledError() bei Container-Restart."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("API connection failed: CancelledError()") is True
+    assert _is_noise("API connection failed: CancelledError") is True
+
+
+def test_noise_filter_drops_api_connection_runtime_error():
+    """API connection failed: RuntimeError beim Restart-Cascade."""
+    from app.sentry_setup import _is_noise
+    msg = "API connection failed: RuntimeError(Task pending name='Task-894' coro=...)"
+    assert _is_noise(msg) is True
+
+
+def test_noise_filter_drops_asyncio_cancelled_exceptions():
+    """asyncio.exceptions.CancelledError als Exception-Type."""
+    from app.sentry_setup import _is_noise
+    msg = "asyncio.exceptions.CancelledError: Task was cancelled"
+    assert _is_noise(msg) is True
+
+
+def test_noise_filter_keeps_real_cancelled_error():
+    """Generische CancelledError in App-Code geht weiter durch — nur ib_insync-Pattern filtered."""
+    from app.sentry_setup import _is_noise
+    # 'CancelledError' alleine ohne 'API connection failed' Prefix
+    assert _is_noise("Trade cancelled due to risk limit") is False

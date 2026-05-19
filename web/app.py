@@ -603,8 +603,13 @@ def _broker_status_sync():
 # paar Sekunden. Ohne Cache erzeugt jede Anfrage eine neue IBKR-Connection
 # mit random clientId — das thrasht den IB-Gateway und kollidiert mit dem
 # Scheduler-Cycle (clientId=1). 60s-Cache reicht dem UI vollkommen.
+# R-A29 (19.05.2026 abend): Stale-Cache-Fallback bei Fetch-Errors. Wenn
+# Container gerade restartet (R-A25 graceful-shutdown), failt der Live-
+# Fetch zwischenzeitlich. Statt 'broker_unavailable' an Frontend zu pushen,
+# nutzen wir letzten gueltigen Cache mit _stale-Marker.
 _BROKER_STATUS_CACHE: dict = {"data": None, "ts": 0}
 _BROKER_STATUS_TTL_SECONDS = 60
+_BROKER_STATUS_STALE_MAX_SECONDS = 600  # 10 Min — danach gilt Cache als too-old
 
 
 @app.get("/api/broker-status")
@@ -613,22 +618,52 @@ async def api_broker_status():
 
     v36: 60s-Cache vor IBKR-Live-Call, damit Dashboard-Polling den
     Scheduler-Cycle nicht mit parallelen Connections stoert.
+
+    R-A29 (19.05.2026): Stale-Cache-Fallback. Wenn Live-Fetch failt
+    (Container-Restart, IBKR-Maintenance), returnen wir letzten gueltigen
+    Cache mit _stale-Marker statt Error an Dashboard zu pushen. Verhindert
+    'broker_unavailable'-Flicker im UI waehrend kurzer Disconnects.
     """
     import asyncio, time
     now = time.time()
     cached = _BROKER_STATUS_CACHE.get("data")
     cached_ts = _BROKER_STATUS_CACHE.get("ts", 0)
-    if cached is not None and (now - cached_ts) < _BROKER_STATUS_TTL_SECONDS:
-        # Cache-Hit: aktuelle Daten ohne neuen IBKR-Call
-        return {**cached, "_cached": True, "_age_s": int(now - cached_ts)}
+    cache_age = now - cached_ts if cached is not None else None
+
+    # Fresh-Cache-Hit (<60s alt)
+    if cached is not None and cache_age < _BROKER_STATUS_TTL_SECONDS:
+        return {**cached, "_cached": True, "_age_s": int(cache_age)}
+
+    # Cache expired oder leer -> Live-Fetch
     try:
         result = await asyncio.to_thread(_broker_status_sync)
         _BROKER_STATUS_CACHE["data"] = result
         _BROKER_STATUS_CACHE["ts"] = now
         return result
     except Exception as e:
-        return {"broker": "?", "configured": False, "connected": False,
-                "error": f"{type(e).__name__}: {e}"}
+        # R-A29: Stale-Cache-Fallback bei Live-Fetch-Fail
+        err_str = f"{type(e).__name__}: {e}"
+        # Sentry-Bubble unterdruecken — Container-Restart-Cascade ist erwartet
+        # (Self-Test #11 deckt echte Disconnects ab)
+        log.info("broker_status live-fetch fehlgeschlagen (%s), versuche Stale-Cache", err_str)
+
+        # Wenn Stale-Cache noch jung genug (<10 Min) — nutzen
+        if cached is not None and cache_age < _BROKER_STATUS_STALE_MAX_SECONDS:
+            return {
+                **cached,
+                "_cached": True,
+                "_stale": True,
+                "_age_s": int(cache_age),
+                "_stale_reason": err_str,
+            }
+        # Kein brauchbarer Cache -> echter Fehler
+        return {
+            "broker": "?",
+            "configured": False,
+            "connected": False,
+            "error": err_str,
+            "_unavailable_since": int(now),
+        }
 
 
 def _portfolio_from_brain_cache():

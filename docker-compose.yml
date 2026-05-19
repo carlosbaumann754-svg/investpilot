@@ -5,6 +5,11 @@ services:
     build: .
     container_name: investpilot
     restart: unless-stopped
+    # R-A29 (Sprint-Tag-9 abend, 19.05.2026): Stop-Timeout 30s damit R-A25
+    # Graceful-Shutdown-Hook Zeit zum sauberen Disconnect hat. Docker-Default
+    # ist 10s -> Bot wurde abrupt gekilled bevor ib.disconnect() durchlief.
+    # 30s = typischer Cycle-finish + IB-disconnect-Roundtrip + State-Flush.
+    stop_grace_period: 30s
     ports:
       - "8443:8000"
     volumes:

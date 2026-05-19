@@ -211,6 +211,14 @@ _SENTRY_NOISE_PATTERNS = (
     # ib_insync API-Connection-Tasks beim Restart (Cascade aus Peer-Close)
     "Task <Task pending name='Task-",
     "connectAsync running at",
+    # R-A29 (19.05.2026 abend): async-Task-Cancellation bei SIGTERM/Restart.
+    # Wenn Dashboard /api/broker_status während Container-Stop pollt,
+    # wird ib_insync's await-Future canceled -> CancelledError. Bekannt-
+    # harmlos, Bot reconnected nach Restart. Self-Test #11 deckt echte
+    # Disconnect-Probleme ab.
+    "API connection failed: CancelledError",
+    "API connection failed: RuntimeError",
+    "asyncio.exceptions.CancelledError",
 )
 
 

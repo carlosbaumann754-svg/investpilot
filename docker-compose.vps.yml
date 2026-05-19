@@ -3,6 +3,10 @@ services:
     build: .
     container_name: investpilot
     restart: unless-stopped
+    # R-A29 (19.05.2026): Graceful-Shutdown-Window — Default 10s ist zu kurz
+    # fuer R-A25 (Cycle finish + ib.disconnect + State-Flush). Mit 30s hat
+    # Bot Zeit sauber zu beenden -> keine 'Peer closed connection'-Errors.
+    stop_grace_period: 30s
     expose:
       - '8000'
     ports:
