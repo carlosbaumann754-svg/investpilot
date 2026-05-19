@@ -551,6 +551,78 @@ def tc_cash_reserve_sane() -> TestResult:
                           duration_ms=int((time.time() - t0) * 1000))
 
 
+def tc_symbol_concentration_sane() -> TestResult:
+    """R-A10 (Sprint-Tag-9, 19.05.2026): Symbol-Konzentrations-Hard-Cap Config-Check.
+
+    Prueft dass:
+      - risk_management.symbol_concentration Section existiert
+      - enabled ist boolean
+      - max_positions_per_symbol ist int 1-5 (sane range)
+      - max_exposure_per_symbol_pct ist 1-50 (sane range)
+      - pushover_threshold_per_day ist int 1-20
+
+    Anlass: 18.05.2026 5x SCANNER_BUY OIL — Schutz dass Config nicht
+    versehentlich auf weichere Werte geaendert wird (z.B. max_pos=99
+    waere de-facto disabled).
+    """
+    t0 = time.time()
+    try:
+        from app.config_manager import load_config
+        cfg = load_config()
+        sc = cfg.get("risk_management", {}).get("symbol_concentration")
+        if not isinstance(sc, dict):
+            return TestResult(
+                "symbol_concentration_sane", False,
+                "Section risk_management.symbol_concentration fehlt komplett",
+                severity="critical", category="config",
+                duration_ms=int((time.time() - t0) * 1000))
+
+        enabled = sc.get("enabled")
+        if not isinstance(enabled, bool):
+            return TestResult(
+                "symbol_concentration_sane", False,
+                f"enabled muss bool sein, ist {type(enabled).__name__}",
+                severity="critical", category="config",
+                duration_ms=int((time.time() - t0) * 1000))
+
+        max_pos = sc.get("max_positions_per_symbol", 1)
+        if not isinstance(max_pos, int) or not (1 <= max_pos <= 5):
+            return TestResult(
+                "symbol_concentration_sane", False,
+                f"max_positions_per_symbol={max_pos} ausserhalb sane range 1-5",
+                severity="critical", category="config",
+                duration_ms=int((time.time() - t0) * 1000))
+
+        max_exp = sc.get("max_exposure_per_symbol_pct", 15)
+        if not isinstance(max_exp, (int, float)) or not (1 <= max_exp <= 50):
+            return TestResult(
+                "symbol_concentration_sane", False,
+                f"max_exposure_per_symbol_pct={max_exp} ausserhalb sane range 1-50",
+                severity="critical", category="config",
+                duration_ms=int((time.time() - t0) * 1000))
+
+        push_thr = sc.get("pushover_threshold_per_day", 3)
+        if not isinstance(push_thr, int) or not (1 <= push_thr <= 20):
+            return TestResult(
+                "symbol_concentration_sane", False,
+                f"pushover_threshold_per_day={push_thr} ausserhalb sane range 1-20",
+                severity="warning", category="config",
+                duration_ms=int((time.time() - t0) * 1000))
+
+        return TestResult(
+            "symbol_concentration_sane", True,
+            f"enabled={enabled}, max_pos={max_pos}, max_exp={max_exp}%, "
+            f"pushover_at={push_thr}/Tag",
+            severity="info", category="config",
+            duration_ms=int((time.time() - t0) * 1000))
+    except Exception as e:
+        return TestResult(
+            "symbol_concentration_sane", False,
+            f"exception: {type(e).__name__}: {e}",
+            severity="critical", category="config",
+            duration_ms=int((time.time() - t0) * 1000))
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -566,6 +638,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_discovery_freshness,
     tc_yfinance_freshness,  # v37h Q3-2: Stale-yfinance-Detection
     tc_cash_reserve_sane,   # v37h+1: Cash-Reserve-Config + Hybrid-Logik
+    tc_symbol_concentration_sane,  # R-A10 Sprint-Tag-9 (19.05.2026)
 ]
 
 

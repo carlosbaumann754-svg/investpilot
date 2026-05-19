@@ -1776,6 +1776,49 @@ def execute_scanner_trades(client, config, scan_results):
             log.info(f"  COOLDOWN-SKIP {sym}: {r}")
     buy_candidates = filtered
 
+    # R-A10 (Sprint-Tag-9, 19.05.2026): Symbol-Konzentrations-Hard-Cap.
+    # Defense-in-Depth zusaetzlich zu existing_symbols-Filter (Z.1763).
+    # Anlass: 18.05.2026 5x SCANNER_BUY OIL trotz existing_symbols-Filter
+    # (Cache-Timing zwischen Cycles + Filter nur einmal pre-Loop gebaut).
+    # Symbol-Konzentrations-Check greift unabhaengig vom Symbol-Filter und
+    # auch innerhalb des Loops (incremental Update von local_same_symbol_count).
+    if rm:
+        try:
+            sc_cfg = (config.get("risk_management", {})
+                            .get("symbol_concentration", {}) or {})
+            if sc_cfg.get("enabled", True):
+                # Lokaler Counter fuer Within-Cycle-Buys (verhindert dass
+                # 2 Candidates fuer dasselbe Symbol im selben Cycle beide
+                # durchgehen weil parsed_positions noch nicht aktualisiert).
+                within_cycle_buys = {}  # symbol -> count
+                conc_filtered = []
+                for c in buy_candidates:
+                    cand_sym = c.get("symbol")
+                    # Simuliere "wie wenn dieser Symbol bereits eine
+                    # within-cycle pending Pos haette" durch ergaenzten
+                    # existing_positions-Snapshot
+                    sim_positions = list(parsed_positions)
+                    for sim_sym, sim_count in within_cycle_buys.items():
+                        for _ in range(sim_count):
+                            sim_positions.append({"symbol": sim_sym, "invested": 0})
+                    allowed, reason = rm.check_symbol_concentration(
+                        cand_sym, 0, sim_positions, total_value, config)
+                    if not allowed:
+                        log.info(f"  CONCENTRATION-BLOCK {cand_sym}: {reason}")
+                        count, push_triggered = rm.record_concentration_block(
+                            cand_sym, reason, config)
+                        if push_triggered:
+                            log.warning(
+                                f"  CONCENTRATION-PUSHOVER {cand_sym}: "
+                                f"{count} Blocks heute (Threshold erreicht)")
+                    else:
+                        conc_filtered.append(c)
+                        within_cycle_buys[cand_sym] = within_cycle_buys.get(cand_sym, 0) + 1
+                buy_candidates = conc_filtered
+        except Exception as e:
+            log.warning(f"Symbol-Concentration-Filter Exception (non-fatal, "
+                        f"laesst Buys durch): {e}")
+
     # v36 — Insider-Signal-Filter (CEOWatcher-Equivalent via Finnhub)
     # Blockt Buys wenn Insider verkaufen (-2 Score). Filter ist via
     # config.scanner.insider_signal_enabled aktiviert. Fix fuer ROKU

@@ -106,7 +106,14 @@
     "concentration_threshold": 70,
     "concentration_size_reduction": 0.7,
     "min_cash_reserve_chf": 500,
-    "min_cash_reserve_pct": 0.1
+    "min_cash_reserve_pct": 0.1,
+    "symbol_concentration": {
+      "enabled": true,
+      "max_positions_per_symbol": 1,
+      "max_exposure_per_symbol_pct": 15,
+      "pushover_threshold_per_day": 3,
+      "_doc": "R-A10 Sprint-Tag-9 (19.05.2026): Hard-Cap pro Symbol als Defense-in-Depth gegen Klumpenrisiko (z.B. 5x OIL/USO am 18.05.2026 trotz existing_symbols-Filter). Hard-Block + Daily-Pushover ab pushover_threshold_per_day. Counter daily-reset 00:00 UTC im risk_state.json. Pre-Cutover threshold optional auf 1 setzen fuer max Visibility, Post-Cutover 3 als Default."
+    }
   },
   "min_expected_return_pct": 0.78,
   "multi_timeframe": {

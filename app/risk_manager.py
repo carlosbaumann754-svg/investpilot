@@ -804,6 +804,161 @@ def get_portfolio_concentration_score(existing_positions, config=None):
 
 
 # ============================================================
+# SYMBOL-KONZENTRATION (R-A10, Sprint-Tag-9 19.05.2026)
+# ============================================================
+# Hard-Cap pro Symbol als Defense-in-Depth gegen Klumpenrisiko.
+# Anlass: 18.05.2026 5x SCANNER_BUY auf OIL/USO (~$267k Brutto-
+# Exposure) trotz vorhandenem existing_symbols-Filter in trader.py.
+# Wurzel war Cache-Timing zwischen Scanner-Cycles + Filter wird nur
+# einmal pre-Loop gebaut. Symbol-Konzentrations-Check ist
+# unabhaengige zweite Layer die auch bei stale Cache greift.
+#
+# Block-Strategie (Option D): Hart blocken + Pushover NUR ab
+# pushover_threshold_per_day Blocks (Default 3). Counter im
+# risk_state.json mit Datum-Key (implicit daily reset).
+
+def check_symbol_concentration(new_symbol, candidate_amount_usd,
+                                existing_positions, total_portfolio_value,
+                                config=None):
+    """Pruefe Hard-Cap pro Symbol vor neuem Buy.
+
+    Bidirektional Symbol-Match via expand_symbol_for_match — d.h.
+    OIL-Candidate matcht IBKR-Position 'USO' und umgekehrt.
+
+    Args:
+        new_symbol: Bot-Symbol oder IBKR-Ticker des Candidates
+        candidate_amount_usd: USD-Volumen der geplanten neuen Position
+        existing_positions: Liste der aktuellen Positions-dicts
+                            (jedes mit 'symbol' + 'invested')
+        total_portfolio_value: Equity + alle invested (fuer Pct-Berechnung)
+        config: optional, sonst load_config()
+
+    Returns:
+        (allowed: bool, reason: str)
+    """
+    if config is None:
+        config = load_config()
+    sc_cfg = config.get("risk_management", {}).get("symbol_concentration", {})
+
+    if not sc_cfg.get("enabled", True):
+        return True, "OK (disabled)"
+
+    if not new_symbol:
+        return True, "OK (no symbol)"
+
+    max_positions = sc_cfg.get("max_positions_per_symbol", 1)
+    max_exposure_pct = sc_cfg.get("max_exposure_per_symbol_pct", 15)
+
+    # Bidirektional Symbol-Match
+    try:
+        from app.market_scanner import expand_symbol_for_match
+        candidate_variants = expand_symbol_for_match(new_symbol)
+    except Exception as e:
+        log.debug(f"expand_symbol_for_match failed: {e}")
+        candidate_variants = {new_symbol}
+
+    # Zaehle existing Positionen mit Symbol-Match
+    same_symbol_count = 0
+    same_symbol_invested = 0.0
+    for pos in existing_positions or []:
+        pos_sym = pos.get("symbol")
+        if not pos_sym:
+            continue
+        # Direkter Match ODER Pos-Symbol expandiert matcht
+        try:
+            pos_variants = expand_symbol_for_match(pos_sym)
+        except Exception:
+            pos_variants = {pos_sym}
+        if candidate_variants & pos_variants:
+            same_symbol_count += 1
+            same_symbol_invested += float(pos.get("invested", 0) or 0)
+
+    # Check 1: max_positions_per_symbol (Hard Count-Limit)
+    if same_symbol_count >= max_positions:
+        return False, (f"max_positions_per_symbol={max_positions} erreicht "
+                       f"({same_symbol_count} bestehende Pos auf {new_symbol})")
+
+    # Check 2: max_exposure_per_symbol_pct (Hard Pct-Limit)
+    if total_portfolio_value > 0 and max_exposure_pct > 0:
+        future_exposure_pct = ((same_symbol_invested + candidate_amount_usd)
+                               / total_portfolio_value * 100)
+        if future_exposure_pct > max_exposure_pct:
+            return False, (f"max_exposure_per_symbol_pct={max_exposure_pct}% "
+                           f"wuerde ueberschritten ({future_exposure_pct:.1f}% nach Buy)")
+
+    return True, "OK"
+
+
+def record_concentration_block(symbol, reason, config=None):
+    """Logge einen Concentration-Block und triggere Pushover bei Threshold.
+
+    Counter-State in risk_state.json:
+      {"symbol_concentration_blocks": {"YYYY-MM-DD": {"OIL": 3, "MSFT": 1}}}
+
+    Daily-Reset implizit durch Datum-Key. Alte Daten (>7d) werden bei
+    jedem Aufruf bereinigt damit State nicht waechst.
+
+    Pushover feuert genau EINMAL pro Symbol/Tag — bei dem Block der
+    den Threshold erreicht. Folgende Blocks am selben Tag sind still.
+
+    Args:
+        symbol: Bot-Symbol oder IBKR-Ticker
+        reason: Begruendung (fuer Log + Pushover-Message)
+        config: optional, sonst load_config()
+
+    Returns:
+        (count_today: int, triggered_pushover: bool)
+    """
+    if config is None:
+        config = load_config()
+    sc_cfg = config.get("risk_management", {}).get("symbol_concentration", {})
+    threshold = sc_cfg.get("pushover_threshold_per_day", 3)
+
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    state = load_json(RISK_STATE_FILE) or {}
+    all_blocks = state.get("symbol_concentration_blocks", {}) or {}
+
+    # Cleanup alte Tage (>7d zurueck) damit State nicht waechst
+    try:
+        cutoff_ts = datetime.now(timezone.utc).timestamp() - 7 * 86400
+        all_blocks = {
+            k: v for k, v in all_blocks.items()
+            if datetime.strptime(k, "%Y-%m-%d")
+                       .replace(tzinfo=timezone.utc).timestamp() >= cutoff_ts
+        }
+    except Exception as e:
+        log.debug(f"symbol_concentration_blocks cleanup skipped: {e}")
+
+    today_blocks = all_blocks.setdefault(today_utc, {})
+    today_blocks[symbol] = today_blocks.get(symbol, 0) + 1
+    count = today_blocks[symbol]
+
+    state["symbol_concentration_blocks"] = all_blocks
+    save_json(RISK_STATE_FILE, state)
+
+    # Pushover NUR exact bei Threshold (nicht jedes Mal)
+    triggered_pushover = False
+    if count == threshold:
+        triggered_pushover = True
+        try:
+            from app import alerts
+            msg = (f"{symbol} hat heute {count}x den Symbol-Konzentrations-"
+                   f"Hard-Cap getroffen. Letzter Block: {reason}. "
+                   f"Weitere Blocks heute werden still geloggt. "
+                   f"Check trade-history + config wenn das nicht erwartet ist.")
+            alerts.send_pushover(
+                msg,
+                config=config,
+                title=f"CONCENTRATION-BLOCK {symbol}",
+                priority=0,  # warning, kein CRITICAL
+            )
+        except Exception as e:
+            log.warning(f"Pushover-Alert fuer CONCENTRATION-BLOCK fehlgeschlagen: {e}")
+
+    return count, triggered_pushover
+
+
+# ============================================================
 # MAX OFFENE POSITIONEN
 # ============================================================
 
