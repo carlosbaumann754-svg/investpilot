@@ -2441,6 +2441,15 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
         {ok: True, symbol, qty, avg_cost, result: <broker-response>}
         oder {ok: False, error: <reason>}
     """
+    # R-A22 (Sprint-Tag-9 abend, 19.05.2026): Async-Loop-Fix.
+    # Anlass: Carlos klickte 16:42 'Verkaufen' fuer XLE. FastAPI ist async,
+    # ruft aber sync client.close_position() auf, was ib_insync mit eigenem
+    # event-loop intern nutzt. -> "ValueError: future belongs to different
+    # loop" + hängende Tasks + IBKR-Connection-Crash. Cascade von 7 Sentry-
+    # Issues in einem Klick.
+    # Fix: jeden ib_insync-Sync-Call via asyncio.to_thread() isolieren
+    # (analog Z.625 _broker_status_sync-Pattern).
+    import asyncio as _asyncio
     try:
         from app.config_manager import load_config
         from app.etoro_client import EtoroClient
@@ -2459,7 +2468,8 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
         if broker_name == "ibkr":
             portfolio = _portfolio_from_brain_cache()
         else:
-            portfolio = client.get_portfolio()
+            # R-A22: get_portfolio sync -> via to_thread isolieren
+            portfolio = await _asyncio.to_thread(client.get_portfolio)
         if not portfolio:
             raise HTTPException(status_code=503,
                                 detail="Portfolio-Fetch fehlgeschlagen")
@@ -2489,7 +2499,12 @@ async def api_manual_sell(symbol: str, user=Depends(require_auth)):
         username = getattr(user, "username", None) or str(user)
 
         # 2. Tatsaechlicher Close
-        result = client.close_position(p["position_id"], p.get("instrument_id"))
+        # R-A22: KRITISCHER CALL — close_position nutzt ib_insync mit
+        # eigenem event-loop. Via to_thread isolieren damit kein
+        # 'future belongs to different loop'-Crash + kein hängender Task.
+        result = await _asyncio.to_thread(
+            client.close_position, p["position_id"], p.get("instrument_id")
+        )
         if not result:
             # Audit + Pushover trotzdem fuer Diagnose
             try:
@@ -4085,16 +4100,23 @@ async def api_performance_metrics(user=Depends(require_auth)):
 @app.get("/api/position-correlations")
 async def api_position_correlations(user=Depends(require_auth)):
     """Sektor-Verteilung und Konzentrations-Score fuer offene Positionen."""
+    # R-A22 (19.05.2026): async-safe portfolio-fetch
+    # IBKR -> brain_cache (loop-safe), eToro -> via to_thread isolieren.
+    import asyncio as _asyncio
     try:
         from app.config_manager import load_config
         from app.etoro_client import EtoroClient
 
         config = load_config()
-        client = get_broker(config, readonly=True)
-        if not client.configured:
-            return {"error": "eToro nicht konfiguriert"}
+        broker_name = (config.get("broker") or "etoro").lower()
 
-        portfolio = client.get_portfolio()
+        if broker_name == "ibkr":
+            portfolio = _portfolio_from_brain_cache()
+        else:
+            client = get_broker(config, readonly=True)
+            if not client.configured:
+                return {"error": "eToro nicht konfiguriert"}
+            portfolio = await _asyncio.to_thread(client.get_portfolio)
         if not portfolio:
             return {"error": "Portfolio nicht verfuegbar"}
 
