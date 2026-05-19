@@ -19,6 +19,92 @@ TRADING_FLAG = get_data_path("trading_enabled.flag")
 INTERVAL_SECONDS = 300  # 5 Minuten
 
 
+# R-A25 (Sprint-Tag-9 abend, 19.05.2026): Graceful-Shutdown-Hook.
+# Bei jedem Container-Restart (docker compose up -d --build) schickt
+# Docker SIGTERM. Vorher: Bot wurde abrupt gekillt -> ib_insync-Sockets
+# unsauber abgewuergt -> "Peer closed connection"-Errors in Sentry
+# (R-A24 filter sie, aber Wurzel ist hier).
+# Fix: SIGTERM/SIGINT-Handler setzt globalen Flag, scheduler_loop checkt
+# in jeder Iteration, fuehrt sauberes Disconnect + State-Flush durch.
+import signal as _signal
+_SHUTDOWN_REQUESTED = False
+_SHUTDOWN_REASON = ""
+
+
+def _signal_handler(signum, frame):
+    """SIGTERM/SIGINT Handler — setzt Shutdown-Flag."""
+    global _SHUTDOWN_REQUESTED, _SHUTDOWN_REASON
+    sig_name = _signal.Signals(signum).name if hasattr(_signal, "Signals") else str(signum)
+    _SHUTDOWN_REASON = f"signal {sig_name}"
+    if _SHUTDOWN_REQUESTED:
+        # Zweites Signal -> Force-Exit (impatient user / Docker timeout)
+        log.warning(f"=== {sig_name} #2 — FORCE EXIT ===")
+        import os
+        os._exit(1)
+    log.info(f"=== {sig_name} empfangen — Graceful Shutdown angefordert ===")
+    _SHUTDOWN_REQUESTED = True
+
+
+def _graceful_shutdown():
+    """Saubere Shutdown-Sequenz: IBKR-Disconnect + State-Flush.
+
+    Wird aufgerufen wenn _SHUTDOWN_REQUESTED True ist (durch SIGTERM/SIGINT).
+    Defense-in-Depth: jeder Step ist try/except — partial cleanup ist
+    besser als kein cleanup.
+    """
+    log.info("=" * 55)
+    log.info(f"GRACEFUL SHUTDOWN gestartet (Grund: {_SHUTDOWN_REASON})")
+    log.info("=" * 55)
+
+    # 1. IBKR-Disconnect — sauberer als Socket-Abriss durch Container-Stop
+    try:
+        from app.broker_base import get_broker
+        broker = get_broker()
+        if hasattr(broker, "_ib") and broker._ib is not None:
+            if broker._ib.isConnected():
+                log.info("Disconnecting IBKR cleanly...")
+                broker._ib.disconnect()
+                log.info("IBKR disconnected ✓")
+            else:
+                log.info("IBKR war bereits disconnected")
+    except Exception as e:
+        log.warning(f"IBKR disconnect during shutdown: {e}")
+
+    # 2. Brain-State + Performance-Snapshots persist
+    try:
+        from app.config_manager import load_json, save_json
+        brain = load_json("brain_state.json") or {}
+        if brain:
+            from datetime import datetime, timezone
+            brain.setdefault("audit_log", []).append({
+                "event": "graceful_shutdown",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "reason": _SHUTDOWN_REASON,
+            })
+            # Keep audit_log <= 50 Eintraege
+            brain["audit_log"] = brain["audit_log"][-50:]
+            save_json("brain_state.json", brain)
+            log.info("brain_state.json final-flushed ✓")
+    except Exception as e:
+        log.warning(f"brain_state final-flush failed: {e}")
+
+    # 3. Pushover-Info (optional, fail-silent wenn nicht konfiguriert)
+    try:
+        from app import alerts
+        alerts.send_pushover(
+            "Bot Graceful Shutdown ({})\nIBKR sauber getrennt. "
+            "Reconnect bei naechstem Container-Start.".format(_SHUTDOWN_REASON),
+            title="InvestPilot Shutdown",
+            priority=-1,  # lowest priority, no sound
+        )
+    except Exception as e:
+        log.debug(f"Shutdown-Pushover skipped: {e}")
+
+    log.info("=" * 55)
+    log.info("GRACEFUL SHUTDOWN abgeschlossen — exit(0)")
+    log.info("=" * 55)
+
+
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
     "purpose": "Master-Scheduler: 5min-Trading-Cycles + Background-Threads (Universe-Health, Live-Discovery, WFO-Drift, Health-Audit)",
@@ -602,6 +688,13 @@ def scheduler_loop():
         log.warning(f"Market Context Init Fehler: {e}")
 
     while True:
+        # R-A25: Shutdown-Check ZUERST jeder Iteration. Wenn SIGTERM
+        # waehrend laufendem Cycle ankam, wird hier nach dem aktuellen
+        # Cycle gegraceful shutdown.
+        if _SHUTDOWN_REQUESTED:
+            _graceful_shutdown()
+            import sys
+            sys.exit(0)
         try:
             # v37co (03.05.2026): Heartbeat IMMER schreiben — auch bei Skip-Cycles
             # (Markt zu / Trading deaktiviert). Bot ist clearly alive wenn er den
@@ -808,7 +901,12 @@ def scheduler_loop():
         except Exception as e:
             log.error(f"Fehler im Trading-Zyklus: {e}", exc_info=True)
 
-        time.sleep(INTERVAL_SECONDS)
+        # R-A25: Sleep in 5-sec-Chunks damit SIGTERM responsive ist
+        # (statt 300s blockierendes sleep). Bei Shutdown-Flag sofort raus.
+        for _ in range(INTERVAL_SECONDS // 5):
+            if _SHUTDOWN_REQUESTED:
+                break
+            time.sleep(5)
 
 
 if __name__ == "__main__":
@@ -820,6 +918,14 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ]
     )
+
+    # R-A25 Sprint-Tag-9 (19.05.2026): SIGTERM/SIGINT Handler fuer
+    # Graceful Shutdown. Docker schickt SIGTERM bei Container-Stop —
+    # ohne Handler wird Bot abrupt gekillt -> ib_insync-Socket-Abriss
+    # -> "Peer closed connection"-Errors. Mit Handler: sauberer Disconnect.
+    _signal.signal(_signal.SIGTERM, _signal_handler)
+    _signal.signal(_signal.SIGINT, _signal_handler)
+    log.info("Signal-Handler registriert (SIGTERM + SIGINT) - Graceful-Shutdown aktiv")
 
     # R-A13 Sprint-Tag-9 (19.05.2026): Sentry-Init AUCH im Scheduler-Daemon.
     # entrypoint.sh startet scheduler + web als 2 getrennte Prozesse — vorher
