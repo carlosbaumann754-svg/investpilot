@@ -308,6 +308,29 @@ def _safe_num(v) -> Optional[float]:
         return None
 
 
+def _try_external_fallback(symbol: str) -> Optional[float]:
+    """R-A15 (Sprint-Tag-9, 19.05.2026): Fallback auf data_fallback-Chain.
+
+    Wird gerufen wenn IBKR-MarketData kein Quote liefert (z.B. fehlende
+    Subscription auf Paper-Account, exotische Stunden, USO-Coverage-Issue).
+    Nutzt yfinance > AlphaVantage > Polygon > Finnhub.
+
+    Returns: float oder None.
+    """
+    if not symbol:
+        return None
+    try:
+        from app.data_fallback import fetch_quote_with_fallback
+        price = fetch_quote_with_fallback(symbol)
+        if price is not None and price > 0:
+            log.warning("get_quote: IBKR lieferte nichts, external fallback "
+                        "fuer %s -> $%.4f", symbol, price)
+            return price
+    except Exception as e:
+        log.debug("external fallback fuer %s exception: %s", symbol, e)
+    return None
+
+
 def get_quote(ib, contract, timeout: float = 5.0, allow_delayed: bool = True) -> Optional[float]:
     """
     Schneller Price-Snapshot fuer Quantity-Berechnung.
@@ -317,13 +340,18 @@ def get_quote(ib, contract, timeout: float = 5.0, allow_delayed: bool = True) ->
     2. Mid (Bid+Ask)/2
     3. marketPrice() (ib_insync's smart fallback)
     4. Close (Vortagesschluss)
+    5. R-A15 (19.05.2026): External Fallback-Chain (yfinance > AV > Polygon > Finnhub)
+       — greift wenn IBKR keinen Quote liefert (z.B. USO ohne Real-Time-Sub
+       auf Paper-Account). Vorher: harter Order-Abort + Sentry-Error.
 
     Bei Paper-Accounts ohne Market-Data-Abo: schaltet auf Delayed-Data
     via reqMarketDataType(3) wenn allow_delayed=True (default).
 
     Returns:
-        Price als float, oder None wenn kein Quote verfuegbar.
+        Price als float, oder None wenn kein Quote verfuegbar (auch nicht
+        via External-Fallback).
     """
+    symbol_for_fallback = getattr(contract, "symbol", None)
     try:
         if allow_delayed:
             try:
@@ -349,15 +377,17 @@ def get_quote(ib, contract, timeout: float = 5.0, allow_delayed: bool = True) ->
             close = _safe_num(getattr(ticker, "close", None))
             if close:
                 return close
-        # Final Fallback nach Timeout
+        # Final Fallback nach Timeout (IBKR-Layer)
         for attr in ("last", "marketPrice", "close", "bid", "ask"):
             v = _safe_num(getattr(ticker, attr, None))
             if v:
                 return v
-        return None
+        # R-A15: External Fallback-Chain wenn IBKR nichts liefert
+        return _try_external_fallback(symbol_for_fallback)
     except Exception as e:
         log.error("get_quote failed: %s", e)
-        return None
+        # Auch bei Exception external Fallback versuchen
+        return _try_external_fallback(symbol_for_fallback)
     finally:
         try:
             ib.cancelMktData(contract)
