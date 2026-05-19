@@ -23,7 +23,7 @@ INTERVAL_SECONDS = 300  # 5 Minuten
 AUDIT_METADATA = {
     "purpose": "Master-Scheduler: 5min-Trading-Cycles + Background-Threads (Universe-Health, Live-Discovery, WFO-Drift, Health-Audit)",
     "config_section": None,
-    "state_files": ["scheduler_state.json", "trading_enabled.flag"],
+    "state_files": ["discovery_status.json", "trading_enabled.flag"],
     "self_tests": ["tc_scheduler_heartbeat"],
     "scheduler_hooks": [],
     "health_check": None,
