@@ -422,5 +422,12 @@
     "enabled": true,
     "stale_after_hours": 48,
     "cleanup_max_age_hours": 24
+  },
+  "sentry": {
+    "_comment": "R-A13 Sprint-Tag-9 (19.05.2026): Sentry scharfgeschaltet fuer Pre-Cutover + 2 Wochen Soak nach 01.06. SENTRY_DSN als env-var. PII-Filter in app/sentry_setup.py redacted IBKR-Accounts/Cash/Tokens. Re-Evaluation 17.06.2026: wenn <5 actionable Errors gesammelt -> Option C (komplett entfernen) wird sauber.",
+    "enabled": true,
+    "traces_sample_rate": 0.1,
+    "environment": "production",
+    "release": "investpilot@v37h+3"
   }
 }
