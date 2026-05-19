@@ -46,7 +46,19 @@ DEFAULT_ALERT_THROTTLE_HOURS = 24    # max 1 Alert pro Tag
 
 
 def _get_wfo_target_sharpe() -> Optional[float]:
-    """Liest Mean OOS-Sharpe aus letztem WFO-Run."""
+    """Liest Mean OOS-Sharpe aus letztem WFO-Run.
+
+    R-A16 (19.05.2026): Schema-Fix. Vorher: sucht w['oos_sharpe'] direkt
+    -> liefert immer None weil Schema hat sharpe nested in oos_metrics.
+    Bug-Wurzel: Sprint-Tag-7 (17.05.) WFO-Drift-Build basierte auf
+    angenommenes Schema, nie gegen echte wfo_status.json verifiziert.
+    Entdeckt 19.05. nach manuellem WFO-Trigger durch Carlos.
+
+    Schema-Lookup-Reihenfolge (defensive Fallback-Chain):
+      1. window['oos_metrics']['sharpe']  (current schema)
+      2. window['oos_score']                (legacy alias)
+      3. window['oos_sharpe']               (legacy direct, falls je existierend)
+    """
     try:
         from app.config_manager import load_json
         wfo = load_json("wfo_status.json") or {}
@@ -57,8 +69,27 @@ def _get_wfo_target_sharpe() -> Optional[float]:
     if not windows:
         return None
 
-    oos_sharpes = [w.get("oos_sharpe", 0) for w in windows
-                   if isinstance(w, dict) and w.get("oos_sharpe") is not None]
+    oos_sharpes = []
+    for w in windows:
+        if not isinstance(w, dict):
+            continue
+        sharpe = None
+        # Primary: nested in oos_metrics
+        metrics = w.get("oos_metrics")
+        if isinstance(metrics, dict):
+            sharpe = metrics.get("sharpe")
+        # Fallback 1: oos_score (legacy alias)
+        if sharpe is None:
+            sharpe = w.get("oos_score")
+        # Fallback 2: oos_sharpe (legacy direct)
+        if sharpe is None:
+            sharpe = w.get("oos_sharpe")
+        if sharpe is not None:
+            try:
+                oos_sharpes.append(float(sharpe))
+            except (TypeError, ValueError):
+                continue
+
     if not oos_sharpes:
         return None
 

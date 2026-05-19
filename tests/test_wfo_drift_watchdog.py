@@ -48,6 +48,66 @@ def test_drift_skip_when_no_wfo_data(mock_state):
     assert "Keine WFO-Daten" in r["skip_reason"]
 
 
+# ============================================================
+# R-A16 (19.05.2026): Schema-Robustness — _get_wfo_target_sharpe
+# muss alle 3 historischen Schema-Varianten lesen.
+# Bug-Wurzel: Sprint-Tag-7 Build basierte auf Schema-Annahme die
+# nicht der echten wfo_status.json entsprach -> Watchdog war effektiv
+# tot bis 19.05. Carlos's manueller WFO-Trigger das aufdeckte.
+# ============================================================
+
+def test_wfo_target_sharpe_from_oos_metrics_nested(mock_state):
+    """Echtes Schema: window['oos_metrics']['sharpe'] (current)."""
+    from app.wfo_drift_watchdog import _get_wfo_target_sharpe
+    mock_state["wfo_status.json"] = {
+        "windows": [
+            {"idx": 0, "oos_metrics": {"sharpe": 4.94, "trades": 72}},
+            {"idx": 1, "oos_metrics": {"sharpe": 4.38, "trades": 71}},
+        ]
+    }
+    result = _get_wfo_target_sharpe()
+    assert result is not None
+    assert abs(result - (4.94 + 4.38) / 2) < 0.01  # Mean OOS-Sharpe
+
+
+def test_wfo_target_sharpe_from_oos_score_legacy(mock_state):
+    """Legacy-Alias: window['oos_score'] (fallback 1)."""
+    from app.wfo_drift_watchdog import _get_wfo_target_sharpe
+    mock_state["wfo_status.json"] = {
+        "windows": [
+            {"idx": 0, "oos_score": 5.0},
+        ]
+    }
+    assert _get_wfo_target_sharpe() == 5.0
+
+
+def test_wfo_target_sharpe_from_oos_sharpe_legacy(mock_state):
+    """Legacy-direct: window['oos_sharpe'] (fallback 2, pre-fix)."""
+    from app.wfo_drift_watchdog import _get_wfo_target_sharpe
+    mock_state["wfo_status.json"] = {
+        "windows": [
+            {"idx": 0, "oos_sharpe": 3.5},
+        ]
+    }
+    assert _get_wfo_target_sharpe() == 3.5
+
+
+def test_wfo_target_sharpe_prefers_oos_metrics_over_legacy(mock_state):
+    """Wenn beide Schemata vorhanden: oos_metrics.sharpe gewinnt."""
+    from app.wfo_drift_watchdog import _get_wfo_target_sharpe
+    mock_state["wfo_status.json"] = {
+        "windows": [
+            {
+                "idx": 0,
+                "oos_metrics": {"sharpe": 4.94},
+                "oos_score": 99.0,     # legacy
+                "oos_sharpe": 99.0,    # legacy
+            },
+        ]
+    }
+    assert _get_wfo_target_sharpe() == 4.94
+
+
 def test_drift_skip_when_disabled(mock_state):
     """Feature disabled -> Skip."""
     from app.wfo_drift_watchdog import check_wfo_drift
