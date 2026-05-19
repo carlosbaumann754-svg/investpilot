@@ -30,8 +30,8 @@ log = logging.getLogger(__name__)
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
     "purpose": "Sharpe-Drift-Watchdog: Daily-Check Live-Sharpe vs WFO-OOS-Sharpe, Alert bei >30% Drift",
-    "config_section": "wfo_drift_watchdog",
-    "state_files": ["wfo_drift_state.json", "wfo_status.json"],
+    "config_section": None,
+    "state_files": ["wfo_status.json"],
     "self_tests": [],
     "scheduler_hooks": ["_BG_WFO_DRIFT_S"],
     "health_check": None,
