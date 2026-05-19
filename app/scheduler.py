@@ -820,5 +820,18 @@ if __name__ == "__main__":
             logging.StreamHandler(),
         ]
     )
+
+    # R-A13 Sprint-Tag-9 (19.05.2026): Sentry-Init AUCH im Scheduler-Daemon.
+    # entrypoint.sh startet scheduler + web als 2 getrennte Prozesse — vorher
+    # war Sentry nur im Web initialisiert, Trading-Logic-Errors (das Wichtigste!)
+    # liefen ungenutzt. Idempotent + no-op wenn config.sentry.enabled=False.
+    try:
+        from app.sentry_setup import setup_sentry
+        sentry_on = setup_sentry()
+        if sentry_on:
+            log.info("Sentry: aktiviert im Scheduler-Daemon")
+    except Exception as e:
+        log.warning(f"Sentry-Setup im Scheduler fehlgeschlagen (non-fatal): {e}")
+
     _ensure_trading_flag_initialized()  # v37cw boot-init
     scheduler_loop()
