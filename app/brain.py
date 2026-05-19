@@ -209,12 +209,106 @@ def analyze_instrument_performance():
         return _analyze_instrument_performance_locked()
 
 
+def _collect_realized_pnls_from_history() -> dict:
+    """R-A27 (Sprint-Tag-9 abend, 19.05.2026): Realized-PnL pro Symbol
+    aus trade_history.json sammeln.
+
+    Anlass: brain_state.instrument_scores nutzte nur live performance_snapshots
+    (= aktuell offene Positionen). Symbole die geclosed wurden vorm Snapshot-
+    Cycle erschienen nie im Score-Tracker. Dashboard-Card 'Instrument Scores'
+    zeigte nur 4 Symbols statt aller gehandelten.
+
+    Fix: Trade-History scannen → CLOSE-Trades mit pnl_pct aggregieren pro
+    Symbol. Symbol-Bestimmung:
+      1. CLOSE-Trade-Feld 'symbol' direkt (Q3-15-Fix vom 15.05.)
+      2. Falls fehlt: ASSET_UNIVERSE-Reverse-Lookup via instrument_id
+      3. Plus: state-machine zur Symbol-Disambiguierung (Re-Buy-Tracking)
+
+    Returns: dict {instrument_id_str: list[float pnl_pct]}
+    """
+    try:
+        history = load_json("trade_history.json") or []
+    except Exception:
+        return {}
+
+    # ASSET_UNIVERSE Reverse-Lookup: etoro_id → symbol
+    try:
+        from app.market_scanner import ASSET_UNIVERSE
+        id_to_symbol = {info.get("etoro_id"): sym
+                        for sym, info in (ASSET_UNIVERSE or {}).items()
+                        if info.get("etoro_id") is not None}
+    except Exception:
+        id_to_symbol = {}
+
+    # State-Machine: pro Symbol latest BUY tracken um CLOSE-Symbol zu erkennen
+    # (für CLOSE-Trades ohne explizites symbol-Feld).
+    last_buy_iid_to_symbol = {}  # instrument_id -> symbol (von letztem BUY)
+    realized_per_iid = {}        # instrument_id_str -> list[pnl_pct]
+    iid_to_symbol_final = {}     # instrument_id_str -> symbol-name (for Display)
+
+    BUY_LIKE = {"BUY", "OPEN", "SCANNER_BUY", "MANUAL_BUY",
+                "buy", "open", "scanner_buy"}
+    # Sortiere chronologisch
+    try:
+        sorted_hist = sorted(history, key=lambda t: t.get("timestamp") or "")
+    except Exception:
+        sorted_hist = list(history)
+
+    for t in sorted_hist:
+        action = (t.get("action") or "").upper()
+        status = (t.get("status") or "").lower()
+        if status in ("close_failed", "skipped"):
+            continue
+        if "FAILED" in action:
+            continue
+
+        iid = t.get("instrument_id")
+        if iid is None:
+            continue
+        iid_str = str(iid)
+        sym_from_trade = t.get("symbol")
+
+        # BUY: tracke instrument_id → symbol mapping
+        if action in BUY_LIKE or action in (a.upper() for a in BUY_LIKE):
+            if sym_from_trade:
+                last_buy_iid_to_symbol[iid_str] = sym_from_trade
+                iid_to_symbol_final[iid_str] = sym_from_trade
+            elif iid in id_to_symbol:
+                last_buy_iid_to_symbol[iid_str] = id_to_symbol[iid]
+                iid_to_symbol_final[iid_str] = id_to_symbol[iid]
+            continue
+
+        # CLOSE: nimm pnl_pct
+        pnl_pct = t.get("pnl_pct")
+        if pnl_pct is None:
+            continue
+        try:
+            pnl_pct = float(pnl_pct)
+        except (TypeError, ValueError):
+            continue
+
+        # Symbol-Bestimmung (Priority: 1=Feld, 2=BUY-Tracker, 3=ASSET_UNIVERSE)
+        symbol = sym_from_trade or last_buy_iid_to_symbol.get(iid_str) \
+            or id_to_symbol.get(iid)
+        if not symbol:
+            continue  # kein Mapping moeglich
+
+        realized_per_iid.setdefault(iid_str, []).append(pnl_pct)
+        iid_to_symbol_final[iid_str] = symbol
+
+    return realized_per_iid, iid_to_symbol_final
+
+
 def _analyze_instrument_performance_locked():
     brain = load_brain()
     snapshots = brain["performance_snapshots"]
 
-    if len(snapshots) < 2:
-        log.info("  Zu wenig Daten fuer Analyse (min. 2 Snapshots)")
+    # R-A27 (19.05.2026): Realized-PnL aus Trade-History laden.
+    # Wenn Snapshots zu wenig sind (<2), nutzen wir nur History — sonst beides.
+    realized_pnls, iid_symbol_map = _collect_realized_pnls_from_history()
+
+    if len(snapshots) < 2 and not realized_pnls:
+        log.info("  Zu wenig Daten fuer Analyse (min. 2 Snapshots oder History)")
         return {}
 
     instrument_data = {}
@@ -230,6 +324,26 @@ def _analyze_instrument_performance_locked():
             instrument_data[iid]["pnl_pct_history"].append(pos["pnl_pct"])
             instrument_data[iid]["invested_history"].append(pos["invested"])
             instrument_data[iid]["days_held"] += 1
+
+    # R-A27: realized PnLs aus Trade-History ergaenzen damit Symbols die
+    # nicht (mehr) im Snapshot sind aber gehandelt wurden auch im Score-
+    # Tracker erscheinen. Symbols aus History werden via instrument_id
+    # gemergt; falls iid noch nicht im instrument_data, neu anlegen.
+    for iid, pnls in realized_pnls.items():
+        if iid not in instrument_data:
+            instrument_data[iid] = {
+                "pnl_history": [],
+                "pnl_pct_history": [],
+                "invested_history": [],
+                "days_held": 0,
+                "realized_only": True,  # Marker: nur History, kein Live-Snapshot
+            }
+        # Append realized PnL als pnl_pct (PnL-in-USD haben wir aus History
+        # nicht zuverlaessig, also nur pnl_pct nutzen)
+        for p in pnls:
+            instrument_data[iid]["pnl_pct_history"].append(p)
+            # Synthetic pnl_usd (0) damit total_pnl-Berechnung nicht crasht
+            instrument_data[iid]["pnl_history"].append(0)
 
     scores = {}
     for iid, data in instrument_data.items():
@@ -262,6 +376,9 @@ def _analyze_instrument_performance_locked():
             "days_held": data["days_held"],
             "latest_pnl_pct": round(latest_pnl, 2),
             "total_pnl": round(sum(data["pnl_history"]) / max(len(data["pnl_history"]), 1), 2),
+            # R-A27: Trades-Anzahl (sample size) + Symbol-Display-Name
+            "trades": len(pnl_vals),
+            "symbol_hint": iid_symbol_map.get(iid),
         }
 
     sorted_scores = dict(sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True))
