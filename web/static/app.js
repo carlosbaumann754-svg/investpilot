@@ -1816,6 +1816,7 @@ async function loadV15Sizing() {
     loadBrokerStatus();
     loadCashReserveStatus();
     loadWfoStatus();
+    loadWfoDriftStatus();
     loadSurvivorship();
     loadCostModelStatus();
     loadCutoverReadiness();
@@ -1829,6 +1830,7 @@ async function loadV15Sizing() {
     setInterval(loadBrokerStatus, 60000); // Broker-Badge alle 1 Min
     setInterval(loadCashReserveStatus, 120000); // Cash-Reserve alle 2 Min
     setInterval(loadWfoStatus, 120000); // WFO-Status alle 2 Min
+    setInterval(loadWfoDriftStatus, 600000); // WFO-Drift-Watchdog alle 10 Min (R-A17)
     setInterval(loadSelfTest, 600000); // Self-Test-Card alle 10 Min refresh
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
@@ -2073,6 +2075,85 @@ async function loadWfoStatus() {
         loadWfoHistory();
     } catch (e) {
         console.warn('WFO status load failed:', e);
+    }
+}
+
+
+// R-A17 (Sprint-Tag-9, 19.05.2026): WFO-Drift-Watchdog Dashboard-Visibility
+async function loadWfoDriftStatus() {
+    try {
+        const r = await apiFetch('/api/wfo-drift/status');
+        if (!r.ok) return;
+        const d = await r.json();
+
+        const badge = document.getElementById('wfo-drift-badge');
+        const summary = document.getElementById('wfo-drift-summary');
+        const targetEl = document.getElementById('wfo-drift-target');
+        const liveEl = document.getElementById('wfo-drift-live');
+        const tradesEl = document.getElementById('wfo-drift-trades');
+        const driftEl = document.getElementById('wfo-drift-pct');
+        const thresholdEl = document.getElementById('wfo-drift-threshold');
+        const checkedEl = document.getElementById('wfo-drift-checked-at');
+        const skipBlock = document.getElementById('wfo-drift-skip-block');
+        const skipReasonEl = document.getElementById('wfo-drift-skip-reason');
+
+        if (!badge || !summary) return;
+
+        // Badge mit Status-Farbe
+        const colorMap = {
+            green:  { cls: 'badge-green',  emoji: '🟢' },
+            yellow: { cls: 'badge-yellow', emoji: '🟡' },
+            orange: { cls: 'badge-orange', emoji: '🟠' },
+            gray:   { cls: 'badge-blue',   emoji: 'ℹ️' },
+        };
+        const c = colorMap[d.status_color] || colorMap.gray;
+        badge.className = 'badge ' + c.cls;
+        badge.textContent = c.emoji + ' ' + (d.status_label || '--');
+
+        // Werte formatieren
+        const fmt = (v, digits) => (v == null ? '--' : Number(v).toFixed(digits == null ? 2 : digits));
+        const targetSharpe = d.wfo_sharpe;
+        const liveSharpe = d.live_sharpe;
+        const driftPct = d.drift_pct;
+
+        if (targetEl) targetEl.textContent = fmt(targetSharpe, 2);
+        if (liveEl) liveEl.textContent = fmt(liveSharpe, 2);
+        if (tradesEl) tradesEl.textContent = d.n_trades ? '  (n=' + d.n_trades + ')' : '';
+        if (driftEl) {
+            driftEl.textContent = driftPct == null ? '--' : (driftPct > 0 ? '+' : '') + driftPct.toFixed(1) + '%';
+            driftEl.style.color = driftPct == null ? ''
+                : (Math.abs(driftPct) < 15 ? '#10b981'
+                : (Math.abs(driftPct) < 30 ? '#f59e0b'
+                : '#ef4444'));
+        }
+        if (thresholdEl) thresholdEl.textContent = (d.threshold_pct || 30) + '%';
+        if (checkedEl && d.checked_at) {
+            const dt = new Date(d.checked_at);
+            checkedEl.textContent = dt.toLocaleTimeString('de-CH', {hour: '2-digit', minute: '2-digit'}) + ' Uhr';
+        }
+
+        // Summary-Text
+        if (targetSharpe != null && liveSharpe != null && driftPct != null) {
+            summary.innerHTML = 'WFO-Backtest: <strong>' + fmt(targetSharpe, 2) +
+                '</strong> ⇄ Live: <strong>' + fmt(liveSharpe, 2) +
+                '</strong> ⇒ Drift <strong>' + (driftPct > 0 ? '+' : '') + driftPct.toFixed(1) + '%</strong>';
+        } else if (d.skip_reason) {
+            summary.textContent = 'Skipped: ' + d.skip_reason;
+        } else {
+            summary.textContent = 'Wartet auf Daten...';
+        }
+
+        // Skip-Reason im Details-Block
+        if (skipBlock && skipReasonEl) {
+            if (d.skip_reason) {
+                skipBlock.style.display = 'block';
+                skipReasonEl.textContent = d.skip_reason;
+            } else {
+                skipBlock.style.display = 'none';
+            }
+        }
+    } catch (e) {
+        console.warn('WFO-Drift load failed:', e);
     }
 }
 

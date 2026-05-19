@@ -516,6 +516,48 @@
             </div>
         </div>
 
+        <!-- WFO-DRIFT-WATCHDOG (R-A17, Sprint-Tag-9 19.05.2026) -->
+        <!-- Visibility-Card fuer Live-vs-WFO-Sharpe-Vergleich. Watchdog laeuft -->
+        <!-- seit Sprint-Tag-7 im Backend, war bisher nur via Pushover sichtbar. -->
+        <div class="card" id="wfo-drift-card">
+            <div class="card-title">
+                WFO-Drift-Watchdog
+                <span class="tip" data-tip="Realitaets-Check: vergleicht die LIVE-Performance (echte Trades letzte 30 Tage) mit der WFO-BACKTEST-Erwartung. Beispiel: WFO sagt 'Strategie sollte Sharpe 5.0 erreichen', Live macht aktuell Sharpe 3.0 -> Drift = 40% (Strategie performt schlechter als der Backtest verspricht). Kleine Drifts (<15%) sind normales Markt-Rauschen. Mittlere Drifts (15-30%) heissen 'Wait-and-See'. Groessere Drifts (>30%) loesen einen Pushover-Alert aus — entweder ist die Strategie kaputt, der Markt hat sich gewendet, oder Bugs verzerren die Live-Trades. Aktuell -106% (Mai-Bug-Drag, sollte sich nach R-A10/R-A15-Fixes legen).">?</span>
+            </div>
+            <div id="wfo-drift-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
+            <div id="wfo-drift-summary" class="card-sub" style="margin-bottom:8px;">Lade...</div>
+
+            <details id="wfo-drift-details">
+                <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                    Details (Sharpe-Vergleich + Trades + Threshold) — klicken zum Ausklappen
+                </summary>
+                <div style="font-size:13px;line-height:1.7;">
+                    <div>
+                        <strong>Target Sharpe (WFO-Baseline)</strong>
+                        <span class="tip" data-tip="Was der monatliche Walk-Forward-Backtest als 'realistisch erwartete Performance' ermittelt hat. Aus mehreren Out-of-Sample-Fenstern gemittelt. Update 1x/Monat.">?</span>:
+                        <span id="wfo-drift-target" style="font-weight:600;">--</span>
+                    </div>
+                    <div>
+                        <strong>Live Sharpe (letzte 30d)</strong>
+                        <span class="tip" data-tip="Die ECHTE Performance der letzten Wochen, gerechnet aus den Close-Trades (STOP_LOSS, TAKE_PROFIT, TIME_STOP, TRAILING). Mindestens 5 Trades noetig, sonst zu wenig Statistik. Update taeglich.">?</span>:
+                        <span id="wfo-drift-live" style="font-weight:600;">--</span>
+                        <span id="wfo-drift-trades" style="opacity:0.7;font-size:0.9em;"></span>
+                    </div>
+                    <div>
+                        <strong>Drift</strong>
+                        <span class="tip" data-tip="(Live - WFO) / WFO * 100. Negativ = Live schlechter als Backtest verspricht. Positiv = Live besser. Threshold 30% = Pushover-Alert.">?</span>:
+                        <span id="wfo-drift-pct" style="font-weight:600;">--</span>
+                    </div>
+                    <div style="margin-top:8px;opacity:0.7;font-size:0.9em;">
+                        <strong>Threshold:</strong> <span id="wfo-drift-threshold">--</span> | <strong>Letzter Check:</strong> <span id="wfo-drift-checked-at">--</span>
+                    </div>
+                    <div id="wfo-drift-skip-block" style="display:none;margin-top:10px;padding:8px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:6px;font-size:0.85em;">
+                        <strong>Skipped:</strong> <span id="wfo-drift-skip-reason">--</span>
+                    </div>
+                </div>
+            </details>
+        </div>
+
         <!-- CASH-RESERVE (v37h+1, 14.05.2026 — ersetzt W7-Entnahme-Planer) -->
         <div class="card" id="cash-reserve-card">
             <div class="card-title">Cash-Reserve<span class="tip" data-tip="Mindest-Cash-Buffer fuer planbare Auslagen (Steuern, Versicherung, etc.). Bot kauft nur wenn Cash > Reserve. Bei Unterschreitung pausieren NEUE Buys — bestehende Positionen bleiben aktiv (keine Notverkaeufe). Reserve baut sich auto auf durch normale TP/SL/Dividenden-Sells. Formel: max(Floor in CHF, Prozent x Equity).">?</span></div>

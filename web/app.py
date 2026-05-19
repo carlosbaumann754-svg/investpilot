@@ -4611,6 +4611,71 @@ async def api_wfo_status():
 
 
 # ============================================================
+# WFO-DRIFT-WATCHDOG (R-A17, Sprint-Tag-9 19.05.2026)
+# ============================================================
+# Visibility-Card fuer den Watchdog der seit Sprint-Tag-7 im Backend laeuft.
+# Macht Drift zwischen WFO-Backtest-Sharpe und Live-Sharpe sichtbar — bisher
+# nur via Pushover-Alerts kommuniziert, jetzt auch im Dashboard.
+# Anlass: Carlos's Beobachtung 19.05. "ich seh den Drift nirgends" + sein
+# eigenes Visibility>Optimization-Prinzip.
+
+@app.get("/api/wfo-drift/status")
+async def api_wfo_drift_status():
+    """WFO-Drift-Watchdog Status fuer Dashboard.
+
+    Ruft check_wfo_drift() live auf (ist <200ms, kein yfinance, nur lokale
+    Files). Schreibt alert_state.json bei jedem Call (idempotent durch
+    Throttle-Logik). Read-only fuer Dashboard.
+
+    Returns:
+        wfo_sharpe, live_sharpe, drift_pct, n_trades, alert_triggered,
+        skip_reason, checked_at + abgeleitete UI-Felder (status_color, status_label).
+    """
+    try:
+        from app.wfo_drift_watchdog import check_wfo_drift
+        from app.config_manager import load_config
+        cfg = load_config() or {}
+        result = check_wfo_drift(cfg) or {}
+
+        # UI-Status ableiten
+        drift_pct = result.get("drift_pct")
+        skip_reason = result.get("skip_reason")
+        wfo_cfg = cfg.get("wfo_drift_watchdog", {}) or {}
+        threshold_pct = float(wfo_cfg.get("drift_threshold_pct", 30.0))
+
+        if skip_reason and result.get("wfo_sharpe") is None:
+            status_color = "gray"
+            status_label = "Nicht bereit"
+        elif drift_pct is None:
+            status_color = "gray"
+            status_label = "Wartet auf Trades"
+        elif abs(drift_pct) < threshold_pct * 0.5:  # < 15% (halbe Threshold)
+            status_color = "green"
+            status_label = "OK"
+        elif abs(drift_pct) < threshold_pct:  # 15-30%
+            status_color = "yellow"
+            status_label = "Wait-and-See"
+        else:  # > 30%
+            status_color = "orange"
+            status_label = "Drift signifikant"
+
+        result["status_color"] = status_color
+        result["status_label"] = status_label
+        result["threshold_pct"] = threshold_pct
+        return result
+    except Exception as e:
+        log.warning(f"WFO-Drift status failed: {e}")
+        return {
+            "wfo_sharpe": None,
+            "live_sharpe": None,
+            "drift_pct": None,
+            "skip_reason": f"API-Fehler: {type(e).__name__}: {e}",
+            "status_color": "gray",
+            "status_label": "Fehler",
+        }
+
+
+# ============================================================
 # SURVIVORSHIP-AUDIT (E4, Q1 Foundation)
 # ============================================================
 
