@@ -27,6 +27,18 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "IBKR-Broker-Adapter: Buy/Sell/Close-Orders, Position-Sync, Stale-Portfolio-Filter, Boot-Race-Detection, Account-Summary",
+    "config_section": None,
+    "state_files": [],
+    "self_tests": ["tc_ibkr_connect", "tc_ibkr_session_watchdog"],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v37c (eToro->IBKR Migration)",
+}
+
 # ib_insync.util.patchAsyncio() patcht asyncio.get_event_loop() global so dass
 # nested calls (FastAPI -> ib_insync) funktionieren. Wird beim ersten Import
 # einmalig aufgerufen damit ALLE folgenden ib_insync-Calls Loop-safe sind.

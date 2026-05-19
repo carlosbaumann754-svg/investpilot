@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# investpilot — Pre-Commit-Hook: Audit-Coverage-Check (v37h+3, 19.05.2026)
+#
+# WAS: Verhindert Commits die ein neues Modul in AUDIT_REQUIRED_MODULES
+#      OHNE AUDIT_METADATA-Block einfuegen. Plus: WARN wenn ein optionales
+#      app/*.py Module zu AUDIT_REQUIRED hinzugefuegt wurde aber Marker fehlt.
+#
+# WARUM: Continuous-Phantom-Discovery-Disziplin (Sprint-Tag-7 Lehre). Verhindert
+#        Klasse von Bugs wo neue Tools silent im Bot landen ohne Audit-Coverage.
+#
+# UMGEHUNG: git commit --no-verify (NICHT empfohlen — Audit-Lueck-Risiko)
+#
+# INSTALL: bash scripts/install-git-hooks.sh
+
+set -e
+
+# Nur staged Python-Files in app/ pruefen
+STAGED_APP_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '^app/.*\.py$' || true)
+
+if [ -z "$STAGED_APP_PY" ]; then
+    # Kein app/*.py geaendert - skip Check
+    exit 0
+fi
+
+# Python-Check delegieren (saubere AST-Validation)
+python3 <<'PYEOF'
+import sys
+import ast
+from pathlib import Path
+
+# Lade AUDIT_REQUIRED_MODULES aus health_audit.py via AST
+try:
+    health_audit_src = Path("app/health_audit.py").read_text(encoding="utf-8")
+    tree = ast.parse(health_audit_src)
+    required_modules = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "AUDIT_REQUIRED_MODULES":
+                    required_modules = ast.literal_eval(node.value)
+                    break
+    if not required_modules:
+        # Fallback wenn Datei kaputt ist
+        print("PRE-COMMIT WARN: AUDIT_REQUIRED_MODULES nicht parseable, skip check")
+        sys.exit(0)
+except Exception as e:
+    print(f"PRE-COMMIT WARN: konnte health_audit.py nicht parsen: {e}")
+    sys.exit(0)
+
+# Lese staged files aus stdin
+import subprocess
+staged_raw = subprocess.check_output(
+    ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+    text=True, encoding="utf-8", errors="replace",
+).strip()
+staged_files = [f for f in staged_raw.split("\n") if f.startswith("app/") and f.endswith(".py")]
+
+# Pruefe ob staged Module die in AUDIT_REQUIRED sind einen AUDIT_METADATA-Block haben
+problems = []
+for f in staged_files:
+    module_name = Path(f).stem
+    if module_name.startswith("_"):
+        continue
+    if module_name not in required_modules:
+        continue  # nicht-required modules sind optional
+
+    # Lese gestaged content (--cached) — UTF-8 mit replace-Fallback fuer
+    # Windows-CP1252-Konsolen (Pre-Commit lief sonst encoding-error wenn
+    # eine staged Datei Non-ASCII enthielt).
+    try:
+        content = subprocess.check_output(["git", "show", f":{f}"],
+                                          text=True, encoding="utf-8",
+                                          errors="replace")
+    except subprocess.CalledProcessError:
+        continue
+
+    try:
+        mod_tree = ast.parse(content)
+    except SyntaxError as se:
+        problems.append(f"{f}: Syntax-Error beim Parse: {se}")
+        continue
+
+    has_marker = False
+    for node in ast.iter_child_nodes(mod_tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "AUDIT_METADATA":
+                    has_marker = True
+                    break
+        if has_marker:
+            break
+
+    if not has_marker:
+        problems.append(f"{f}: REQUIRED module ohne AUDIT_METADATA-Block")
+
+if problems:
+    print()
+    print("=" * 70)
+    print("PRE-COMMIT BLOCK: Audit-Coverage-Marker fehlt")
+    print("=" * 70)
+    for p in problems:
+        print(f"  ✗ {p}")
+    print()
+    print("Was tun:")
+    print("  1. AUDIT_METADATA dict am Top des Moduls hinzufuegen (nach `log = ...`)")
+    print("     Pflicht-Keys: purpose, added_in")
+    print("     Optional: config_section, state_files, self_tests, scheduler_hooks, health_check")
+    print()
+    print("  2. Beispiel siehe app/risk_manager.py (R-A10 19.05.2026)")
+    print()
+    print("Umgehung (NICHT empfohlen): git commit --no-verify")
+    print("=" * 70)
+    sys.exit(1)
+
+PYEOF
+
+# Hook hat Python-Block erfolgreich beendet -> Commit erlauben
+exit 0

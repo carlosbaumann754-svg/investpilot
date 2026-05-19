@@ -16,6 +16,18 @@ from app.broker_base import get_broker
 log = logging.getLogger("Trader")
 
 
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Trading-Engine: Buy/Sell-Loop, SL/TP-Exits, Trailing-SL, Time-Stop, Partial-Close, existing_symbols-Filter, Cooldown-Filter, R-A10 Symbol-Concentration-Hook",
+    "config_section": "demo_trading",
+    "state_files": ["trade_history.json", "buy_cooldown.json", "pending_closes.json", "partial_close_state.json"],
+    "self_tests": ["tc_pending_closes_fresh", "tc_trading_flag_failclosed"],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v1 (Foundation)",
+}
+
+
 def save_trade(trade_entry):
     """Trade-Historie persistent speichern."""
     history = load_json("trade_history.json") or []

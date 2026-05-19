@@ -21,6 +21,18 @@ from app.config_manager import load_config, load_json, save_json
 
 log = logging.getLogger("MarketContext")
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Market-Context: VIX, Fear&Greed, Regime-Detection (Bull/Bear/Sideways), Sentiment-Layer",
+    "config_section": "market_context",
+    "state_files": ["market_context.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v37 (Regime-Filter)",
+}
+
 MARKET_CONTEXT_FILE = "market_context.json"
 # v37h+2 (R-A5, 15.05.2026): Stale-Cache-Threshold. Wenn last_update
 # alter als STALE_HOURS ist, gelten gecachte VIX/F&G-Werte als

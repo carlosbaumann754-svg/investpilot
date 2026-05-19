@@ -11,6 +11,18 @@ from typing import Optional
 
 log = logging.getLogger("Scanner")
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Market-Scanner: ASSET_UNIVERSE-Iteration, Score-Computation, Signal-Klassifikation, expand_symbol_for_match (Bot<->IBKR)",
+    "config_section": "scanner",
+    "state_files": ["scanner_state.json"],
+    "self_tests": ["tc_yfinance_freshness"],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v1 (Foundation), v37de Symbol-Mapping",
+}
+
 try:
     import yfinance as yf
     import numpy as np

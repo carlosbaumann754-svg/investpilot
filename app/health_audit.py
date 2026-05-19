@@ -24,6 +24,7 @@ USAGE:
 """
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -35,9 +36,116 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Self-Audit-Marker (rekursiv)
+AUDIT_METADATA = {
+    "purpose": "Weekly Health-Audit + Continuous-Phantom-Discovery + Module-Coverage (Reflection)",
+    "config_section": None,
+    "state_files": ["health_audit_state.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v37h+2 (17.05.2026), Module-Coverage v37h+3 (19.05.2026)",
+}
+# Hinweis: health_audit laeuft als Linux-Cron (scripts/health_audit_cron.sh Sa 13 UTC),
+# NICHT als scheduler-Background-Thread. Daher scheduler_hooks=[].
+
+
 STATE_FILE = "health_audit_state.json"
 REPORTS_DIR = "audits"
 PUSHOVER_THROTTLE_HOURS = 1  # max 1 Alert pro Stunde bei Re-Run
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Reflection-basiertes Audit-Coverage.
+# Jedes "AUDIT_REQUIRED"-Modul muss AUDIT_METADATA dict am Top der Datei
+# haben. Audit liest via AST (keine Side-Effects beim Import) und generiert
+# Health-Checks pro Modul automatisch. Wenn ein Required-Modul keinen
+# Marker hat -> CRITICAL-Alert. Wenn ein NEUES Modul ohne Marker in
+# AUDIT_REQUIRED-Liste added wird -> Pre-Commit-Hook blockt strukturell.
+AUDIT_REQUIRED_MODULES = {
+    # Core-Trading-Logic
+    "trader", "risk_manager", "scheduler", "market_scanner", "ibkr_client",
+    "brain", "hedging", "market_context",
+    # Safety + Monitoring
+    "health_audit", "self_test", "alerts", "wfo_drift_watchdog",
+    # Periodic-Jobs
+    "asset_discovery", "walk_forward_optimizer", "universe_health_watcher",
+}
+
+
+def _extract_audit_metadata_via_ast(py_file: Path) -> Optional[dict]:
+    """Liest AUDIT_METADATA via AST ohne Module zu importieren.
+
+    Verhindert Side-Effects (DB-Connections, IBKR-Init, etc.) waehrend
+    Discovery. AST literal_eval = nur primitive Werte erlaubt (dict, str,
+    int, list, None, bool) -> sicher gegen Code-Execution.
+
+    Returns:
+        AUDIT_METADATA dict wenn vorhanden + parseable, sonst None.
+    """
+    try:
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "AUDIT_METADATA":
+                    try:
+                        return ast.literal_eval(node.value)
+                    except (ValueError, SyntaxError):
+                        return None
+    return None
+
+
+def _discover_module_metadata() -> dict[str, dict]:
+    """Scannt app/*.py + sammelt AUDIT_METADATA von jedem Modul.
+
+    Returns:
+        dict {module_name: metadata_dict} fuer alle Module mit Marker.
+    """
+    metadata = {}
+    app_dir = Path(__file__).parent
+    for py_file in sorted(app_dir.glob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+        meta = _extract_audit_metadata_via_ast(py_file)
+        if meta is not None:
+            metadata[py_file.stem] = meta
+    return metadata
+
+
+def _validate_metadata_schema(name: str, meta: dict) -> list[str]:
+    """Validate dass AUDIT_METADATA korrekte Keys + Typen hat.
+
+    Returns:
+        Liste von Error-Strings (leer = valid).
+    """
+    errors = []
+    required_keys = {"purpose", "added_in"}
+    optional_keys = {"config_section", "state_files", "self_tests",
+                     "scheduler_hooks", "health_check"}
+    allowed_keys = required_keys | optional_keys
+
+    for k in required_keys:
+        if k not in meta:
+            errors.append(f"missing required key '{k}'")
+
+    for k in meta:
+        if k not in allowed_keys:
+            errors.append(f"unknown key '{k}' (allowed: {sorted(allowed_keys)})")
+
+    # Type-Checks
+    type_specs = {
+        "purpose": str, "added_in": str, "config_section": (str, type(None)),
+        "state_files": list, "self_tests": list,
+        "scheduler_hooks": list, "health_check": (str, type(None)),
+    }
+    for k, expected in type_specs.items():
+        if k in meta and not isinstance(meta[k], expected):
+            errors.append(f"key '{k}' has wrong type "
+                          f"(expected {expected}, got {type(meta[k]).__name__})")
+
+    return errors
 
 
 @dataclass
@@ -492,6 +600,175 @@ def check_code_antipatterns() -> list[HealthCheckResult]:
 
 
 # ============================================================
+# CHECK GROUP 6: Module-Coverage (v37h+3, 19.05.2026)
+# ============================================================
+# Reflection-basierte Audit-Coverage. Jedes Required-Modul muss AUDIT_METADATA
+# haben. Audit generiert dann automatisch pro Modul: Config-Section-Existence,
+# State-File-Freshness, Self-Test-Linkage, Scheduler-Hook-Linkage, optional
+# Custom health_check. Self-extending: neue Module mit Marker bekommen
+# automatisch volle Coverage ohne Code-Change in health_audit.py.
+
+def _check_config_section_exists(section_path: str, cfg: dict) -> tuple[bool, str]:
+    """Dot-notation Pfad ('risk_management.symbol_concentration') in dict navigieren."""
+    parts = section_path.split(".")
+    node = cfg
+    for p in parts:
+        if not isinstance(node, dict) or p not in node:
+            return False, f"missing path '{section_path}' at part '{p}'"
+        node = node[p]
+    return True, f"section '{section_path}' present"
+
+
+def _check_health_function(module_name: str, fn_name: str) -> HealthCheckResult:
+    """Lazy-Import + Aufruf von Module-spezifischer health_check-Funktion."""
+    try:
+        import importlib
+        mod = importlib.import_module(f"app.{module_name}")
+        fn = getattr(mod, fn_name, None)
+        if fn is None or not callable(fn):
+            return HealthCheckResult(
+                name=f"module_{module_name}_health_check",
+                category="module_coverage", passed=False, severity="warning",
+                message=f"declared health_check '{fn_name}' not callable on app.{module_name}",
+            )
+        result = fn()
+        healthy = bool(result.get("healthy", False)) if isinstance(result, dict) else False
+        detail = result.get("detail", "") if isinstance(result, dict) else str(result)
+        return HealthCheckResult(
+            name=f"module_{module_name}_health_check",
+            category="module_coverage", passed=healthy,
+            severity="warning" if not healthy else "info",
+            message=f"{module_name}.{fn_name}: {detail}",
+        )
+    except Exception as e:
+        return HealthCheckResult(
+            name=f"module_{module_name}_health_check",
+            category="module_coverage", passed=False, severity="warning",
+            message=f"{module_name}.{fn_name} crashed: {type(e).__name__}: {e}",
+        )
+
+
+def check_module_coverage() -> list[HealthCheckResult]:
+    """Reflection-basierte Audit-Coverage fuer alle App-Module.
+
+    Pro Modul (mit AUDIT_METADATA-Marker):
+      - Schema-Validitaet (Required-Keys vorhanden + korrekte Typen)
+      - Config-Section existiert (wenn deklariert)
+      - State-Files existieren (wenn deklariert)
+      - Self-Tests sind in ALL_TESTS registriert (wenn deklariert)
+      - Scheduler-Hooks existieren in scheduler.py (wenn deklariert)
+      - Custom health_check ausgefuehrt (wenn deklariert)
+
+    Plus: required-Module ohne Marker -> CRITICAL.
+    """
+    out: list[HealthCheckResult] = []
+    metadata = _discover_module_metadata()
+
+    # 6a: required Module mit fehlendem Marker -> CRITICAL
+    missing = AUDIT_REQUIRED_MODULES - set(metadata.keys())
+    if missing:
+        out.append(HealthCheckResult(
+            name="module_coverage_required_complete",
+            category="module_coverage", passed=False, severity="critical",
+            message=(f"{len(missing)} required Module ohne AUDIT_METADATA: "
+                     f"{sorted(missing)} — neue Tools muessen Marker setzen"),
+            detail={"missing_required": sorted(missing)},
+        ))
+    else:
+        out.append(HealthCheckResult(
+            name="module_coverage_required_complete",
+            category="module_coverage", passed=True, severity="info",
+            message=(f"alle {len(AUDIT_REQUIRED_MODULES)} required Module "
+                     f"haben AUDIT_METADATA"),
+        ))
+
+    # 6b: Cross-Validation pro registriertem Modul
+    try:
+        from app.config_manager import load_config
+        cfg = load_config() or {}
+    except Exception as e:
+        cfg = {}
+        out.append(HealthCheckResult(
+            name="module_coverage_config_load",
+            category="module_coverage", passed=False, severity="warning",
+            message=f"config.json nicht ladbar: {e}",
+        ))
+
+    try:
+        from app.self_test import ALL_TESTS
+        known_self_tests = {fn.__name__ for fn in ALL_TESTS}
+    except Exception:
+        known_self_tests = set()
+
+    try:
+        scheduler_src = (Path(__file__).parent / "scheduler.py").read_text(encoding="utf-8")
+    except Exception:
+        scheduler_src = ""
+
+    for mod_name, meta in metadata.items():
+        # Schema-Validitaet
+        schema_errors = _validate_metadata_schema(mod_name, meta)
+        if schema_errors:
+            out.append(HealthCheckResult(
+                name=f"module_{mod_name}_metadata_schema",
+                category="module_coverage", passed=False, severity="warning",
+                message=f"{mod_name} AUDIT_METADATA invalid: {'; '.join(schema_errors)}",
+            ))
+            continue  # weitere checks ohne valides Schema sinnlos
+
+        # Config-Section Existence
+        cs = meta.get("config_section")
+        if cs:
+            ok, detail = _check_config_section_exists(cs, cfg)
+            out.append(HealthCheckResult(
+                name=f"module_{mod_name}_config",
+                category="module_coverage", passed=ok,
+                severity="warning" if not ok else "info",
+                message=f"{mod_name}: {detail}",
+            ))
+
+        # State-Files Existence
+        for sf in meta.get("state_files", []) or []:
+            data = _load_json_safe(sf)
+            exists = data is not None
+            out.append(HealthCheckResult(
+                name=f"module_{mod_name}_state_{sf.replace('.json','')}",
+                category="module_coverage", passed=exists,
+                severity="info" if exists else "warning",
+                message=(f"{mod_name}: state file {sf} {'present' if exists else 'missing'}"),
+            ))
+
+        # Self-Test-Linkage
+        for st in meta.get("self_tests", []) or []:
+            in_registry = st in known_self_tests
+            out.append(HealthCheckResult(
+                name=f"module_{mod_name}_selftest_{st}",
+                category="module_coverage", passed=in_registry,
+                severity="warning" if not in_registry else "info",
+                message=(f"{mod_name}: self-test {st} "
+                         f"{'in ALL_TESTS' if in_registry else 'NOT REGISTERED'}"),
+            ))
+
+        # Scheduler-Hook-Linkage (Variable-Name muss in scheduler.py erscheinen)
+        for hook in meta.get("scheduler_hooks", []) or []:
+            present = hook in scheduler_src
+            out.append(HealthCheckResult(
+                name=f"module_{mod_name}_scheduler_{hook}",
+                category="module_coverage", passed=present,
+                severity="warning" if not present else "info",
+                message=(f"{mod_name}: scheduler hook {hook} "
+                         f"{'defined' if present else 'NOT FOUND in scheduler.py'}"),
+            ))
+
+        # Custom health_check
+        hc = meta.get("health_check")
+        if hc:
+            out.append(_check_health_function(mod_name, hc))
+
+    return out
+
+
+# ============================================================
 # RUN FULL AUDIT
 # ============================================================
 
@@ -510,7 +787,8 @@ def run_full_audit(dry_run: bool = False) -> dict:
 
     results: list[HealthCheckResult] = []
     for fn in (check_api_keys, check_state_files, check_feature_toggles,
-               check_cron_freshness, check_code_antipatterns):
+               check_cron_freshness, check_code_antipatterns,
+               check_module_coverage):  # v37h+3 Sprint-Tag-9
         try:
             results.extend(fn())
         except Exception as e:

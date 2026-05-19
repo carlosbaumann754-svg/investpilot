@@ -9,6 +9,18 @@ import logging
 
 log = logging.getLogger("Hedging")
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Portfolio-Hedging: VIX-Trigger, Score-Backup, Defensive-Sector-Selection, get_hedge_instruments()",
+    "config_section": "hedging",
+    "state_files": [],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v37, hedge_instruments-list integriert v37h+2 (17.05.2026)",
+}
+
 # Defensive sectors that tend to outperform in bear markets
 DEFAULT_DEFENSIVE_SECTORS = ["health", "consumer", "bonds", "commodities"]
 

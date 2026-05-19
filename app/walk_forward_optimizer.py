@@ -36,6 +36,18 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Walk-Forward-Optimization (E1): rolling In-Sample-Train + Out-of-Sample-Test, monatlich via GitHub-Actions",
+    "config_section": None,
+    "state_files": ["wfo_status.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "E1 (28.04.2026), Cron-Fix v37h+2 (17.05.2026)",
+}
+
+
 # ============================================================
 # OPTION A — DREI HYPOTHESEN (Carlos' Entscheidung 2026-04-28)
 # ============================================================

@@ -19,6 +19,18 @@ TRADING_FLAG = get_data_path("trading_enabled.flag")
 INTERVAL_SECONDS = 300  # 5 Minuten
 
 
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Master-Scheduler: 5min-Trading-Cycles + Background-Threads (Universe-Health, Live-Discovery, WFO-Drift, Health-Audit)",
+    "config_section": None,
+    "state_files": ["scheduler_state.json", "trading_enabled.flag"],
+    "self_tests": ["tc_scheduler_heartbeat"],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v1 (Foundation)",
+}
+
+
 def _dispatch_discovery_workflow(triggered_by: str = "scheduler-cron") -> bool:
     """Triggert den Asset-Discovery-Workflow auf GitHub Actions.
 

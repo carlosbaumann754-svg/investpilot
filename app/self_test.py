@@ -42,6 +42,18 @@ from typing import Callable, Optional
 log = logging.getLogger("SelfTest")
 
 
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Anti-Regression Self-Test-System: 15 deterministische Hourly-Checks fuer Bot-Health (broker, IBKR-Connect, Files, etc.)",
+    "config_section": None,
+    "state_files": ["self_test_history.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v37cx",
+}
+
+
 @dataclass
 class TestResult:
     name: str
@@ -623,6 +635,43 @@ def tc_symbol_concentration_sane() -> TestResult:
             duration_ms=int((time.time() - t0) * 1000))
 
 
+def tc_audit_coverage_complete() -> TestResult:
+    """R-A12 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker fuer required Module.
+
+    Prueft dass alle Module in AUDIT_REQUIRED_MODULES einen AUDIT_METADATA-
+    Block am Top der Datei haben. Diese Marker werden von
+    health_audit.check_module_coverage gelesen und generieren automatische
+    Cross-Validation (Config-Section, State-Files, Self-Tests, Cron-Hooks).
+
+    Wenn ein neues Required-Modul ohne Marker added wird: dieser Test failt
+    + Pushover-CRITICAL.
+    """
+    t0 = time.time()
+    try:
+        from app.health_audit import (_discover_module_metadata,
+                                       AUDIT_REQUIRED_MODULES)
+        meta = _discover_module_metadata()
+        missing = AUDIT_REQUIRED_MODULES - set(meta.keys())
+        if missing:
+            return TestResult(
+                "audit_coverage_complete", False,
+                f"{len(missing)} required Module ohne AUDIT_METADATA: {sorted(missing)}",
+                severity="critical", category="meta",
+                duration_ms=int((time.time() - t0) * 1000))
+        return TestResult(
+            "audit_coverage_complete", True,
+            f"alle {len(AUDIT_REQUIRED_MODULES)} required Module haben Marker "
+            f"(+ {len(meta) - len(AUDIT_REQUIRED_MODULES)} optionale)",
+            severity="info", category="meta",
+            duration_ms=int((time.time() - t0) * 1000))
+    except Exception as e:
+        return TestResult(
+            "audit_coverage_complete", False,
+            f"exception: {type(e).__name__}: {e}",
+            severity="critical", category="meta",
+            duration_ms=int((time.time() - t0) * 1000))
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -639,6 +688,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_yfinance_freshness,  # v37h Q3-2: Stale-yfinance-Detection
     tc_cash_reserve_sane,   # v37h+1: Cash-Reserve-Config + Hybrid-Logik
     tc_symbol_concentration_sane,  # R-A10 Sprint-Tag-9 (19.05.2026)
+    tc_audit_coverage_complete,    # R-A12 Sprint-Tag-9 (19.05.2026)
 ]
 
 

@@ -29,6 +29,19 @@ from app.persistence import backup_to_cloud
 
 log = logging.getLogger("TradeBrain")
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Trade-Brain: Performance-Snapshots, Strategy-Rule-Discovery (deprecated), Allocation-Plan, Cycle-Locking",
+    "config_section": None,
+    "state_files": ["brain_state.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v1, learn_rules+optimize_strategy DEPRECATED v37h+2",
+}
+
+
 BRAIN_FILE = "brain_state.json"
 
 # v37h: Re-entrant Lock fuer Brain-State-Mutationen (Race-Condition-Fix

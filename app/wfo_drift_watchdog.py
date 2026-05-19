@@ -26,6 +26,18 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Sharpe-Drift-Watchdog: Daily-Check Live-Sharpe vs WFO-OOS-Sharpe, Alert bei >30% Drift",
+    "config_section": "wfo_drift_watchdog",
+    "state_files": ["wfo_drift_state.json", "wfo_status.json"],
+    "self_tests": [],
+    "scheduler_hooks": ["_BG_WFO_DRIFT_S"],
+    "health_check": None,
+    "added_in": "v37h+2 (17.05.2026)",
+}
+
 # Konfigurations-Defaults (override via config.json.wfo_drift_watchdog)
 DEFAULT_LOOKBACK_DAYS = 30           # Live-Sharpe ueber letzte 30 Trade-Tage
 DEFAULT_DRIFT_THRESHOLD_PCT = 30.0   # > 30% Sharpe-Decay -> Alert

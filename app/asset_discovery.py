@@ -15,6 +15,18 @@ from app.broker_base import get_broker
 
 log = logging.getLogger("AssetDiscovery")
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "IBKR-Universe-Discovery: Wöchentlicher Live-Scan nach neuen handelbaren Assets im IBKR-Universe",
+    "config_section": None,
+    "state_files": [],
+    "self_tests": ["tc_discovery_freshness"],
+    "scheduler_hooks": ["_BG_LIVE_DISCOVERY_S"],
+    "health_check": None,
+    "added_in": "v37 (eToro), Live-Container-Move 1C v37h+2 (17.05.2026)",
+}
+
 # Breite Suchbegriffe um moeglichst viele Assets zu finden
 DISCOVERY_QUERIES = [
     # Sektoren

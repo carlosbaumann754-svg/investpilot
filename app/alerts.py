@@ -19,6 +19,18 @@ from app.config_manager import load_config, load_json, save_json
 
 log = logging.getLogger("Alerts")
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Alerting-Layer: Pushover-Notifications (Trades, Drawdowns, Errors, Regime-Halt, Weekly-Reports, Concentration-Blocks)",
+    "config_section": "alerts",
+    "state_files": [],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v1 (Foundation)",
+}
+
 ALERT_STATE_FILE = "alert_state.json"
 
 

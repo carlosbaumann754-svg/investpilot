@@ -142,6 +142,7 @@ def test_diff_tracking_new_findings(mock_state):
          patch("app.health_audit.check_feature_toggles", return_value=[]), \
          patch("app.health_audit.check_cron_freshness", return_value=[]), \
          patch("app.health_audit.check_code_antipatterns", return_value=[]), \
+         patch("app.health_audit.check_module_coverage", return_value=[]), \
          patch("app.health_audit._send_pushover_alert") as m_pushover:
         from app.health_audit import HealthCheckResult
         m_api.return_value = [
@@ -167,6 +168,7 @@ def test_diff_tracking_no_new_findings(mock_state):
          patch("app.health_audit.check_feature_toggles", return_value=[]), \
          patch("app.health_audit.check_cron_freshness", return_value=[]), \
          patch("app.health_audit.check_code_antipatterns", return_value=[]), \
+         patch("app.health_audit.check_module_coverage", return_value=[]), \
          patch("app.health_audit._send_pushover_alert") as m_pushover:
         m_api.return_value = [
             HealthCheckResult(name="x", category="api", passed=False,
@@ -190,6 +192,7 @@ def test_diff_tracking_resolved(mock_state):
          patch("app.health_audit.check_feature_toggles", return_value=[]), \
          patch("app.health_audit.check_cron_freshness", return_value=[]), \
          patch("app.health_audit.check_code_antipatterns", return_value=[]), \
+         patch("app.health_audit.check_module_coverage", return_value=[]), \
          patch("app.health_audit._send_pushover_alert") as m_pushover:
         # Jetzt nur "y" failed, "z" resolved
         m_api.return_value = [
@@ -214,6 +217,7 @@ def test_dry_run_no_persist(mock_state):
          patch("app.health_audit.check_feature_toggles", return_value=[]), \
          patch("app.health_audit.check_cron_freshness", return_value=[]), \
          patch("app.health_audit.check_code_antipatterns", return_value=[]), \
+         patch("app.health_audit.check_module_coverage", return_value=[]), \
          patch("app.health_audit._send_pushover_alert") as m_pushover:
         m_api.return_value = [
             HealthCheckResult(name="x", category="api", passed=False,

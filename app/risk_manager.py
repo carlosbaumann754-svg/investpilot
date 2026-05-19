@@ -10,6 +10,42 @@ from datetime import datetime, timedelta, timezone
 
 from app.config_manager import load_config, load_json, save_json
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker.
+# health_audit.check_module_coverage liest diesen Block via AST und
+# generiert automatisch Cross-Validation-Checks.
+AUDIT_METADATA = {
+    "purpose": "Risk-Management: Position-Sizing, Concentration-Limits (Symbol+Sector), Cash-Reserve, Drawdown-Stops, Kelly-Auto-Apply",
+    "config_section": "risk_management",
+    "state_files": ["risk_state.json"],
+    "self_tests": ["tc_symbol_concentration_sane", "tc_cash_reserve_sane"],
+    "scheduler_hooks": [],
+    "health_check": "audit_health_check",
+    "added_in": "v37 (pre-Sprint-Cycle), R-A10 Symbol-Concentration 19.05.2026",
+}
+
+
+def audit_health_check() -> dict:
+    """Operational-Health-Check fuer health_audit.check_module_coverage.
+
+    Returns {'healthy': bool, 'detail': str}. Healthy = Risk-State-File
+    existiert + sane + heutige Concentration-Blocks unter 20 (>20 = Scanner-Spam).
+    """
+    try:
+        state = load_json("risk_state.json") or {}
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        blocks_today = sum((state.get("symbol_concentration_blocks", {})
+                                 .get(today, {}) or {}).values())
+        healthy = blocks_today < 20
+        return {
+            "healthy": healthy,
+            "detail": (f"risk_state OK; {blocks_today} concentration-blocks heute"
+                       + ("" if healthy else " (>20 = Scanner-Spam-Pattern)")),
+        }
+    except Exception as e:
+        return {"healthy": False, "detail": f"audit_health_check error: {e}"}
+
 log = logging.getLogger("RiskManager")
 
 RISK_STATE_FILE = "risk_state.json"

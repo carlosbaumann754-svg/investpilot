@@ -48,6 +48,18 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
+AUDIT_METADATA = {
+    "purpose": "Universe-Health-Watcher: Daily-Scan ASSET_UNIVERSE auf delisted/halted/illiquid Symbole, Auto-Disable",
+    "config_section": None,
+    "state_files": ["universe_health.json"],
+    "self_tests": [],
+    "scheduler_hooks": ["_BG_UNIVERSE_HEALTH_S"],
+    "health_check": None,
+    "added_in": "v37, Scheduler-Hook 7A v37h+2 (17.05.2026)",
+}
+
 COUNTERS_FILE = "universe_health_counters.json"
 SUGGESTIONS_FILE = "universe_health_suggestions.json"
 

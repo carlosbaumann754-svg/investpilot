@@ -10,6 +10,7 @@
 #
 # Installiert:
 #   - post-commit (Roadmap-Update-Reminder)
+#   - pre-commit  (Audit-Coverage-Marker-Check, v37h+3 19.05.2026)
 
 set -e
 
