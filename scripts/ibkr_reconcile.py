@@ -101,6 +101,79 @@ def load_bot_state() -> tuple[list[dict], float]:
     return history, last_cash
 
 
+# R-A21 (19.05.2026): Phantom-Check ueber komplette History.
+# Action-Klassifikation (aus Counter-Analyse Live-VPS 19.05.):
+#   BUY-like:     SCANNER_BUY (474x), BUY, OPEN
+#   FULL-CLOSE:   TRAILING_SL_CLOSE (65), STOP_LOSS_CLOSE (46),
+#                 TIME_STOP_CLOSE (8), EARNINGS_BLACKOUT_CLOSE (2),
+#                 SCANNER_SELL, MANUAL_SELL
+#   IGNORE:       PARTIAL_CLOSE (4x), PARTIAL_SIGNAL (20x) — Position bleibt
+#                 STOP_LOSS_CLOSE_FAILED (17x) — Try-Fail, Position offen
+_R_A21_BUY_LIKE = {"BUY", "OPEN", "SCANNER_BUY",
+                   "buy", "open", "scanner_buy"}
+_R_A21_FULL_CLOSE_PATTERNS = (
+    "TRAILING_SL_CLOSE", "STOP_LOSS_CLOSE", "TIME_STOP_CLOSE",
+    "EARNINGS_BLACKOUT_CLOSE", "SCANNER_SELL", "MANUAL_SELL",
+    "SELL",
+)
+
+
+def _compute_currently_open_symbols(history: list[dict]) -> set[str]:
+    """Aus kompletter Trade-History: welche Symbole sind Bot-State-mässig offen?
+
+    R-A21: ersetzt die fehleranfaellige time-basierte Lookback-Logik fuer
+    Phantom-Detection. Statt 'gab es BUY in 720h?' wird gefragt:
+    'Hat Bot Symbol jemals gekauft + noch nicht komplett geclosed?'
+
+    Logik:
+      - Chronologisch sortieren (timestamp)
+      - Pro Symbol: state-machine open/closed
+      - BUY-Action -> open
+      - FULL_CLOSE-Action (TRAILING_SL_CLOSE, STOP_LOSS_CLOSE, etc.) -> closed
+      - PARTIAL_CLOSE / *_FAILED / *_SKIPPED -> kein State-Change
+      - PARTIAL_SIGNAL -> kein State-Change (Signal, kein Trade)
+
+    Returns: Set der Symbole die aktuell als 'offen' im Bot-State sind.
+    """
+    if not history:
+        return set()
+
+    try:
+        sorted_history = sorted(history, key=lambda t: t.get("timestamp") or "")
+    except Exception:
+        sorted_history = list(history)
+
+    sym_open = {}  # symbol -> bool
+    for t in sorted_history:
+        sym = t.get("symbol")
+        if not sym:
+            continue
+        action = t.get("action") or ""
+        status = (t.get("status") or "").lower()
+
+        # Skip failed/skipped — kein State-Change
+        if status in ("close_failed", "skipped"):
+            continue
+        if "FAILED" in action:
+            continue
+
+        # BUY-like -> Symbol ist nun open
+        if action in _R_A21_BUY_LIKE:
+            sym_open[sym] = True
+            continue
+
+        # PARTIAL_* -> Position bleibt offen (kein State-Reset)
+        if "PARTIAL" in action:
+            continue
+
+        # FULL_CLOSE-Patterns -> Symbol ist nun closed
+        if any(p in action for p in _R_A21_FULL_CLOSE_PATTERNS):
+            sym_open[sym] = False
+            continue
+
+    return {sym for sym, is_open in sym_open.items() if is_open}
+
+
 def get_ibkr_state(timeout: int = 15) -> dict:
     """Live-IBKR-Snapshot: positions + cash + recent executions.
 
@@ -224,6 +297,7 @@ def reconcile(lookback_hours: int = 24,
     cutoff_fill = datetime.now(timezone.utc) - timedelta(hours=missed_fill_lookback_hours)
 
     bot_history, bot_cash = load_bot_state()
+    bot_history_full = bot_history  # R-A21: voller Trade-History fuer Phantom-Check
     ibkr = get_ibkr_state()
 
     # Filter Bot-trades — zwei getrennte Listen fuer die zwei Checks
@@ -286,6 +360,22 @@ def reconcile(lookback_hours: int = 24,
             sym = t.get("symbol")
             if sym:
                 bot_known_symbols.update(expand_symbol_for_match(sym))
+
+    # R-A21 (Sprint-Tag-9, 19.05.2026): Phantom-Check robust gegen Long-Hold.
+    # Carlos's berechtigte Sorge 19.05.: "Wenn Bot Position >Lookback-Fenster
+    # haelt, loest jeder Reconcile-Run einen Phantom-Alert aus".
+    # Anlass: 24h-Default Lookback war zu kurz fuer typische Hold-Strategien.
+    # Auch 720h (30d) reicht nicht fuer wirklich langfristige Positions.
+    #
+    # Fix: zusaetzlich KOMPLETTE trade_history scannen + offene Positions
+    # (BUY ohne nachfolgenden Full-Close) als bot_known markieren. So sind
+    # Long-Hold-Positions (jahrelang gehalten) nie False-Positive.
+    try:
+        ever_open = _compute_currently_open_symbols(bot_history_full)
+        for sym in ever_open:
+            bot_known_symbols.update(expand_symbol_for_match(sym))
+    except Exception as e:
+        log.debug(f"R-A21 historic-symbol-scan skipped: {e}")
 
     # v37w: Whitelist akzeptierter Initial-Positions laden
     accepted_phantoms = _load_accepted_phantoms()
