@@ -37,6 +37,18 @@ from typing import Any, Optional
 log = logging.getLogger("sentry_setup")
 
 
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker (R-A12 Disziplin)
+AUDIT_METADATA = {
+    "purpose": "Sentry Error-Tracking: PII-Filter (IBKR-Accts/Cash/Tokens redacted), DSN aus env, FastAPI+Logging-Integrations, Init in beiden Prozessen (Web + Scheduler)",
+    "config_section": "sentry",
+    "state_files": [],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "Fr 08.05.2026 (Sentry-Setup vorgezogen), R-A13 scharfgeschaltet Sprint-Tag-9 (19.05.2026)",
+}
+
+
 # ============================================================
 # Konfigurations-Lookup
 # ============================================================

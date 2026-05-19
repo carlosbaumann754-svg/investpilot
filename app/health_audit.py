@@ -67,6 +67,7 @@ AUDIT_REQUIRED_MODULES = {
     "brain", "hedging", "market_context",
     # Safety + Monitoring
     "health_audit", "self_test", "alerts", "wfo_drift_watchdog",
+    "sentry_setup",  # R-A13 (19.05.2026): mission-critical Pre-Cutover-Sicherheitsnetz
     # Periodic-Jobs
     "asset_discovery", "walk_forward_optimizer", "universe_health_watcher",
 }
