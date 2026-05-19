@@ -31,6 +31,19 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+# v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker (R-A28 audit-completeness)
+AUDIT_METADATA = {
+    "purpose": "IBKR Contract-Resolution + Quote-Fetching: eToro-instrument_id -> IBKR-Contract via ASSET_UNIVERSE-Reverse-Lookup + qualifyContracts. get_quote() mit R-A15 External-Fallback-Chain (yfinance/AV/Polygon/Finnhub) bei IBKR-Quote-None.",
+    "config_section": None,
+    "state_files": ["ibkr_contract_cache.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "v37c (eToro->IBKR Migration), R-A15 External-Quote-Fallback (19.05.2026)",
+}
+
+
 # Cache-File-Pfad — relativ zum Projekt-Root (`app/` liegt darunter)
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "ibkr_contract_cache.json"
 

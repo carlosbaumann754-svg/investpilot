@@ -65,6 +65,7 @@ AUDIT_REQUIRED_MODULES = {
     # Core-Trading-Logic
     "trader", "risk_manager", "scheduler", "market_scanner", "ibkr_client",
     "brain", "hedging", "market_context",
+    "ibkr_contract_resolver",  # R-A28 (19.05.2026): R-A15 Quote-Fallback-Code, kritisch fuer Order-Execution
     # Safety + Monitoring
     "health_audit", "self_test", "alerts", "wfo_drift_watchdog",
     "sentry_setup",  # R-A13 (19.05.2026): mission-critical Pre-Cutover-Sicherheitsnetz
