@@ -197,6 +197,20 @@ _SENTRY_NOISE_PATTERNS = (
     # Uvicorn-HTTP-Warnings von externen Health-Probes (random scanners,
     # CDN-Health-Checks). Nichts mit Bot-Logik zu tun.
     "Invalid HTTP request received",
+    # R-A24 (19.05.2026 abend): Container-Restart-Artefakte.
+    # Bei jedem `docker compose up -d --build` werden bestehende IBKR-
+    # Socket-Verbindungen abrupt geschlossen. ib_insync loggt das als
+    # ERROR, ist aber **erwartetes** Verhalten. Defense-Layer:
+    # Self-Test #11 tc_ibkr_session_watchdog prueft hourly ob Connection
+    # live ist — echter Disconnect wuerde dort failen.
+    # Plus geplant: R-A25 Graceful-Shutdown-Hook (morgen) — Bot
+    # disconnected sauber vor Container-Stop. Bis dahin filter hier.
+    "Peer closed connection",
+    "_get_account_value(NetLiquidation) failed: Socket disconnect",
+    "Socket disconnect",
+    # ib_insync API-Connection-Tasks beim Restart (Cascade aus Peer-Close)
+    "Task <Task pending name='Task-",
+    "connectAsync running at",
 )
 
 

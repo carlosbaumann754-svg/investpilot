@@ -399,3 +399,50 @@ def test_before_send_keeps_real_event():
     result = _before_send(event, {})
     assert result is not None
     assert result.get("message")  # event durchgelassen
+
+
+# ============================================================
+# R-A24 (19.05.2026 abend): Container-Restart-Noise filtern
+# ============================================================
+# Peer closed connection, Socket disconnect, asyncio Task pending
+# bei Container-Rebuilds. Erwartetes Verhalten — Self-Test #11 deckt
+# echte Disconnects ab.
+
+def test_noise_filter_drops_peer_closed():
+    """ib_insync 'Peer closed connection' bei Container-Restart."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Peer closed connection.") is True
+    assert _is_noise("Peer closed connection") is True
+
+
+def test_noise_filter_drops_socket_disconnect():
+    """_get_account_value Socket disconnect bei Restart."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("_get_account_value(NetLiquidation) failed: Socket disconnect") is True
+    assert _is_noise("Socket disconnect") is True
+
+
+def test_noise_filter_drops_asyncio_task_pending():
+    """ib_insync connectAsync Task pending Cascade."""
+    from app.sentry_setup import _is_noise
+    msg = "Task <Task pending name='Task-900' coro=<Connection.connectAsync running at"
+    assert _is_noise(msg) is True
+
+
+def test_noise_filter_keeps_real_disconnect_message():
+    """Echte App-Bugs mit Disconnect-im-Text gehen durch."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Order rejected by exchange") is False
+    assert _is_noise("Bot lost connection to database (5 retries failed)") is False
+
+
+def test_before_send_drops_container_restart_event():
+    """before_send returnt None bei Container-Restart-Patterns."""
+    from app.sentry_setup import _before_send
+    for msg in [
+        "Peer closed connection.",
+        "_get_account_value(NetLiquidation) failed: Socket disconnect",
+        "Task <Task pending name='Task-900' connectAsync running at /...",
+    ]:
+        event = {"message": msg, "level": "error"}
+        assert _before_send(event, {}) is None, f"Should drop: {msg}"
