@@ -539,32 +539,64 @@ def _find_position_open_time(position_id, api_open_time=None, symbol=None):
     dt = _parse(api_open_time)
 
     # 2) Fallback trade_history lookup
+    # R-A23 (Sprint-Tag-9 abend, 19.05.2026): KRITISCHER BUG-FIX.
+    # Vorher: erster Match nach position_id+BUY -> dt = ÄLTESTE Buy.
+    # Bei IBKR ist position_id = conId (Contract-ID), die UEBER Buy-Sell-
+    # Zyklen wiederverwendet wird. USO conId=418893644 ist konstant,
+    # egal wann/wie oft die Position gekauft wird.
+    # Resultat: nach Re-Buy zeigte _find_position_open_time die ALTE
+    # erstmals-Buy-Zeit (z.B. vor 20 Tagen) statt die aktuelle (Sekunden).
+    # Time-Stop feuerte sofort -> Close-Buy-Loop alle ~1h: kostete heute
+    # 4 Trades Slippage in 3h.
+    # Fix: State-Machine durch History — letzte BUY NACH letztem CLOSE
+    # mit dieser conId/position_id.
+    BUY_ACTIONS = ("BUY", "OPEN", "buy", "open", "SCANNER_BUY", "MANUAL_BUY")
+    CLOSE_PATTERNS = ("CLOSE", "SELL", "STOP", "TRAIL", "TIME_STOP", "COVER")
+
     if dt is None and position_id is not None:
         history = load_json("trade_history.json") or []
+        latest_buy_dt = None
         for entry in history:
-            # v37cx: SCANNER_BUY ist der echte Bot-Action-Name (BUY/OPEN sind eToro-Legacy)
-            if (str(entry.get("position_id")) == str(position_id)
-                    and entry.get("action") in (
-                        "BUY", "OPEN", "buy", "open",
-                        "SCANNER_BUY", "MANUAL_BUY")):
-                dt = _parse(entry.get("timestamp"))
-                if dt is not None:
-                    break
+            if str(entry.get("position_id")) != str(position_id):
+                continue
+            action = (entry.get("action") or "").upper()
+            status = (entry.get("status") or "").lower()
+            # FAILED-Close zaehlt nicht als Reset (Position bleibt offen)
+            if "FAILED" in action or status == "close_failed":
+                continue
+            # CLOSE-Event -> Reset: vorherige BUYs nicht mehr relevant
+            if any(p in action for p in CLOSE_PATTERNS):
+                latest_buy_dt = None
+                continue
+            # BUY-Event -> jüngsten Wert merken
+            if entry.get("action") in BUY_ACTIONS:
+                buy_dt = _parse(entry.get("timestamp"))
+                if buy_dt is not None:
+                    latest_buy_dt = buy_dt
+        dt = latest_buy_dt
 
     # 3) v37dd Fallback: Symbol-basierter Lookup wenn position_id fehlt
     # (z.B. brain_state-Snapshots vor v37dd droppten position_id beim Persist).
     # Status-Filter: nur 'executed' (cancelled/rejected zaehlen nicht).
+    # R-A23: auch hier State-Machine — letzte BUY NACH letztem CLOSE
+    # damit Symbol-Lookup-Pfad ebenfalls korrekt arbeitet.
     if dt is None and symbol:
         history = load_json("trade_history.json") or []
         latest_buy = None
         for entry in history:
-            if (entry.get("symbol") == symbol
-                    and entry.get("action") in (
-                        "BUY", "OPEN", "buy", "open",
-                        "SCANNER_BUY", "MANUAL_BUY")
+            if entry.get("symbol") != symbol:
+                continue
+            action = (entry.get("action") or "").upper()
+            status = (entry.get("status") or "").lower()
+            if "FAILED" in action or status == "close_failed":
+                continue
+            if any(p in action for p in CLOSE_PATTERNS):
+                latest_buy = None
+                continue
+            if (entry.get("action") in BUY_ACTIONS
                     and entry.get("status") in (None, "executed", "filled")):
                 ts = _parse(entry.get("timestamp"))
-                if ts is not None and (latest_buy is None or ts > latest_buy):
+                if ts is not None:
                     latest_buy = ts
         dt = latest_buy
 
