@@ -65,4 +65,22 @@ if [ -f "$ROADMAP_DOCX" ]; then
     fi
 fi
 
+# R-A18 (Sprint-Tag-9, 19.05.2026): Bot-Blueprint Auto-Regenerate.
+# Bei jedem Commit der app/*.py (mit AUDIT_METADATA) aenderte,
+# wird BOT_BLUEPRINT.md automatisch regeneriert.
+BLUEPRINT_PY="$(git rev-parse --show-toplevel)/../investpilot_weiterentwicklung/generate_blueprint.py"
+BLUEPRINT_MD="$(git rev-parse --show-toplevel)/../investpilot_weiterentwicklung/BOT_BLUEPRINT.md"
+
+if [ -f "$BLUEPRINT_PY" ]; then
+    # Pruefe ob letzter Commit eine app/*.py geaendert hat
+    APP_CHANGED=$(git log -1 --name-only --pretty=format: | grep -c "^app/.*\.py$" || true)
+    if [ "$APP_CHANGED" -gt 0 ]; then
+        echo ""
+        echo " BLUEPRINT-AUTO-REGEN (R-A18)"
+        echo " Commit hat app/*.py geaendert -> regeneriere BOT_BLUEPRINT.md..."
+        python3 "$BLUEPRINT_PY" 2>&1 | tail -2 || echo " WARN: Blueprint-Regen fehlgeschlagen"
+        echo ""
+    fi
+fi
+
 exit 0
