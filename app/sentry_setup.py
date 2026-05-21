@@ -232,6 +232,11 @@ _SENTRY_NOISE_PATTERNS = (
     "API connection failed: TimeoutError",
     "API connection failed:",
     "_get_account_value(NetLiquidation) failed:",
+    # R-A37: Generic _get_account_value-Catch (matcht auch raw-template
+    # "_get_account_value(%s) failed: %s" wenn logentry.formatted leer).
+    # Funktion hat nur einen Job (account-value-fetch) und alle errors da
+    # sind Library-Quirks/Connection-Race, nie Bot-Logic-Bug.
+    "_get_account_value",
     # R-A30 (21.05.2026): Daily IB-Gateway-Restart-Artefakte.
     # Cron `daily_bot_restart.sh` restartet ib-gateway um 03:00 UTC (05:00 CEST)
     # und Bot 15min spaeter (Stale-Connection-Schutz, Layer C). Wahrend des
@@ -274,17 +279,31 @@ def _before_send(event: dict, hint: dict) -> Optional[dict]:
     """
     try:
         # R-A20 Noise-Filter (vor PII-Scrub, spart Aufwand)
+        # R-A37 (21.05.2026 Sprint-Tag-11 Block 7): Filter-Coverage verbreitert.
+        # Vorher checkte der Filter nur logentry.message (= RAW template mit
+        # "%s"-Platzhaltern), aber nicht logentry.formatted (= mit Args
+        # substituiert). Bei Python's logger.error("_get_account_value(%s)
+        # failed: %s", "NetLiquidation", e) ist das raw template
+        # "_get_account_value(%s) failed: %s" — unser Filter-Pattern
+        # "_get_account_value(NetLiquidation) failed:" matched nicht.
+        # Resultat: Issue PYTHON-FASTAPI-N (gleicher Pattern wie K/M)
+        # rutschte trotz R-A35-Filter durch — Sentry-Issue-Grouping pro
+        # Stack-Trace erzeugt neue IDs auch bei identischer Message.
         msg = event.get("message") or ""
-        # Auch in logentry-Format (LoggingIntegration) checken
         logentry = event.get("logentry") or {}
-        log_msg = (logentry.get("message") if isinstance(logentry, dict) else "") or ""
+        if isinstance(logentry, dict):
+            log_msg = logentry.get("message") or ""
+            log_msg_fmt = logentry.get("formatted") or ""
+        else:
+            log_msg = ""
+            log_msg_fmt = ""
         # Plus exception-Values
         exc_msgs = []
         for exc in (event.get("exception", {}) or {}).get("values", []) or []:
             if isinstance(exc, dict) and exc.get("value"):
                 exc_msgs.append(str(exc["value"]))
 
-        combined = " | ".join([msg, log_msg] + exc_msgs)
+        combined = " | ".join([msg, log_msg, log_msg_fmt] + exc_msgs)
         if _is_noise(combined):
             return None  # Event komplett drop, kein Sentry-Spam
 

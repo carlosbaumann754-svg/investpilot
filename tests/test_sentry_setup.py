@@ -586,3 +586,59 @@ def test_r_a35_keeps_real_api_connection_in_non_ibkr_context():
     # Generic Pattern matcht "API connection failed:" — wenn anderer Text:
     assert _is_noise("Polygon API connection slow") is False
     assert _is_noise("FRED API rate limited") is False
+
+
+# ============================================================
+# R-A37 (21.05.2026 Sprint-Tag-11 Block 7): Filter-Coverage breiter
+# (logentry.formatted) + Generic _get_account_value-Catch.
+# ============================================================
+
+def test_r_a37_drops_raw_template_pattern():
+    """Bei Python logger.error('_get_account_value(%s) failed: %s', ...)
+    ist logentry.message = raw template mit %s. Filter MUSS auch das matchen
+    via generic '_get_account_value'-Pattern."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("_get_account_value(%s) failed: %s") is True
+    assert _is_noise("_get_account_value(NetLiquidation) failed: %s") is True
+
+
+def test_r_a37_drops_bare_function_name_pattern():
+    """Generic '_get_account_value' catch-all (alle errors aus dieser
+    Funktion sind Library-Quirks)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("_get_account_value some-strange-suffix") is True
+    assert _is_noise("Exception in _get_account_value: WeirdError") is True
+
+
+def test_r_a37_before_send_checks_logentry_formatted():
+    """_before_send muss logentry.formatted lesen, nicht nur logentry.message."""
+    src = open("app/sentry_setup.py", encoding="utf-8").read()
+    bs_start = src.index("def _before_send(")
+    bs_body = src[bs_start:bs_start + 3000]
+    assert 'logentry.get("formatted")' in bs_body, (
+        "R-A37 logentry.formatted lookup fehlt"
+    )
+    assert "log_msg_fmt" in bs_body, "R-A37 formatted-Variable fehlt"
+
+
+def test_r_a37_before_send_combines_all_message_fields():
+    """combined-String muss msg + log_msg + log_msg_fmt + exc_msgs zusammenfuegen."""
+    src = open("app/sentry_setup.py", encoding="utf-8").read()
+    bs_start = src.index("def _before_send(")
+    bs_body = src[bs_start:bs_start + 3000]
+    assert "[msg, log_msg, log_msg_fmt]" in bs_body, (
+        "R-A37 combined-Join muss alle 3 Message-Felder enthalten"
+    )
+
+
+def test_r_a37_keeps_real_get_account_value_in_other_module():
+    """Funktion gleichen Namens in anderem Modul/Kontext bleibt — aber wir
+    nehmen das in Kauf weil _get_account_value sehr spezifisch ist (nur
+    1 Funktion mit dem Namen im Bot)."""
+    from app.sentry_setup import _is_noise
+    # Sehr breit — auch valid call-pfade die wir gewohnt sind als Noise
+    # zu ignorieren werden gefangen. Das ist gewollt.
+    assert _is_noise("_get_account_value works fine") is True
+    # Aber: völlig fremde Texte bleiben
+    assert _is_noise("Hello world") is False
+    assert _is_noise("Database connection lost") is False
