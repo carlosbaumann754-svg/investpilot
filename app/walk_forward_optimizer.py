@@ -466,7 +466,74 @@ def run_walk_forward(
                  windows=windows_payload,
                  aggregate=aggregate,
                  phase="completed")
-    return read_status()
+    final_status = read_status()
+    # R-A36 (21.05.2026 Sprint-Tag-11 Block 6): History-Append direkt
+    # hier — vorher nur in app/wfo_runner.py (Cron-Wrapper) integriert,
+    # nicht im /api/wfo/run-Pfad oder CLI-Pfad. Resultat: Manual + CLI-
+    # Runs landeten in wfo_status.json aber NICHT in wfo_history.json
+    # (Trend-Card zeigte nur 1 von tatsaechlichen 3 Runs).
+    # Single-Source-of-Truth: Append immer wenn run_walk_forward done ist.
+    try:
+        _append_history_to_trend(final_status)
+    except Exception as e:
+        log.warning("WFO History-Append fehlgeschlagen (non-fatal): %s", e)
+    return final_status
+
+
+def _append_history_to_trend(status_snapshot: dict) -> None:
+    """R-A36: Append diesen WFO-Run zur Time-Series wfo_history.json.
+
+    Liefert idempotente Append-Semantik: wenn ein Eintrag mit gleichem
+    last_run-Timestamp bereits existiert, wird nicht doppelt geschrieben
+    (Schutz gegen Re-Trigger durch Manual + Cron im selben Slot).
+    """
+    from datetime import datetime
+    try:
+        from app.config_manager import load_json, save_json
+        hist = load_json("wfo_history.json") or {"runs": []}
+        if not isinstance(hist, dict):
+            hist = {"runs": []}
+        runs = hist.get("runs", [])
+
+        last_run_ts = status_snapshot.get("last_run") or datetime.now().isoformat()
+        # Idempotent: skip wenn timestamp schon drin (Re-Trigger-Schutz)
+        if any(r.get("timestamp") == last_run_ts for r in runs):
+            log.info("WFO History: Run %s bereits drin, skip.", last_run_ts)
+            return
+
+        agg = status_snapshot.get("aggregate") or {}
+        windows = status_snapshot.get("windows") or []
+
+        # Best-Params-Summary aus Windows (3-Hypothesen-Konsens-Tracking)
+        param_summary: dict[str, dict] = {}
+        for w in windows:
+            bp = w.get("best_params") or {}
+            for k, v in bp.items():
+                param_summary.setdefault(k, {})
+                key = str(v)
+                param_summary[k][key] = param_summary[k].get(key, 0) + 1
+
+        runs.append({
+            "timestamp": last_run_ts,
+            "trigger": status_snapshot.get("trigger") or "auto",
+            "windows_total": len(windows),
+            "mean_oos_sharpe": agg.get("mean_oos_sharpe"),
+            "mean_is_sharpe": agg.get("mean_is_sharpe"),
+            "sharpe_decay_pct": agg.get("sharpe_decay_pct"),
+            "oos_stability_std": agg.get("oos_stability_std"),
+            "mean_oos_trades": agg.get("mean_oos_trades"),
+            "mean_oos_max_dd": agg.get("mean_oos_max_dd"),
+            "param_summary": param_summary,
+        })
+        # Keep nur letzte 60 Eintraege (5J * 12 Mo)
+        if len(runs) > 60:
+            runs = runs[-60:]
+        hist["runs"] = runs
+        hist["updated_at"] = datetime.now().isoformat()
+        save_json("wfo_history.json", hist)
+        log.info("WFO-History: %d Runs total (Append %s)", len(runs), last_run_ts)
+    except Exception as e:
+        log.warning("History-Append fehlgeschlagen: %s", e)
 
 
 # ============================================================
