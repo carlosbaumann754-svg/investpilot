@@ -435,18 +435,28 @@ async function loadDashboard() {
                 document.getElementById('num-positions').textContent = p.num_positions;
 
                 // Parse trailing SL data for position enrichment
+                // R-A33 (21.05.2026): Field-Name + Key-Type Fix.
+                // Vorher: liest td.active (existiert nicht — Backend returnt
+                // td.positions), plus position_id Type-Mismatch (Frontend
+                // int 8894 vs Backend key "8894"). Beides resultierte in
+                // permanent "--" Anzeige obwohl trailing_sl_state.json
+                // einen aktiven sl_level hatte (z.B. KO #8894 @ 81.0313).
                 let trailData = {};
                 if (trailRes) {
                     try {
                         const td = await trailRes.json();
-                        (td.active || []).forEach(t => { trailData[t.position_id] = t; });
+                        const list = td.positions || td.active || [];
+                        list.forEach(t => {
+                            const k = String(t.position_id);
+                            trailData[k] = t;
+                        });
                     } catch(e) {}
                 }
 
                 const tbody = document.getElementById('positions-table');
                 tbody.innerHTML = '';
                 (p.positions || []).forEach(pos => {
-                    const trail = trailData[pos.position_id];
+                    const trail = trailData[String(pos.position_id)];
                     const trailTd = trail
                         ? `<td class="badge-green" style="font-size:11px;">${fmtUsd(trail.sl_level)}</td>`
                         : '<td style="color:#666;">--</td>';

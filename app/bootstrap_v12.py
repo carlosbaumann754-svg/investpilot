@@ -50,6 +50,19 @@ V12_DISABLED_SYMBOLS = [
     "DIS", "ROKU", "VNQ", "UNH", "GOOGL", "MA", "ADBE", "SNAP", "PFE",
     "PYPL", "SHOP", "MCD", "CRM", "PLTR", "NKE", "V", "DIA", "TLT",
     "XLK", "PG", "QQQ",
+    # R-A34 (21.05.2026, Pre-Cutover-Sprint-Tag-11): Reports-KI-Vorschlag
+    # umgesetzt nach Live-Bestaetigung. Begruendung:
+    # - SILVER: Live-Score -133.94 (Brain-Tab, 21.05.) + Single-Trade-Loss
+    #   $-13'209 am 15.5. (STOP_LOSS_CLOSE) + "dauerhaft schwach" laut
+    #   Weekly-Report Score -26.8. PF deutlich unter 1.2 in 2026 YTD.
+    # - IWM: Reports Score -10.2, "dauerhaft schwach". 2x STALE_NO_IBKR_HISTORY
+    #   im Failed-Orders. Russell-2000 Smallcap-Universum performt 2026
+    #   strukturell schlechter als unsere Konzentration auf Big-Tech + Energy.
+    # Beide bleiben im Universe-Filter sichtbar fuer Audit/Diagnose, werden
+    # aber nicht mehr fuer neue Trades genutzt. Auto-Curate-Mechanismus
+    # haette beide vermutlich beim naechsten WFO-Run gleichermassen
+    # disabled — wir nehmen das hier vorweg.
+    "SILVER", "IWM",
 ]
 
 V12_SECTIONS: dict[str, dict[str, Any]] = {

@@ -763,6 +763,30 @@ async def api_portfolio(user=Depends(require_auth)):
             except Exception:
                 _pos["age_days"] = None
 
+        # R-A33 (21.05.2026): Trailing-SL pro Position anreichern.
+        # Vorher zeigte die Positionen-Tabelle "--" obwohl `trailing_sl_state.json`
+        # einen aktiven sl_level (z.B. KO #8894 @ 81.0313 seit 12.05.) hat.
+        # Bug: parse_position() kennt das State-File nicht — der Bot setzt SL
+        # Bot-seitig (oder via IBKR-Server-Side-Order, v37cl-Fix) aber das
+        # Dashboard-Frontend hat keine Visibility ohne diesen Lookup.
+        try:
+            trailing_state = read_json_safe("trailing_sl_state.json") or {}
+        except Exception:
+            trailing_state = {}
+        if isinstance(trailing_state, dict):
+            for _pos in parsed:
+                pid = str(_pos.get("position_id", ""))
+                entry = trailing_state.get(pid)
+                if isinstance(entry, dict):
+                    _pos["trailing_sl"] = {
+                        "sl_level": entry.get("sl_level"),
+                        "entry_price": entry.get("entry_price"),
+                        "activated_at": entry.get("activated"),
+                        "updated_at": entry.get("updated"),
+                    }
+                else:
+                    _pos["trailing_sl"] = None
+
 
         # v36g — Total-Value: bei IBKR den NetLiquidation-Wert aus dem
         # Brain-Snapshot bzw. _equity-Feld nehmen (= echtes Total-Equity).
@@ -1547,10 +1571,20 @@ async def api_order_audit(limit: int = 100, user=Depends(require_auth)):
       - /api/order-audit = Diagnose-Sicht "was lief schief / steckt fest"
     """
     # 1. Pending Orders (E27 Live-Sicht)
+    # R-A32 (21.05.2026): Bug-Fix — Top-Level-Keys-Iterieren-Bug.
+    # Frueher iterierte der Code direkt pending_raw.items() — das umfasste
+    # auch die Meta-Felder "version", "saved_at", "_audit" und die "pending"-
+    # Sub-Dict selbst, was zu Phantom-Rows mit "Unknown"-Status im UI fuehrte
+    # (sichtbar bei 0 echten pendings: UI zeigte "1 Pending" mit Order-ID
+    # "pending" oder "_audit"). Fix: nur das `pending`-Sub-Dict durchlaufen.
     pending_raw = read_json_safe("pending_orders.json") or {}
-    pending_list: list = []
     if isinstance(pending_raw, dict):
-        for order_id, entry in pending_raw.items():
+        pending_dict = pending_raw.get("pending", {})
+    else:
+        pending_dict = {}
+    pending_list: list = []
+    if isinstance(pending_dict, dict):
+        for order_id, entry in pending_dict.items():
             if not isinstance(entry, dict):
                 continue
             current_status = entry.get("current_status", "Unknown")
