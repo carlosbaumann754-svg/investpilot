@@ -642,3 +642,40 @@ def test_r_a37_keeps_real_get_account_value_in_other_module():
     # Aber: völlig fremde Texte bleiben
     assert _is_noise("Hello world") is False
     assert _is_noise("Database connection lost") is False
+
+
+# ============================================================
+# R-A38 (21.05.2026 Sprint-Tag-11 Block 8): ib_insync Account-Update-
+# Timeout-Pattern + PII-Drop-Defense.
+# ============================================================
+
+def test_r_a38_drops_generic_account_updates_timeout():
+    """'account updates request timed out' (generic ohne Account-ID)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("account updates request timed out") is True
+
+
+def test_r_a38_drops_account_updates_with_account_id():
+    """'account updates for DUP108015 request timed out' (mit Account-ID
+    wie PII-Variante). Filter MUSS VOR PII-Scrub greifen, damit Account-ID
+    nicht in Sentry-Inbox landet."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("account updates for DUP108015 request timed out") is True
+    assert _is_noise("account updates for U1234567 request timed out") is True
+
+
+def test_r_a38_drops_via_generic_account_updates_pattern():
+    """Generic 'account updates' Catch — matcht alle Varianten der
+    ib_insync-Account-Update-Logs (timed out, failed, error, etc.)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("account updates failed") is True
+    assert _is_noise("Failed to fetch account updates from IB") is True
+
+
+def test_r_a38_keeps_unrelated_account_messages():
+    """'account' Wort allein im anderen Context (kein 'account updates')
+    bleibt drin — z.B. 'account locked', 'account balance check'."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Account balance check failed") is False
+    assert _is_noise("User account locked") is False
+    assert _is_noise("Bank account number invalid") is False

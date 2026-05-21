@@ -237,6 +237,16 @@ _SENTRY_NOISE_PATTERNS = (
     # Funktion hat nur einen Job (account-value-fetch) und alle errors da
     # sind Library-Quirks/Connection-Race, nie Bot-Logic-Bug.
     "_get_account_value",
+    # R-A38 (21.05.2026 Sprint-Tag-11 Block 8): ib_insync Account-Update-
+    # Timeout-Pattern. Aus ib_insync.ib geloggt wenn IBKR-Server slow
+    # antwortet auf account-update-Request. 2 Varianten:
+    #   "account updates request timed out"
+    #   "account updates for DUP108015 request timed out" (mit Account-ID)
+    # Generic-Catch "account updates" matcht beide. Plus PII-Vorteil:
+    # Pattern matcht VOR PII-Scrub -> Event wird sofort gedroppt,
+    # Account-ID landet nicht im Sentry-Inbox.
+    # Defense: Self-Test #11 hourly Connection-Check faengt echte Disconnects.
+    "account updates",
     # R-A30 (21.05.2026): Daily IB-Gateway-Restart-Artefakte.
     # Cron `daily_bot_restart.sh` restartet ib-gateway um 03:00 UTC (05:00 CEST)
     # und Bot 15min spaeter (Stale-Connection-Schutz, Layer C). Wahrend des
