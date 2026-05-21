@@ -18,9 +18,9 @@
 |---|---|---|---|
 | Morgens 09:00 | **GO/NO-GO-Check** vor Cutover | du | siehe Section 2 unten |
 | 14:00-15:00 | Pre-Cutover-Snapshot | du | `Pull-BotState.cmd` (Doppelklick) + Dashboard-Screenshot. **DST-Hinweis:** 01.06. ist Sommerzeit (CEST = UTC+2), Markt-Open daher 15:30 CEST |
-| **15:00** | **Cutover-Switch in docker-compose.yml** | du | `TRADING_MODE: paper -> live` |
-| 15:01 | `docker compose up -d --force-recreate investpilot` | du | Container restart |
-| 15:02-15:05 | Pushover-Alert: "Bot connected zu IBKR Real-Account" | passiv | bot-broker-status |
+| **15:00** | **Cutover-Switch — 2 Files atomisch** (R-A31 21.05.2026: war frueher unvollstaendig dokumentiert) | du | **Beide Steps** noetig: <br>**Step 1:** `/opt/ib-gateway/docker-compose.yml` → `TRADING_MODE=paper` → `live` <br>**Step 2:** `/opt/investpilot/data/config.json` → `ibkr.port: 4004` → `4001` <br>**Bequemer Pfad:** `bash /opt/investpilot/scripts/cutover_switch.sh` (macht beide Steps atomisch + Backup + Verify) |
+| 15:01 | Restart **beide** Container | du | `docker compose -f /opt/ib-gateway/docker-compose.yml up -d --force-recreate ib-gateway && sleep 30 && docker compose -f /opt/investpilot/docker-compose.vps.yml up -d --force-recreate investpilot` |
+| 15:02-15:05 | Pushover-Alert: "Bot connected zu IBKR Real-Account" | passiv | bot-broker-status; account-Praefix MUSS U... sein (nicht DU...) |
 | 15:30 | US-Markt oeffnet | passiv | Bot startet ersten echten Trading-Cycle |
 | 15:31-16:30 | **Aktive Beobachtung** | du | Augen aufhalten, Kill-Switch griffbereit |
 | 16:30 | Erstes Pushover-Trade-Alert (oder kein Trade = OK) | passiv | wenn alles ok |
