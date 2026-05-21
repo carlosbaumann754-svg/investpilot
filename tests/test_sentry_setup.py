@@ -478,3 +478,58 @@ def test_noise_filter_keeps_real_cancelled_error():
     from app.sentry_setup import _is_noise
     # 'CancelledError' alleine ohne 'API connection failed' Prefix
     assert _is_noise("Trade cancelled due to risk limit") is False
+
+
+# ============================================================
+# R-A30 (21.05.2026 morgen): Daily-Restart-Artefakte + yfinance-Delisted
+# ============================================================
+
+def test_noise_filter_drops_ibkr_error_1100_short():
+    """Error 1100 reqId -1 (Connectivity lost) bei daily ib-gateway Restart."""
+    from app.sentry_setup import _is_noise
+    msg = "Error 1100, reqId -1: Connectivity between IBKR and Trader Workstation has been lost."
+    assert _is_noise(msg) is True
+
+
+def test_noise_filter_drops_ibkr_error_1100_short_pattern():
+    """Pattern 'Error 1100, reqId' matcht auch ohne genauen Text-Rest."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Error 1100, reqId 0: something else") is True
+    assert _is_noise("Error 1100, reqId -1: Connectivity lost") is True
+
+
+def test_noise_filter_drops_connectivity_lost_long_form():
+    """Generic 'Connectivity between IBKR and Trader Workstation has been lost'.
+    Auch ohne Error-1100-Prefix (z.B. von ib_insync.wrapper-Loggerline)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Connectivity between IBKR and Trader Workstation has been lost") is True
+
+
+def test_noise_filter_drops_yfinance_delisted():
+    """yfinance MC.PA-Pattern: 'possibly delisted; no price data found'."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("$MC.PA: possibly delisted; no price data found (period=1d)") is True
+    assert _is_noise("$LVMUY: possibly delisted; no price data found (period=5d)") is True
+
+
+def test_noise_filter_drops_yfinance_no_data_range():
+    """Alt-Wortlaut der yfinance-Delisting-Warning."""
+    from app.sentry_setup import _is_noise
+    msg = "No data found for this date range, symbol may be delisted"
+    assert _is_noise(msg) is True
+
+
+def test_noise_filter_keeps_real_1100_in_non_ibkr_context():
+    """Number '1100' alleine ohne 'Error 1100, reqId' Prefix bleibt drin."""
+    from app.sentry_setup import _is_noise
+    # z.B. config-value oder positionssize $1100
+    assert _is_noise("Order size 1100 exceeded limit") is False
+    assert _is_noise("Trade closed at 1100 EUR") is False
+
+
+def test_noise_filter_keeps_real_connectivity_error():
+    """Connectivity-Errors OHNE 'IBKR and Trader Workstation' (z.B. yfinance,
+    Polygon, Slack-Webhook) gehen weiter durch → echter Infrastruktur-Bug."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Connectivity to Polygon failed: timeout") is False
+    assert _is_noise("Slack webhook connectivity lost") is False

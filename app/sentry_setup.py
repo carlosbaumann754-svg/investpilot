@@ -219,6 +219,24 @@ _SENTRY_NOISE_PATTERNS = (
     "API connection failed: CancelledError",
     "API connection failed: RuntimeError",
     "asyncio.exceptions.CancelledError",
+    # R-A30 (21.05.2026): Daily IB-Gateway-Restart-Artefakte.
+    # Cron `daily_bot_restart.sh` restartet ib-gateway um 03:00 UTC (05:00 CEST)
+    # und Bot 15min spaeter (Stale-Connection-Schutz, Layer C). Wahrend des
+    # Gateway-Restart-Fensters ruft Bot's `_connection_is_fresh` (ibkr_client.py:205)
+    # `ib.reqCurrentTime()` auf → IBKR antwortet mit Error 1100 weil Gateway
+    # gerade neu startet. Bot fängt das ab (return False), aber ib_insync.wrapper
+    # loggt es als ERROR → Sentry sammelt. Defense-Layer:
+    #   - Source: `_connection_is_fresh` gibt False zurück (kein Crash)
+    #   - Watchdog Self-Test #11 prueft hourly ob Connection live ist
+    #   - Daily Restart-Cron loggt eigenen Status nach /var/log/investpilot-daily-restart.log
+    # → erwartetes Verhalten, hier filtern.
+    "Error 1100, reqId",
+    "Connectivity between IBKR and Trader Workstation has been lost",
+    # yfinance-Noise: delisted/ungültige Symbole im Universe (z.B. MC.PA = LVMH
+    # Paris-Börse). R-A15 External-Quote-Fallback probiert Polygon/Finnhub als
+    # Backup → kein Bot-Bug. Filter raus aus Sentry-Inbox.
+    "possibly delisted; no price data found",
+    "No data found for this date range, symbol may be delisted",
 )
 
 
