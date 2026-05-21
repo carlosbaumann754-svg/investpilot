@@ -219,6 +219,19 @@ _SENTRY_NOISE_PATTERNS = (
     "API connection failed: CancelledError",
     "API connection failed: RuntimeError",
     "asyncio.exceptions.CancelledError",
+    # R-A35 (21.05.2026, Sprint-Tag-11 Block 5): TimeoutError + truncated
+    # _get_account_value-Patterns. Sentry-Soak nach R-A30-Deploy zeigte
+    # 2 neue Sentry-Issues (PYTHON-FASTAPI-K mit 24 Events ESCALATING +
+    # PYTHON-FASTAPI-M mit 15 Events): "API connection failed: TimeoutError()"
+    # fehlte komplett im Filter (R-A29 hatte nur CancelledError + RuntimeError).
+    # Plus: "_get_account_value(NetLiquidation) failed:" kommt teilweise
+    # truncated bei Sentry an (ohne "Socket disconnect"-Suffix) — wahrscheinlich
+    # wegen Sentry-Message-Truncation oder unterschiedlicher Exception-Klasse.
+    # Generic-Pattern "API connection failed:" deckt ALLE Sub-Errors auf einmal
+    # ab (TimeoutError, OSError, ConnectionResetError, etc.) — robuster.
+    "API connection failed: TimeoutError",
+    "API connection failed:",
+    "_get_account_value(NetLiquidation) failed:",
     # R-A30 (21.05.2026): Daily IB-Gateway-Restart-Artefakte.
     # Cron `daily_bot_restart.sh` restartet ib-gateway um 03:00 UTC (05:00 CEST)
     # und Bot 15min spaeter (Stale-Connection-Schutz, Layer C). Wahrend des

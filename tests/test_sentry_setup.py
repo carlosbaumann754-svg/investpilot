@@ -533,3 +533,56 @@ def test_noise_filter_keeps_real_connectivity_error():
     from app.sentry_setup import _is_noise
     assert _is_noise("Connectivity to Polygon failed: timeout") is False
     assert _is_noise("Slack webhook connectivity lost") is False
+
+
+# ============================================================
+# R-A35 (21.05.2026 Sprint-Tag-11 Block 5): TimeoutError + truncated
+# _get_account_value Patterns nach Sentry-Soak-Check.
+# ============================================================
+
+def test_r_a35_drops_api_connection_timeout_error():
+    """API connection failed: TimeoutError() — neuer Pattern aus
+    Sentry-Issue PYTHON-FASTAPI-M (15 Events)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("API connection failed: TimeoutError()") is True
+    assert _is_noise("API connection failed: TimeoutError") is True
+
+
+def test_r_a35_generic_api_connection_failed_pattern():
+    """Generic 'API connection failed:' deckt ALLE Sub-Error-Klassen ab
+    (TimeoutError, OSError, ConnectionResetError, etc.) — robuster als
+    pro-Sub-Error-Pattern."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("API connection failed: OSError") is True
+    assert _is_noise("API connection failed: ConnectionResetError(...)") is True
+    assert _is_noise("API connection failed: BrokenPipeError") is True
+
+
+def test_r_a35_drops_truncated_get_account_value():
+    """'_get_account_value(NetLiquidation) failed:' truncated — der echte
+    Sentry-Event kommt teilweise ohne 'Socket disconnect'-Suffix an
+    (Sentry-Message-Truncation oder andere Exception-Subklasse)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("_get_account_value(NetLiquidation) failed:") is True
+    assert _is_noise(
+        "_get_account_value(NetLiquidation) failed: ConnectionError"
+    ) is True
+
+
+def test_r_a35_keeps_real_timeout_in_non_ibkr_context():
+    """TimeoutError() ohne 'API connection failed:'-Prefix bleibt drin —
+    z.B. Polygon-API-Timeout, Slack-Webhook-Timeout = echte Infrastruktur-
+    Errors die nicht gefiltert werden duerfen."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("yfinance TimeoutError") is False
+    assert _is_noise("Polygon API call timed out") is False
+    assert _is_noise("TimeoutError: Connection to 'finnhub.io' timed out") is False
+
+
+def test_r_a35_keeps_real_api_connection_in_non_ibkr_context():
+    """'API connection' fuer andere APIs (z.B. Polygon, FRED) bleibt drin —
+    nur 'API connection failed:' (genauer Prefix) wird gefiltert."""
+    from app.sentry_setup import _is_noise
+    # Generic Pattern matcht "API connection failed:" — wenn anderer Text:
+    assert _is_noise("Polygon API connection slow") is False
+    assert _is_noise("FRED API rate limited") is False
