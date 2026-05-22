@@ -260,6 +260,18 @@ _SENTRY_NOISE_PATTERNS = (
     # → erwartetes Verhalten, hier filtern.
     "Error 1100, reqId",
     "Connectivity between IBKR and Trader Workstation has been lost",
+    # R-A39 (22.05.2026 Sprint-Tag-12): IBKR Error 1101 + 1102 sind die
+    # "Connectivity RESTORED"-Codes (1100 = lost, 1101/1102 = restored).
+    # ib_insync loggt ironischerweise alle drei als ERROR, auch 1102 wo
+    # alles wieder gut ist. Klassischer Library-Quirk.
+    # 1101 = restored (data lost during outage)
+    # 1102 = restored (data maintained — best case)
+    # Plus generic "Connectivity between IBKR" als prefix-catch fuer
+    # zukuenftige IBKR-error-code-Varianten gleicher Familie.
+    "Error 1101, reqId",
+    "Error 1102, reqId",
+    "Connectivity between IBKR and Trader Workstation has been restored",
+    "Connectivity between IBKR",
     # yfinance-Noise: delisted/ungültige Symbole im Universe (z.B. MC.PA = LVMH
     # Paris-Börse). R-A15 External-Quote-Fallback probiert Polygon/Finnhub als
     # Backup → kein Bot-Bug. Filter raus aus Sentry-Inbox.

@@ -679,3 +679,44 @@ def test_r_a38_keeps_unrelated_account_messages():
     assert _is_noise("Account balance check failed") is False
     assert _is_noise("User account locked") is False
     assert _is_noise("Bank account number invalid") is False
+
+
+# ============================================================
+# R-A39 (22.05.2026 Sprint-Tag-12): IBKR Error 1101 + 1102
+# (Connectivity RESTORED — Library-Quirk: als ERROR geloggt obwohl OK).
+# ============================================================
+
+def test_r_a39_drops_ibkr_error_1101():
+    """Error 1101 = Connectivity restored (data lost). Library-Quirk."""
+    from app.sentry_setup import _is_noise
+    msg = "Error 1101, reqId -1: Connectivity between IBKR and Trader Workstation has been restored — data lost."
+    assert _is_noise(msg) is True
+
+
+def test_r_a39_drops_ibkr_error_1102():
+    """Error 1102 = Connectivity restored (data maintained). Library-Quirk."""
+    from app.sentry_setup import _is_noise
+    msg = "Error 1102, reqId -1: Connectivity between IBKR and Trader Workstation has been restored — data maintained."
+    assert _is_noise(msg) is True
+
+
+def test_r_a39_drops_connectivity_restored_generic():
+    """Generic 'restored'-Form ohne Error-Code-Prefix (z.B. von ib_insync.wrapper)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Connectivity between IBKR and Trader Workstation has been restored") is True
+
+
+def test_r_a39_generic_connectivity_between_ibkr_prefix():
+    """Generic prefix-catch fuer zukuenftige IBKR-error-code-Varianten (1103, etc.)."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("Connectivity between IBKR has stale market data") is True
+    assert _is_noise("Connectivity between IBKR and farms degraded") is True
+
+
+def test_r_a39_keeps_real_ibkr_text_in_other_context():
+    """'IBKR' Wort allein in anderem Kontext bleibt drin (z.B. Bot-eigene
+    Log-Messages, Setup-Fehler)."""
+    from app.sentry_setup import _is_noise
+    # Kein 'Connectivity between IBKR' Prefix
+    assert _is_noise("IBKR account funding failed") is False
+    assert _is_noise("Cannot reach IBKR Web Portal") is False
