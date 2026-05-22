@@ -352,6 +352,14 @@ class IbkrBroker(BrokerBase):
             log.warning("E27 Tracker-Init failed (non-fatal): %s", e)
             self._tracker = None
         self._e27_subscribed = False
+        # R-A40 (22.05.2026 Sprint-Tag-12): Track WELCHE ib-Instanz subscribed
+        # ist (per id()) damit nach Pool-Invalidate / Reconnect / Daily-Restart
+        # automatisch neu subscribed wird. Sonst verloren wir bei jedem
+        # Reconnect die orderStatusEvent-Subscription → Tracker-State bleibt
+        # auf "PendingSubmit" haengen obwohl Order in Realitaet executed war
+        # (Symptom: 2 stale Pending-Orders nach 19.6h obwohl Trade-History
+        # sagt executed; IBKR ib.openTrades() sagt 0 pending).
+        self._e27_subscribed_ib_id = None
 
     @property
     def broker_name(self) -> str:
@@ -493,15 +501,29 @@ class IbkrBroker(BrokerBase):
     def _maybe_subscribe_e27_events(self, ib):
         """E27: subscribe orderStatusEvent wenn Feature-Flag + Tracker da.
 
-        Idempotent — wird mehrfach aufgerufen (jeder _get_ib-Call), aber
-        subscribed nur einmal pro Tracker-Instanz.
+        R-A40 (22.05.2026): Idempotent PRO ib-Instanz statt global.
+        Vorher: _e27_subscribed=True wurde einmal gesetzt und nie zurueck —
+        nach Pool-Invalidate (Stale-Connection, Daily-Restart) bekam die
+        NEUE ib-Instanz keine Subscription, alte Subscription war tot.
+        Resultat: orderStatusEvents kamen nicht mehr beim Tracker an,
+        pending_orders.json-Status blieb auf "PendingSubmit" haengen obwohl
+        Order in Wirklichkeit executed. Symptom heute: 2 stale Pending
+        nach 19.6h (KO SELL + ASML BUY beide in Trade-History als executed).
+
+        Fix: id(ib) tracking. Bei neuer ib-Instanz wird neu subscribed.
+        Alte Subscription ist eh tot weil ib-Object disconnected/garbage-
+        collected wird.
         """
-        if not self._e27_enabled or self._tracker is None or self._e27_subscribed:
+        if not self._e27_enabled or self._tracker is None:
             return
+        current_ib_id = id(ib)
+        if self._e27_subscribed_ib_id == current_ib_id:
+            return  # bereits auf DIESER ib-Instanz subscribed
         try:
             ib.orderStatusEvent += self._tracker.handle_status_event
-            self._e27_subscribed = True
-            log.info("E27 orderStatusEvent subscribed (Real-Time Status-Tracking aktiv)")
+            self._e27_subscribed = True  # Backwards-compat fuer Tests
+            self._e27_subscribed_ib_id = current_ib_id
+            log.info("E27 orderStatusEvent subscribed (Real-Time Status-Tracking aktiv, ib_id=%s)", current_ib_id)
             # Recovery: pending Orders gegen IBKR-Reality synchronisieren.
             # v37e Tag 3: returnt dict mit resolved/staled/still_pending.
             try:
