@@ -2684,8 +2684,15 @@ async function loadMetaLabelerStatus() {
 
     const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
     setTxt('meta-shadow-count', `${m.shadow_log_size || 0} / ${m.min_trades_to_activate || 50}`);
+    // R-A41 (22.05.2026): "Treffer-Quote" zeigt LIVE-Hit-Rate aus
+    // outcome-matched shadow-decisions. Vorher: zeigte m.precision aus
+    // meta_model.json (= Training-Precision auf Backtest-Daten) — das
+    // war IRREFUEHREND als "Treffer-Quote" geframet. Jetzt:
+    //   hit_rate.hit_rate_display = "N/A" wenn <5 matured outcomes,
+    //   sonst echte hits/shadow_takes-Ratio aus Live-Trades.
+    const hitRate = m.hit_rate?.hit_rate_display;
     setTxt('meta-precision',
-        m.precision != null ? m.precision.toFixed(1) + '%' : '--');
+        hitRate ?? (m.precision != null ? m.precision.toFixed(1) + '%' : '--'));
     setTxt('meta-samples', m.samples_total != null ? m.samples_total : '--');
 
     const pct = m.progress_pct || 0;

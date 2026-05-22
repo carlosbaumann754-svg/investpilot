@@ -305,6 +305,162 @@ def log_shadow_decision(decision_record):
     save_json(SHADOW_LOG_FILE, log_data)
 
 
+# ============================================================
+# R-A41 (22.05.2026 Sprint-Tag-12 Block 3): actual_outcome-Feedback-Loop
+# ============================================================
+# Vorher: log_shadow_decision schrieb {decision, p_win, ...} aber NIE
+# einen actual_outcome zurueck. Die UI-Treffer-Quote war daher immer 0%
+# (0 outcomes / N samples). check_and_maybe_activate() konnte zwar Live-
+# Switch berechnen, persistierte aber den Match nicht.
+# Plus: position_id wurde als order.get("positionID") gelesen (eToro-
+# Field-Name) — bei IBKR null. Match per position_id war daher unmoeglich.
+# Fix: Match-Fallback via (symbol, time_window) wenn position_id null.
+
+def update_outcome_for_close(symbol: str, pnl_pct: float,
+                              close_timestamp: str | None = None,
+                              position_id=None) -> int:
+    """Markiere ALLE matching shadow-decisions mit actual_outcome.
+
+    Aufruf nach jedem CLOSE-Event im Trader (TRAILING_SL_CLOSE,
+    STOP_LOSS_CLOSE, TAKE_PROFIT_CLOSE, TIME_STOP_CLOSE, PARTIAL_CLOSE,
+    etc.) mit bekanntem pnl_pct.
+
+    Args:
+        symbol: e.g. "KO"
+        pnl_pct: realized PnL in % (>0 = win, <=0 = loss)
+        close_timestamp: ISO-String des Close-Events (default: now)
+        position_id: optional, fuer praeziseren Match
+
+    Returns:
+        Anzahl der upgedateten shadow-decisions
+    """
+    from datetime import datetime, timedelta
+
+    if close_timestamp is None:
+        close_timestamp = datetime.now().isoformat()
+    try:
+        close_dt = datetime.fromisoformat(str(close_timestamp).replace("Z", "+00:00").split("+")[0])
+    except Exception:
+        return 0
+
+    log_data = load_json(SHADOW_LOG_FILE) or []
+    if not isinstance(log_data, list):
+        return 0
+
+    outcome = "win" if pnl_pct > 0 else "loss"
+    updated_count = 0
+
+    # Strategy: Match BUY-decision der gleichen Position
+    # 1. position_id-Match (praezise) wenn beide gesetzt
+    # 2. symbol-Match innerhalb 30d backward (Time-Stop-Bound)
+    # Nur Decisions die NOCH KEIN outcome haben werden gefuellt
+    # (idempotent: re-runnable ohne Double-Update).
+    for rec in log_data:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("actual_outcome") is not None:
+            continue  # bereits gesetzt — idempotent skip
+        if rec.get("symbol") != symbol:
+            continue
+        # Time-Window-Check: Decision MUSS vor Close liegen
+        try:
+            dec_ts = datetime.fromisoformat(
+                str(rec.get("timestamp", "")).replace("Z", "+00:00").split("+")[0]
+            )
+            delta_days = (close_dt - dec_ts).total_seconds() / 86400
+        except Exception:
+            continue
+        if delta_days < 0 or delta_days > 30:  # ausserhalb Time-Stop-Bound
+            continue
+        # position_id-Praezise-Match wenn beide bekannt
+        rec_pid = rec.get("position_id")
+        if position_id is not None and rec_pid is not None:
+            if str(rec_pid) != str(position_id):
+                continue
+        # Match!
+        rec["actual_outcome"] = outcome
+        rec["actual_pnl_pct"] = round(pnl_pct, 3)
+        rec["matched_at"] = datetime.now().isoformat()
+        rec["matched_close_ts"] = close_timestamp
+        updated_count += 1
+        # Nur die AELTESTE matching decision updaten (FIFO)
+        # → erste Open-Decision wird mit dieser Close gematcht
+        break
+
+    if updated_count > 0:
+        save_json(SHADOW_LOG_FILE, log_data)
+        log.info(
+            "Meta-Labeler outcome geupdated: %s pnl=%+.2f%% → %s (%d decisions)",
+            symbol, pnl_pct, outcome, updated_count
+        )
+    return updated_count
+
+
+def compute_hit_rate() -> dict:
+    """Berechnet aktuelle Treffer-Quote aus shadow_log + outcomes.
+
+    Returns:
+        dict mit:
+          total_decisions: int
+          matured: int        # decisions mit actual_outcome gesetzt
+          shadow_takes: int   # davon decision="shadow_take"
+          hits: int           # shadow_takes die als "win" markiert
+          precision: float | None  # hits/shadow_takes (None wenn matured < 5)
+          hit_rate_display: str    # "12.5%" oder "N/A"
+    """
+    log_data = load_json(SHADOW_LOG_FILE) or []
+    matured = [r for r in log_data if isinstance(r, dict)
+               and r.get("actual_outcome") is not None]
+    takes = [r for r in matured if r.get("decision") == "shadow_take"]
+    hits = [r for r in takes if r.get("actual_outcome") == "win"]
+
+    MIN_FOR_DISPLAY = 5
+    precision = None
+    hit_rate_display = "N/A"
+    if len(takes) >= MIN_FOR_DISPLAY:
+        precision = len(hits) / len(takes)
+        hit_rate_display = f"{precision*100:.1f}%"
+
+    return {
+        "total_decisions": len(log_data),
+        "matured": len(matured),
+        "shadow_takes": len(takes),
+        "hits": len(hits),
+        "precision": precision,
+        "hit_rate_display": hit_rate_display,
+    }
+
+
+def backfill_outcomes_from_trade_history() -> int:
+    """Single-use Backfill: scan trade_history fuer Close-Events und fuelle
+    fehlende actual_outcomes in shadow_log nach.
+
+    Returns:
+        Anzahl der upgedateten decisions.
+    """
+    hist = load_json("trade_history.json") or []
+    total_updated = 0
+    for t in hist:
+        if not isinstance(t, dict):
+            continue
+        action = str(t.get("action", "")).upper()
+        # Nur Close-Events mit pnl_pct
+        if not any(s in action for s in ("CLOSE", "STOP_LOSS", "TAKE_PROFIT",
+                                         "TIME_STOP", "TRAILING")):
+            continue
+        pnl_pct = t.get("pnl_pct")
+        if pnl_pct is None:
+            continue
+        sym = t.get("symbol")
+        if not sym:
+            continue
+        ts = t.get("timestamp")
+        pid = t.get("position_id")
+        updated = update_outcome_for_close(sym, float(pnl_pct), ts, pid)
+        total_updated += updated
+    return total_updated
+
+
 def check_and_maybe_activate(config=None):
     """Check if we have enough shadow evidence to leave shadow mode.
 
@@ -399,11 +555,18 @@ def check_and_maybe_activate(config=None):
 
 
 def get_meta_status():
-    """Return status dict for dashboard/logging."""
+    """Return status dict for dashboard/logging.
+
+    R-A41: hit_rate (Treffer-Quote) wird mit ausgegeben — vorher nur 0%
+    weil actual_outcome nie persistiert.
+    """
     _load_model()
     shadow = load_json(SHADOW_LOG_FILE) or []
+    hit_rate_stats = compute_hit_rate()
     return {
         "model_trained": _model is not None,
         "model_info": _model_info or {},
         "shadow_log_size": len(shadow),
+        # R-A41 (22.05.2026): Treffer-Quote-Statistik
+        "hit_rate": hit_rate_stats,
     }

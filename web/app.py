@@ -4453,6 +4453,17 @@ async def api_v12_status(user=Depends(require_auth)):
             and meta_precision is not None
             and meta_precision >= min_prec
         )
+        # R-A41 (22.05.2026): Live Treffer-Quote aus shadow-log + outcomes
+        # statt 0% (= "N/A maskiert als Zero"). compute_hit_rate gibt
+        # "N/A" zurueck wenn <5 matured trades — sonst echte hits/takes.
+        try:
+            from app.meta_labeler import compute_hit_rate
+            meta_hit_rate = compute_hit_rate()
+        except Exception:
+            meta_hit_rate = {
+                "matured": 0, "shadow_takes": 0, "hits": 0,
+                "precision": None, "hit_rate_display": "N/A",
+            }
 
         # --- Time-Stop ---
         ts_cfg = config.get("time_stop", {}) or {}
@@ -4515,6 +4526,8 @@ async def api_v12_status(user=Depends(require_auth)):
                 "min_precision_to_activate": min_prec,
                 "progress_pct": meta_progress_pct,
                 "ready_to_activate": meta_ready_to_activate,
+                # R-A41: Live Treffer-Quote
+                "hit_rate": meta_hit_rate,
             },
             "time_stop": {
                 "enabled": bool(ts_cfg.get("enabled")),

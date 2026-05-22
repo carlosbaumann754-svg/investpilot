@@ -29,10 +29,38 @@ AUDIT_METADATA = {
 
 
 def save_trade(trade_entry):
-    """Trade-Historie persistent speichern."""
+    """Trade-Historie persistent speichern.
+
+    R-A41 (22.05.2026 Sprint-Tag-12): Bei Close-Trades mit pnl_pct triggert
+    automatisch Meta-Labeler outcome-Update. Vorher landete kein outcome je
+    in meta_labeling_shadow.json → Treffer-Quote war immer 0%.
+    """
     history = load_json("trade_history.json") or []
     history.append(trade_entry)
     save_json("trade_history.json", history)
+
+    # R-A41: Meta-Labeler outcome-Hook fuer Close-Events
+    try:
+        action = str(trade_entry.get("action", "")).upper()
+        pnl_pct = trade_entry.get("pnl_pct")
+        symbol = trade_entry.get("symbol")
+        # Nur Close-Events mit bekanntem PnL + Symbol
+        if (pnl_pct is not None and symbol and
+            any(s in action for s in ("CLOSE", "STOP_LOSS", "TAKE_PROFIT",
+                                       "TIME_STOP", "TRAILING"))):
+            from app.meta_labeler import update_outcome_for_close
+            update_outcome_for_close(
+                symbol=symbol,
+                pnl_pct=float(pnl_pct),
+                close_timestamp=trade_entry.get("timestamp"),
+                position_id=trade_entry.get("position_id"),
+            )
+    except Exception as e:
+        # Non-fatal: trade-history-save soll nicht fail wegen meta-hook
+        from app.config_manager import logging
+        logging.getLogger(__name__).debug(
+            f"R-A41 meta-outcome-hook fehlgeschlagen (non-fatal): {e}"
+        )
 
 
 def _trade_status_from_result(result) -> str:
