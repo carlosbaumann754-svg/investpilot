@@ -235,8 +235,19 @@ def evaluate_new_assets(new_assets, max_evaluate=30):
 
 
 def add_to_scanner_universe(evaluated_assets, min_score=15, max_add=10):
-    """Fuege die besten neuen Assets zum Scanner-Universum hinzu."""
+    """Fuege die besten neuen Assets zum Scanner-Universum hinzu.
+
+    R-A45 (24.05.2026): Zusaetzlich persistieren in
+    data/discovered_universe_persist.json damit Adds nach Container-Restart
+    erhalten bleiben. Vorher waren Adds nur in Runtime-Dict → bei jedem
+    Bot-Restart verloren.
+    """
     from app.market_scanner import ASSET_UNIVERSE
+    try:
+        from app.discovery_persist import save_persisted_discovery
+        _persist_enabled = True
+    except Exception:
+        _persist_enabled = False
 
     candidates = [a for a in evaluated_assets if a.get("score", 0) >= min_score]
     added = []
@@ -247,12 +258,22 @@ def add_to_scanner_universe(evaluated_assets, min_score=15, max_add=10):
             continue
 
         # Zum ASSET_UNIVERSE hinzufuegen (Runtime)
-        ASSET_UNIVERSE[symbol] = {
+        asset_info = {
             "etoro_id": asset["etoro_id"],
             "yf": asset["yf_symbol"],
             "class": asset["asset_class"],
             "name": asset["name"],
+            "sector": asset.get("sector"),
         }
+        ASSET_UNIVERSE[symbol] = asset_info
+
+        # R-A45: persistieren damit Restart-fest
+        if _persist_enabled:
+            try:
+                save_persisted_discovery(symbol, asset_info, asset.get("score", 0))
+            except Exception as e:
+                log.warning(f"R-A45 persist failed for {symbol} (non-fatal): {e}")
+
         asset["added_to_scanner"] = True
         added.append(asset)
         log.info(f"  Zum Scanner hinzugefuegt: {symbol} ({asset['name']}) Score={asset['score']:.1f}")

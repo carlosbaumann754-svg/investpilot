@@ -62,6 +62,19 @@ def save_trade(trade_entry):
             f"R-A41 meta-outcome-hook fehlgeschlagen (non-fatal): {e}"
         )
 
+    # R-A45 (24.05.2026): Discovery-Persist mark_traded-Hook fuer ALLE Trades
+    # (BUY + CLOSE). Schutz vor 90d-Cleanup eines aktiv-getradeten Symbols.
+    try:
+        symbol = trade_entry.get("symbol")
+        if symbol:
+            from app.discovery_persist import mark_traded
+            mark_traded(symbol)  # no-op wenn symbol nicht in persisted-Discoveries
+    except Exception as e:
+        from app.config_manager import logging
+        logging.getLogger(__name__).debug(
+            f"R-A45 mark_traded hook failed (non-fatal): {e}"
+        )
+
 
 def _trade_status_from_result(result) -> str:
     """v37dh (07.05.2026): Trade-Status aus IBKR-Result-Dict ableiten.

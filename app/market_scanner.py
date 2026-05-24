@@ -1028,3 +1028,20 @@ def enrich_with_mtf(scan_results, top_n=20, min_confluence=None):
     scan_results.sort(key=lambda x: x["score"], reverse=True)
     log.info(f"  MTF: {enriched} Assets mit Multi-Timeframe angereichert")
     return scan_results
+
+
+# ============================================================
+# R-A45 (24.05.2026 Sprint-Tag-13): Boot-Time-Reload persisted Discoveries
+# ============================================================
+# Beim Module-Import (= Bot-Boot) werden persistierte Discovery-Adds aus
+# data/discovered_universe_persist.json zurueck ins ASSET_UNIVERSE gemerged.
+# Verhindert Universe-Verlust bei Container-Restart.
+# Idempotent: schon vorhandene Symbole werden nicht ueberschrieben.
+try:
+    from app.discovery_persist import merge_into_asset_universe
+    _merged = merge_into_asset_universe(ASSET_UNIVERSE)
+    if _merged:
+        log.info(f"R-A45 Boot: {_merged} persisted Discoveries ins ASSET_UNIVERSE reloaded")
+except Exception as _e:
+    # Non-fatal: Bot soll auch ohne discovery-persist hochfahren
+    log.warning(f"R-A45 Boot-Merge failed (non-fatal): {_e}")
