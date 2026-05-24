@@ -2308,10 +2308,28 @@ def execute_scanner_trades(client, config, scan_results):
                     if ml_decision is not None and ml_decision.get("p_win") is not None:
                         try:
                             from app import meta_labeler
+                            # R-A42 (24.05.2026 Sprint-Tag-13): position_id
+                            # korrekt aus IBKR-Order erfassen. Vorher las
+                            # der Code nur eToro-Field-Namen ("positionID",
+                            # "positionId") -> bei IBKR null. Resultat:
+                            # alle Live-Shadow-Decisions hatten position_id=
+                            # null -> R-A41 outcome-Match konnte nie via
+                            # position_id matchen (nur Symbol+Time-Fallback).
+                            # Fix: Cascade-Lookup mit IBKR-Fields prioritaer.
+                            # Bei IBKR ist orderID einzigartig pro Order
+                            # (kein conId-Reuse-Problem wie R-A23).
+                            position_id = (
+                                order.get("orderID")           # IBKR primary
+                                or order.get("orderId")        # IBKR snake_case
+                                or order.get("permID")         # IBKR persistent ID
+                                or order.get("permId")         # IBKR snake_case
+                                or order.get("positionID")     # eToro Legacy
+                                or order.get("positionId")
+                            )
                             meta_labeler.log_shadow_decision({
                                 "timestamp": datetime.now().isoformat(),
-                                "position_id": order.get("positionID") or order.get("positionId"),
-                                "order_id": order.get("orderID"),
+                                "position_id": position_id,
+                                "order_id": order.get("orderID") or order.get("orderId"),
                                 "instrument_id": candidate["etoro_id"],
                                 "symbol": symbol,
                                 "p_win": ml_decision["p_win"],

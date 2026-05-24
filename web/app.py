@@ -1680,7 +1680,12 @@ async def api_brain(user=Depends(require_auth)):
     return {
         "total_runs": brain.get("total_runs", 0),
         "market_regime": brain.get("market_regime", "unknown"),
-        "win_rate": brain.get("win_rate"),         # None nach Tab-Audit-Reset bis Bot frische Daten gesammelt hat
+        # R-A43 (24.05.2026): "win_rate" jetzt = echte Trade-Win-Rate
+        # (% gewinnbringende Closes). Backward-Compat: alte snapshot-basierte
+        # Rate bleibt unter "win_rate_daily" verfuegbar.
+        "win_rate": brain.get("trade_win_rate", brain.get("win_rate")),
+        "win_rate_daily": brain.get("win_rate"),  # legacy snapshot-rate
+        "trade_count_total": brain.get("trade_count_total"),
         "sharpe_estimate": brain.get("sharpe_estimate"),  # None nach Reset
         "avg_return_pct": brain.get("avg_return_pct"),    # None nach Reset
         "instrument_scores": enriched_scores,

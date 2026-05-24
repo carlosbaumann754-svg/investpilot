@@ -796,6 +796,9 @@ def _generate_performance_report_locked():
         report["max_daily_loss"] = round(min(daily_returns), 2)
         report["win_days"] = sum(1 for r in daily_returns if r > 0)
         report["lose_days"] = sum(1 for r in daily_returns if r < 0)
+        # Hinweis: report["win_rate"] (LEGACY) basiert auf Snapshot-Intervallen
+        # (5-Min-Cycles) und ist NICHT die Trade-Win-Rate. Wert oft <5% weil
+        # Bot nur ~1-3 Trades/Tag macht und die meisten Cycles flat sind.
         report["win_rate"] = round(report["win_days"] / len(daily_returns) * 100, 1)
 
         if len(daily_returns) > 1:
@@ -803,6 +806,38 @@ def _generate_performance_report_locked():
             report["daily_volatility"] = round(vol, 3)
             report["sharpe_estimate"] = round(
                 (statistics.mean(daily_returns) / vol * (252 ** 0.5)) if vol > 0 else 0, 2)
+
+        # R-A43 (24.05.2026 Sprint-Tag-13): Echte Trade-Win-Rate aus
+        # trade_history berechnen. Vorher war "win_rate" semantisch
+        # "Anteil 5-Min-Cycles mit positivem PnL" (~0.3%) — UI-Tooltip
+        # versprach aber "Anteil gewinnbringender Trades". Bug.
+        # Fix: separates Feld trade_win_rate = wins/total_closes.
+        try:
+            from app.config_manager import load_json
+            trade_hist = load_json("trade_history.json") or []
+            close_pnls = []
+            for t in trade_hist:
+                if not isinstance(t, dict):
+                    continue
+                action = str(t.get("action", "")).upper()
+                if not any(s in action for s in ("CLOSE", "STOP_LOSS",
+                                                   "TAKE_PROFIT", "TIME_STOP",
+                                                   "TRAILING")):
+                    continue
+                pnl = t.get("pnl_pct")
+                if pnl is None:
+                    continue
+                close_pnls.append(float(pnl))
+            if close_pnls:
+                wins = sum(1 for p in close_pnls if p > 0)
+                report["trade_win_rate"] = round(wins / len(close_pnls) * 100, 1)
+                report["trade_count_total"] = len(close_pnls)
+                report["trade_wins"] = wins
+                brain["trade_win_rate"] = report["trade_win_rate"]
+                brain["trade_count_total"] = report["trade_count_total"]
+        except Exception as _e:
+            # non-fatal — backward-compat
+            pass
 
         brain["win_rate"] = report.get("win_rate", 0)
         brain["avg_return_pct"] = report.get("avg_daily_return", 0)
