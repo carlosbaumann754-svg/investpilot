@@ -720,3 +720,33 @@ def test_r_a39_keeps_real_ibkr_text_in_other_context():
     # Kein 'Connectivity between IBKR' Prefix
     assert _is_noise("IBKR account funding failed") is False
     assert _is_noise("Cannot reach IBKR Web Portal") is False
+
+
+# ============================================================
+# R-A44 (24.05.2026 Sprint-Tag-13 spaet): yfinance HTTP 404-Variante.
+# ============================================================
+
+def test_r_a44_drops_yfinance_http_404_quotesummary():
+    """Pattern aus PYTHON-FASTAPI-R: yfinance/Yahoo returnt HTTP 404 mit
+    JSON-Body {'quoteSummary':{'result':null,'error':...}}. R-A30-Patterns
+    deckten nur 'delisted'-Wortlaut, nicht HTTP-404-JSON-Variante."""
+    from app.sentry_setup import _is_noise
+    msg = 'HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found"}}}'
+    assert _is_noise(msg) is True
+
+
+def test_r_a44_drops_quotesummary_result_null_generic():
+    """Generic 'quoteSummary:{result:null' Pattern — matcht ALLE Yahoo-API
+    Variants die null-result returnen (auch ohne HTTP-404-Prefix)."""
+    from app.sentry_setup import _is_noise
+    msg = 'yfinance got "quoteSummary":{"result":null,"error":{"code":"Bad Request"}}'
+    assert _is_noise(msg) is True
+
+
+def test_r_a44_keeps_real_http_404_other_apis():
+    """HTTP 404 von anderen APIs (Polygon, Finnhub, IBKR REST) bleibt drin
+    — kein false-positive durch unsere generischere Pattern."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("HTTP Error 404: Polygon ticker not found") is False
+    assert _is_noise("Finnhub returned HTTP 404 for AAPL fundamentals") is False
+    assert _is_noise("IBKR REST API 404: invalid account") is False

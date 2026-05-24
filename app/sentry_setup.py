@@ -277,6 +277,14 @@ _SENTRY_NOISE_PATTERNS = (
     # Backup → kein Bot-Bug. Filter raus aus Sentry-Inbox.
     "possibly delisted; no price data found",
     "No data found for this date range, symbol may be delisted",
+    # R-A44 (24.05.2026 Sprint-Tag-13 spaet): yfinance HTTP 404-Variante.
+    # Pattern: 'HTTP Error 404: {"quoteSummary":{"result":null,"error":...}}'
+    # Trigger: Yahoo Finance API returnt 404 fuer einzelne Symbole (delisted,
+    # temp-Outage, tickr-typo). R-A30-Patterns deckten "delisted"-Wortlaut,
+    # aber nicht den HTTP-404-Variante mit JSON-Body.
+    # 2 generic Catches: HTTP Error 404 + quoteSummary-Response-Pattern.
+    "HTTP Error 404: {\"quoteSummary\"",
+    "quoteSummary\":{\"result\":null",
 )
 
 
