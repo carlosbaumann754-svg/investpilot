@@ -2399,7 +2399,13 @@ def _resolve_meta_for_id(instrument_id):
         return None
     # Direkt: etoro_id matcht
     for symbol, info in ASSET_UNIVERSE.items():
-        if int(info.get("etoro_id", -1)) == iid:
+        # R-A46 (25.05.2026 Sprint-Tag-14): defensive gegen etoro_id=None.
+        # Python-gotcha: dict.get(key, default) returnt None wenn Key existiert
+        # mit Value None — NICHT den Default. R-A45 hat Discovery-Backfill mit
+        # etoro_id=None gespeichert (SPOT/MRVL/STX/MU haben keine eToro-ID).
+        # Hier int(None) -> TypeError (67 Events in 6h Sentry-Spam).
+        # Fix: ".get(key) or -1" Pattern (None/0/Falsy -> -1).
+        if int(info.get("etoro_id") or -1) == iid:
             return info
     # IBKR-conId Reverse-Lookup
     try:
@@ -2409,7 +2415,8 @@ def _resolve_meta_for_id(instrument_id):
             if isinstance(entry, dict) and int(entry.get("conId", -1)) == iid:
                 etoro_id = int(etoro_id_str)
                 for symbol, info in ASSET_UNIVERSE.items():
-                    if int(info.get("etoro_id", -1)) == etoro_id:
+                    # R-A46: defensive vs etoro_id=None (siehe oben)
+                    if int(info.get("etoro_id") or -1) == etoro_id:
                         return info
     except Exception:
         pass
