@@ -38,7 +38,8 @@
 
 **W5 (Cutover-Woche, 25.-31.05.) — Final-Verify:**
 - [ ] **Mo 25.05. Memorial Day** — US-Markt zu, Bot pausiert via Holiday-Filter (= Test des Filter-Pfads)
-- [ ] **Di 26.05. — Cutover-Runbook-End-Check Tag 1** + Final-Backup gezogen: Doppelklick auf `investpilot_local_backups\Pull-BotState.cmd` (zieht `risk_state.json` + `brain_state.json` + `config.json` + `wfo_status.json` frisch vom VPS)
+- [ ] **R-A45 Discovery-Persist-Check** (26.05.2026): `data/discovered_universe_persist.json` enthaelt mindestens SPOT, MRVL, STX, MU (4 backfilled). Bei Container-Recreate am Cutover-Tag 15:01 werden diese automatisch ins ASSET_UNIVERSE re-merged (vorher gingen Discoveries beim Restart verloren).
+- [ ] **Di 26.05. — Cutover-Runbook-End-Check Tag 1** + Final-Backup gezogen: Doppelklick auf `investpilot_local_backups\Pull-BotState.cmd` (zieht `risk_state.json` + `brain_state.json` + `config.json` + `wfo_status.json` frisch vom VPS). T-2 (26.05.2026): Script-Encoding-Bug gefixt (UTF-8-BOM + Single-Quoted Format-Strings) — lief davor seit 06.05. mit ParserError.
 - [ ] **Mi-Do 27.-28.05. — Pre-Cutover-Freeze** (keine Code-Aenderungen mehr)
 - [ ] **Fr 29.05. — letzter Verify** (Hard-Gates 8/8, IBKR-Settlement bestaetigt, alle Auto-Crons gruen)
 - [ ] **Pytest-Suite-Daily-Check Mo-Fr 26.-29.05.** — `python -m pytest -q` muss jeden Tag gruen sein. Lehre aus 14.05.: WFO-Lock-Bug (5 silent Test-Failures) blieb 2 Tage unentdeckt. **Defensive:** taeglich um 09:00 lokal `cd investpilot && git pull && python -m pytest -q`. Bei FAIL: Cutover verschieben (NO-GO).
@@ -58,7 +59,7 @@
 | 5 | Backup von gestern Nacht da | /var/backups/investpilot/state_*.tar.gz frisch |
 | 6 | Trading-Toggle = ON | im Dashboard-Header gruen |
 | 7 | IBKR-Broker-Status = gruen | broker-badge im Header |
-| 8 | Test-Suite gruen | `ssh root@178.104.236.157 "cd /opt/investpilot && pytest -q"` — keine FAIL. Alternativ lokal nach `git pull` |
+| 8 | Test-Suite gruen | `ssh root@178.104.236.157 "cd /opt/investpilot && pytest -q"` — Erwartung **935+ passed, 0 failed, 0 errors** (Stand 26.05.2026 nach R-A47). Falls Test-Anzahl signifikant abweicht (<930) oder FAIL: Cutover verschieben. Alternativ lokal nach `git pull` |
 
 **Bei NO-GO:** Nicht switchen. Verschieben um 1 Woche.
 
@@ -167,6 +168,17 @@ docker logs ib-gateway --tail 50
 
 → Erwartung: "API server connected" innerhalb 60 Sek.
 
+**R-A40 (22.05.2026) — Auto-Recovery der orderStatusEvents:**
+
+Seit R-A40 re-subscribed der Bot nach jedem Reconnect **automatisch** zu `orderStatusEvent` (per-ib-Instanz-Idempotenz-Check via `id(ib)`). Falls du nach einem Reconnect im Order-Status-Tab "Pending seit Xh" siehst, obwohl die Trade-History "executed" zeigt: war pre-R-A40-Symptom, sollte nicht mehr auftreten. Falls doch:
+
+```bash
+ssh root@178.104.236.157
+docker logs investpilot 2>&1 | grep "E27 orderStatusEvent subscribed"
+```
+
+→ Muss bei jedem Reconnect eine neue Zeile mit `ib_id=...` loggen.
+
 ### 5.2 Reconciliation-Drift
 
 **Symptom:** Pushover "Reconciliation Drift — N Probleme".
@@ -244,6 +256,20 @@ curl -X POST https://bot.cbaumann.ch/api/alerts/test/pushover \
 - Pushover-App auf Handy: Settings → Sound check
 - pushover.net Account: Subscription aktiv?
 - API-Token in `data/config.json` korrekt
+
+### 5.6 Self-Test-FAIL bei US-Holiday-Weekends (R-A47 26.05.2026)
+
+**Symptom:** Dashboard zeigt Self-Test 15/16 mit `yfinance_freshness` FAIL "SPY-Last-Bar vor X.Yd" am Morgen nach US-Holidays (Memorial Day Ende Mai, Independence Day 04. Juli, Labor Day Anfang Sep, Thanksgiving Ende Nov, Christmas, New Year, etc.).
+
+**Diagnose:** Seit R-A47 ist der Check holiday-aware via `last_market_close_utc()`. Im `detail`-Text sollte "(holiday-aware)" stehen.
+
+- Wenn FAIL **mit** "(holiday-aware)": echtes stale, yfinance liefert seit >1 Trading-Day keine neuen Daten — pruefen ob yfinance-Service down ist, ggf. Pushover-INFO checken.
+- Wenn FAIL **ohne** "(holiday-aware)": R-A47-Code nicht deployed (alter Container), `docker compose up -d --build investpilot` ausreichend.
+- Wenn OK mit "(holiday-aware)" und `X.Yh hinter letztem US-Marktschluss`: alles normal, kein Eingriff.
+
+**Recovery:** Mit R-A47 ist FAIL bei Holiday-Weekends seit 26.05.2026 **nicht mehr moeglich** ausser yfinance liefert wirklich stale Daten. Bei echten Stale-Daten wuerde Bot's Scoring auf alten Werten basieren — Soft-Stop einlegen bis yfinance recovered (Telegram: `/api/admin/toggle/disable` oder Dashboard).
+
+**Naechste Long-Weekend-Probe nach Cutover:** Independence Day 03.-06.07.2026 (Fr+Sa+So+Mo) — erstes Mal mit Real-Money.
 
 ---
 
@@ -366,6 +392,7 @@ Der Bot skaliert die Anzahl paralleler Positionen automatisch mit dem Kapital-St
 |---|---|---|
 | v37bb | 30.04.2026 | Initial Cutover-Runbook |
 | v37cv-doc1 | 06.05.2026 | Polish (F1-F12): Pull-BotState-Refs (F3, F4), pytest-Pfad konkret (F2), Phase 1-2-3 Kill-Switch-Definition (F5), Pushover-Token-Quelle (F6), Network-Failure-Section 5.5a (F12), Dividenden + Steuer-Sections (F12), DST-Hinweis (F12), CH+UK-Hotline (F8), Cutover-Readiness-Card-Verweis (F7) |
+| v37j-R-A47 | 26.05.2026 | Sprint-Tag-15 Updates vor Pre-Cutover-Freeze: (1) Section 1 W5: R-A45 Discovery-Persist-Check + T-2 Pull-BotState-Bug-Fix-Hinweis. (2) Section 2 #8: Test-Count auf 935 explizit (war "keine FAIL"). (3) Section 5.1 IBKR-Disconnect: R-A40-Auto-Recovery-Pattern dokumentiert. (4) NEU Section 5.6: Self-Test-FAIL bei US-Holiday-Weekends (R-A47 holiday-aware). Audit der R-A40 bis R-A47 Items gegen Runbook ergab diese 5 Hard-Findings — alle heute eingebaut. Test-Suite-Stand bei Update: 935 passed. |
 
 **Naechste Updates** vor Cutover-Tag (01.06.) bei:
 - Neuen Failure-Modes die wir live entdecken
