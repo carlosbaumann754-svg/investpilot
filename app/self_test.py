@@ -446,6 +446,46 @@ def tc_discovery_freshness() -> TestResult:
                           severity="warning", category="scheduler")
 
 
+def _yfinance_bar_age_acceptable(last_bar_utc,
+                                  now_utc=None,
+                                  tolerance_hours: int = 24):
+    """R-A47 (26.05.2026 Sprint-Tag-15): Holiday-aware Freshness-Check.
+
+    Statt einer harten 4-Tage-Schwelle (alter Code) wird der erwartete
+    letzte US-Marktschluss via last_market_close_utc() berechnet, das ist
+    von Natur aus Holiday-aware (Memorial Day, Thanksgiving, etc.). Eine
+    Bar gilt als frisch wenn sie nicht mehr als 1 Trading-Day (24h)
+    hinter dem erwarteten letzten Marktschluss liegt (yfinance hat
+    gelegentlich Reporting-Lag).
+
+    Args:
+        last_bar_utc: timezone-aware datetime des letzten yfinance-Bars.
+        now_utc: aktuelle Zeit (Test-Injection erlaubt).
+        tolerance_hours: 24h Default = 1 Trading-Day Lücke akzeptiert.
+
+    Returns:
+        (ok: bool, msg: str) — ok=True wenn Bar frisch genug.
+    """
+    from datetime import datetime, timezone
+    from app.market_calendar import last_market_close_utc
+    now = now_utc or datetime.now(timezone.utc)
+    expected_close = last_market_close_utc(now_utc=now)
+    # expected_close ist naive UTC (laut docstring), last_bar_utc ist tz-aware
+    # -> harmonisieren auf tz-aware
+    if expected_close.tzinfo is None:
+        expected_close = expected_close.replace(tzinfo=timezone.utc)
+    delta_hours = (expected_close - last_bar_utc).total_seconds() / 3600
+    if delta_hours > tolerance_hours:
+        return False, (
+            f"SPY-Last-Bar {delta_hours:.1f}h hinter letztem US-Marktschluss "
+            f"(> {tolerance_hours}h Toleranz, holiday-aware) - stale Daten!"
+        )
+    return True, (
+        f"SPY-Last-Bar {delta_hours:.1f}h hinter letztem US-Marktschluss "
+        f"(fresh, holiday-aware)"
+    )
+
+
 def tc_yfinance_freshness() -> TestResult:
     """v37h Tab-Audit-Day-2 (12.05.2026, Q3-2): yfinance liefert frische Daten?
 
@@ -455,8 +495,13 @@ def tc_yfinance_freshness() -> TestResult:
     Hickup), wuerde Bot's Scoring auf alten Werten basieren ohne Warnung.
 
     Check: SPY (most-traded ETF) ueber yfinance laden, letzten Bar-Date
-    pruefen. Wenn > 4 Tage alt (=Wochenende + 1 Toleranz-Tag) -> FAIL +
-    Pushover-Alert via _log_close_failure-Pattern (siehe alerts.py).
+    gegen last_market_close_utc() pruefen (R-A47 holiday-aware).
+
+    R-A47 (26.05.2026): Wechsel von harter 4d-Schwelle auf Holiday-aware
+    Vergleich gegen erwarteten letzten US-Marktschluss. Vorher trat am Di
+    nach Memorial Day False-Positive auf (4.2d Lücke > 4d Toleranz, aber
+    war erwartete Holiday-Pause-Konstellation). Gleiche False-Positives
+    haetten Thanksgiving Fr-Morgen (~4.5d), Christmas, etc. produziert.
     """
     t0 = time.time()
     try:
@@ -467,7 +512,7 @@ def tc_yfinance_freshness() -> TestResult:
                           severity="warning", category="data",
                           duration_ms=int((time.time() - t0) * 1000))
     try:
-        from datetime import datetime, timezone, timedelta
+        from datetime import timezone
         ticker = yf.Ticker("SPY")
         hist = ticker.history(period="5d")
         if hist.empty:
@@ -481,17 +526,10 @@ def tc_yfinance_freshness() -> TestResult:
             last_bar = last_bar.to_pydatetime()
         if last_bar.tzinfo is None:
             last_bar = last_bar.replace(tzinfo=timezone.utc)
-        age_days = (datetime.now(timezone.utc) - last_bar).total_seconds() / 86400
-        # Toleranz: 4 Tage (Wochenende + Feiertag + 1 Tag Puffer)
-        if age_days > 4:
-            return TestResult("yfinance_freshness", False,
-                              f"SPY-Last-Bar vor {age_days:.1f}d (> 4d Toleranz)"
-                              f" - yfinance liefert stale Daten!",
-                              severity="critical", category="data",
-                              duration_ms=int((time.time() - t0) * 1000))
-        return TestResult("yfinance_freshness", True,
-                          f"SPY-Last-Bar vor {age_days:.1f}d (fresh)",
-                          severity="info", category="data",
+        ok, msg = _yfinance_bar_age_acceptable(last_bar)
+        return TestResult("yfinance_freshness", ok, msg,
+                          severity="info" if ok else "critical",
+                          category="data",
                           duration_ms=int((time.time() - t0) * 1000))
     except Exception as e:
         return TestResult("yfinance_freshness", False,
