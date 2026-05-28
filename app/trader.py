@@ -16,6 +16,39 @@ from app.broker_base import get_broker
 log = logging.getLogger("Trader")
 
 
+# R-A48 (28.05.2026 Sprint-Tag-17): Idempotenz-State fuer REGIME-HALT-Notifications.
+# Vor R-A48 feuerte alert_regime_halt() bei JEDEM Bot-Cycle (~5 Min) in dem
+# buy_allowed=False — bei mehrstuendigem HALT ~12 Pushes/h Cry-Wolf-Spam.
+# Plus: alert_regime_resumed() wurde NIRGENDWO aufgerufen (Recovery-Alert
+# fehlte komplett).
+# Fix: Modul-Level-State trackt letzten Halt-Zustand. Bei Container-Restart
+# resetted auf False — bewusst: nach Restart soll EIN Status-Recap-Alert
+# kommen wenn HALT noch aktiv (sonst blind nach Daily-Restart 05:15 UTC).
+_last_regime_halt_state = False
+
+
+def _classify_regime_state_change(current_halt_active: bool,
+                                   previous_halt_active: bool) -> str:
+    """R-A48: Idempotenz-Klassifikation fuer REGIME-HALT-Notifications.
+
+    Pure function — testbar ohne Bot-Context.
+
+    Args:
+        current_halt_active: True wenn HALT in diesem Cycle aktiv.
+        previous_halt_active: True wenn HALT im letzten Cycle aktiv war.
+
+    Returns:
+        "halt"    — neuer Wechsel False -> True: alert_regime_halt feuern.
+        "resumed" — Wechsel True -> False: alert_regime_resumed feuern.
+        "none"    — kein State-Change: nichts tun (Anti-Cry-Wolf).
+    """
+    if current_halt_active and not previous_halt_active:
+        return "halt"
+    if not current_halt_active and previous_halt_active:
+        return "resumed"
+    return "none"
+
+
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
     "purpose": "Trading-Engine: Buy/Sell-Loop, SL/TP-Exits, Trailing-SL, Time-Stop, Partial-Close, existing_symbols-Filter, Cooldown-Filter, R-A10 Symbol-Concentration-Hook",
@@ -1668,9 +1701,24 @@ def execute_scanner_trades(client, config, scan_results):
                             f"shape={vts.get('shape')} — Regime Halt aufgehoben")
                 regime_halt = False
                 ctx_multiplier *= vts_cfg.get("panic_dip_position_multiplier", 0.6)
-            elif al:
-                # Telegram: Regime Halt Notification
+
+        # R-A48 (28.05.2026 Sprint-Tag-17): Idempotente Notification.
+        # Push NUR bei State-Change (halt-on oder halt-off), nicht jeden Cycle.
+        # Vor R-A48: alle ~5 Min ein Pushover-Banner waehrend HALT (Cry-Wolf).
+        # Plus: Recovery-Alert (alert_regime_resumed) wurde nie gefeuert.
+        global _last_regime_halt_state
+        if al:
+            transition = _classify_regime_state_change(
+                current_halt_active=regime_halt,
+                previous_halt_active=_last_regime_halt_state,
+            )
+            if transition == "halt":
                 al.alert_regime_halt(regime_reason, regime_data)
+                log.info("  R-A48: REGIME-HALT-Alert gefeuert (State-Change off->on)")
+            elif transition == "resumed":
+                al.alert_regime_resumed()
+                log.info("  R-A48: REGIME-HALT-Recovery-Alert gefeuert (State-Change on->off)")
+        _last_regime_halt_state = regime_halt
 
     # Hedging: Bear-Regime Schutz
     hedge_result = {"hedge_needed": False}
