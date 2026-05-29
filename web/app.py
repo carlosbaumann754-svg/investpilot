@@ -4250,7 +4250,7 @@ async def api_position_correlations(user=Depends(require_auth)):
 async def api_regime(user=Depends(require_auth)):
     """Aktueller Regime-Status: VIX, Marktregime, Recovery Mode, Trading Halt."""
     try:
-        from app.market_context import get_current_context
+        from app.market_context import get_current_context, check_regime_filter
         from app.risk_manager import check_recovery_mode
         config = load_config()
         ctx = get_current_context()
@@ -4263,17 +4263,43 @@ async def api_regime(user=Depends(require_auth)):
 
         recovery_active, recovery_restrictions = check_recovery_mode(config)
 
+        # FIX (29.05.2026 Dashboard-Audit): Das Frontend (app.js) liest
+        # r.buy_allowed fuer das Regime-Filter-Badge (OK/BLOCKIERT) und
+        # r.trading_halted fuer den Halt-Status. Vorher lieferte dieser
+        # Endpoint buy_allowed GAR NICHT (-> undefined -> immer "OK") und
+        # trading_halted war NUR VIX>halt. Resultat: Card zeigte "OK/Nein"
+        # obwohl der kombinierte Regime-Filter (F&G + Yield-Curve + Markt-
+        # breite, Makro-Score) Kaeufe blockte. Jetzt: echten check_regime_
+        # filter() auswerten (gleiche Engine-Logik wie der Trader). Logger
+        # temporaer stummschalten gegen Log-Spam bei jedem Dashboard-Poll.
+        import logging as _logging
+        _mc_log = _logging.getLogger("MarketContext")
+        _prev_level = _mc_log.level
+        _mc_log.setLevel(_logging.ERROR)
+        try:
+            buy_allowed, regime_reason, _regime_data = check_regime_filter(config)
+        except Exception:
+            buy_allowed, regime_reason = True, ""
+        finally:
+            _mc_log.setLevel(_prev_level)
+
+        vix_halted = vix is not None and vix > vix_halt
         return {
             "vix_level": vix,
             "vix_regime": ctx.get("vix_regime", "unknown"),
             "market_regime": brain.get("market_regime", "unknown"),
             "fear_greed_index": ctx.get("fear_greed_index"),
             "fear_greed_class": ctx.get("fear_greed_class"),
-            "trading_halted": vix is not None and vix > vix_halt,
+            # trading_halted reflektiert jetzt den ECHTEN Block: VIX-Halt ODER
+            # kombinierter Regime-Filter-Block (nicht mehr nur VIX>halt).
+            "trading_halted": bool(vix_halted or (buy_allowed is False)),
             "vix_halt_threshold": vix_halt,
             "recovery_mode": recovery_active,
             "recovery_restrictions": recovery_restrictions if recovery_active else None,
             "regime_filter_enabled": rf.get("enabled", False),
+            # Frontend-Vertrag: buy_allowed -> Regime-Filter-Badge OK/BLOCKIERT
+            "buy_allowed": buy_allowed,
+            "regime_filter_reason": regime_reason if buy_allowed is False else None,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -5025,7 +5051,11 @@ async def api_cutover_readiness():
     import json as _json
     from pathlib import Path as _Path
 
-    cutover_date = _date(2026, 6, 1)  # v37h+2 (17.05.2026): verschoben von 28.05 auf 01.06 (Mo Cutover statt Do)
+    # 29.05.2026 Dashboard-Audit: verschoben von 01.06 auf 07.07 (Validierungs-
+    # Soak-Entscheidung — Cutover-Woche-Audit fand 4 latente Bugs/Tag + WFO-
+    # Baseline unrealistisch; ~5.5 Wochen Soak mit messbaren Exit-Kriterien).
+    # Historie: 28.05 -> 01.06 (v37h+2) -> 07.07 (Soak).
+    cutover_date = _date(2026, 7, 7)  # Di, nach Independence-Day-Weekend
     today = _dt.now(_tz.utc).date()
     days_to_cutover = (cutover_date - today).days
 

@@ -2256,7 +2256,7 @@ async function loadCashReserveStatus() {
     const pctInp = document.getElementById('cr-pct');
     if (!summaryEl) return;
     try {
-        const resp = await fetch('/api/cash_reserve/status');
+        const resp = await apiFetch('/api/cash_reserve/status');
         const s = await resp.json();
         if (s.error) {
             summaryEl.textContent = `❌ ${s.error}`;
@@ -2332,7 +2332,7 @@ async function cashReserveUpdate() {
         const payload = {};
         if (floor !== null) payload.floor_chf = floor;
         if (pct !== null) payload.pct = pct;
-        const resp = await fetch('/api/cash_reserve/update', {
+        const resp = await apiFetch('/api/cash_reserve/update', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload),
@@ -2366,7 +2366,7 @@ async function universeReset() {
     )) return;
     statusEl.textContent = 'läuft...';
     try {
-        const resp = await fetch('/api/universe/reset', {method: 'POST'});
+        const resp = await apiFetch('/api/universe/reset', {method: 'POST'});
         const r = await resp.json();
         if (r.status === 'ok') {
             statusEl.style.color = '#10b981';
@@ -2393,7 +2393,7 @@ async function loadBrokerStatus() {
     const el = document.getElementById('broker-badge');
     if (!el) return;
     try {
-        const resp = await fetch('/api/broker-status');
+        const resp = await apiFetch('/api/broker-status');
         const s = await resp.json();
         const broker = (s.broker || '?').toUpperCase();
         const mode = (s.mode || '').toUpperCase();
@@ -2822,7 +2822,7 @@ async function loadDataSources() {
  */
 async function loadCostModelStatus() {
     try {
-        const r = await fetch('/api/cost_model/status');
+        const r = await apiFetch('/api/cost_model/status');
         if (!r.ok) return;
         const data = await r.json();
         if (data.error) {
@@ -2982,7 +2982,7 @@ async function toggleEarningsExempt(symbol, addExempt) {
  */
 async function loadEarningsWatchlist() {
     try {
-        const r = await fetch('/api/earnings/watchlist');
+        const r = await apiFetch('/api/earnings/watchlist');
         if (!r.ok) return;
         const data = await r.json();
         if (data.error) return;
@@ -3054,7 +3054,7 @@ async function loadEarningsWatchlist() {
 
 async function loadCutoverReadiness() {
     try {
-        const r = await fetch('/api/cutover/readiness');
+        const r = await apiFetch('/api/cutover/readiness');
         if (!r.ok) return;
         const d = await r.json();
 
