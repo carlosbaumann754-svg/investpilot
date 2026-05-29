@@ -90,13 +90,19 @@ def save_persisted_discovery(symbol: str, asset_info: dict, score: float) -> boo
     for d in discoveries:
         if d.get("symbol") == symbol:
             return False  # bereits drin
-    # R-A46 (25.05.2026): etoro_id=None -> -1 normalisieren.
-    # Sonst crasht trader._resolve_meta_for_id beim int()-Cast (Python-gotcha:
-    # dict.get(key, default) returnt None wenn Value=None, nicht Default).
-    eid = asset_info.get("etoro_id")
+    # R-A46 (25.05.2026): id=None -> -1 normalisieren (sonst int()-Crash).
+    # R-B1 Phase 4b (29.05.2026): internal_id ist der semantisch korrekte
+    # Name. asset_info kann internal_id ODER (Legacy) etoro_id liefern.
+    # Persistiert wird BEIDES (Dual-Key) damit alte Reader (die noch etoro_id
+    # lesen) + neue (internal_id) beide funktionieren. Wert bleibt numerisch.
+    eid = asset_info.get("internal_id")
+    if eid is None:
+        eid = asset_info.get("etoro_id")
+    _norm_id = int(eid) if eid is not None else -1
     entry = {
         "symbol": symbol,
-        "etoro_id": int(eid) if eid is not None else -1,
+        "internal_id": _norm_id,
+        "etoro_id": _norm_id,  # Dual-Key fuer Backward-Compat (entfernt in 4d)
         "yf_symbol": asset_info.get("yf"),
         "asset_class": asset_info.get("class"),
         "name": asset_info.get("name"),
@@ -140,10 +146,16 @@ def merge_into_asset_universe(asset_universe: dict) -> int:
         sym = d.get("symbol")
         if not sym or sym in asset_universe:
             continue  # schon drin, skip
-        # R-A46: etoro_id default -1 (NICHT None) damit trader.py
-        # int()-Cast nicht crasht.
+        # R-A46: id default -1 (NICHT None) damit trader.py int()-Cast nicht
+        # crasht. R-B1 Phase 4b: internal_id bevorzugt (Legacy-Files haben
+        # nur etoro_id -> Fallback). Dual-Key ins ASSET_UNIVERSE.
+        _pid = d.get("internal_id")
+        if _pid is None:
+            _pid = d.get("etoro_id")
+        _pid = _pid if _pid is not None else -1
         asset_universe[sym] = {
-            "etoro_id": d.get("etoro_id") if d.get("etoro_id") is not None else -1,
+            "internal_id": _pid,
+            "etoro_id": _pid,  # Dual-Key (entfernt in 4d)
             "yf": d.get("yf_symbol"),
             "class": d.get("asset_class"),
             "name": d.get("name"),
