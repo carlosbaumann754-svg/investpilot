@@ -644,6 +644,25 @@ def check_regime_filter(config=None):
     Bewertet die aktuelle Marktlage anhand mehrerer Indikatoren
     und blockiert neue BUY-Trades bei unguenstigen Bedingungen.
 
+    === SCHICHT A von 3 (Regime-Architektur, Stand 29.05.2026) ===
+    Es gibt DREI Regime-Schichten, die sich alle den Config-Block
+    `regime_filter` teilen, aber DISJUNKTE Keys lesen:
+      * Schicht A (HIER): harte GO/NO-GO-Sperre. Liest *_threshold-Keys
+        (vix_crisis/caution_threshold, fear_greed_crisis/fear_threshold,
+        combined_score_threshold). Blockiert BUYs komplett wenn Score
+        <= combined_score_threshold.
+      * Schicht B: app/market_scanner.py — weiche Punkt-Abzuege je
+        Kandidat. Liest *_score_penalty-Keys (bear/sideways/high_fear/
+        elevated). Macht riskante Kandidaten unattraktiver, blockt nicht.
+      * Schicht C: web/app.py — Dashboard-VIX-Halt-Badge. Liest
+        vix_halt_threshold.
+    WICHTIG: Fehlt ein Key in der Config, greift der `.get(key, default)`-
+    Fallback unten (Code-Default). Die LAUFZEIT-Config ist
+    data/config.json (host-gemountet, NIE committen — sonst bricht
+    `git pull --ff-only` auf dem VPS). Die root-config.json wird NICHT
+    geladen (Altlast). Seit 29.05. sind alle Schicht-A-Keys explizit in
+    data/config.json (auf Default-Werten) -> sichtbar + tunebar.
+
     Returns:
         tuple: (buy_allowed: bool, reason: str, regime_data: dict)
     """

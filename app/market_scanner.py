@@ -646,6 +646,12 @@ def score_asset(analysis, use_ml=False):
         score *= 0.9  # Hohe Volatilitaet = etwas weniger Vertrauen
 
     # Regime Filter: Score-Penalties basierend auf VIX und Marktregime
+    # === SCHICHT B von 3 (Regime-Architektur) ===
+    # Weiche Punkt-Abzuege je Kandidat (blockt NICHT, macht nur
+    # unattraktiver). Liest die *_score_penalty-Keys aus dem geteilten
+    # Config-Block `regime_filter`. Die harte GO/NO-GO-Sperre ist
+    # Schicht A in app/market_context.py::check_regime_filter() und liest
+    # die *_threshold-Keys (disjunkt!). Details: dortige Docstring.
     try:
         from app.config_manager import load_config, load_json
         cfg = load_config()
