@@ -43,6 +43,15 @@ DEFAULT_LOOKBACK_DAYS = 30           # Live-Sharpe ueber letzte 30 Trade-Tage
 DEFAULT_DRIFT_THRESHOLD_PCT = 30.0   # > 30% Sharpe-Decay -> Alert
 DEFAULT_MIN_TRADES = 10              # weniger Trades = nicht-aussagekraeftig
 DEFAULT_ALERT_THROTTLE_HOURS = 24    # max 1 Alert pro Tag
+# R-A53 (29.05.2026 Sprint-Tag-18): Min-Clean-Sample-Guard. Eine daily-
+# annualisierte Sharpe braucht GENUEGEND DISTINKTE Trading-Tage um aussage-
+# kraeftig zu sein — NICHT nur genug Trades. Beispiel 29.05.: 116 Trades
+# (> min_trades=10), aber durch Regime-HALT auf wenige Tage konzentriert +
+# HALT-gestoertes Fenster → daily-Sharpe statistisch unzuverlaessig. Ohne
+# diesen Guard wuerde der Watchdog waehrend der ganzen Soak-Phase taeglich
+# -175% Drift melden (Cry-Wolf). 10 distinkte Tage = grobe Mindestbasis fuer
+# eine daily-Sharpe-Schaetzung.
+DEFAULT_MIN_DISTINCT_DAYS = 10
 
 
 def _get_wfo_target_sharpe() -> Optional[float]:
@@ -176,6 +185,38 @@ def _compute_live_sharpe(trade_history: list, lookback_days: int) -> tuple[Optio
     return annualized_sharpe, n
 
 
+def _count_distinct_trading_days(trade_history: list, lookback_days: int) -> int:
+    """R-A53 (29.05.2026): Anzahl DISTINKTER Kalender-Tage mit Close-Trades
+    im Lookback-Fenster.
+
+    Guard-Metrik gegen unzuverlaessige daily-Sharpe: viele Trades auf wenigen
+    Tagen (z.B. Regime-HALT-gestoertes Fenster) ist statistisch nicht
+    aussagekraeftig. Pure-Function, testbar.
+    """
+    if not trade_history:
+        return 0
+    cutoff = datetime.now() - timedelta(days=lookback_days)
+    days: set[str] = set()
+    for t in trade_history:
+        action = (t.get("action") or "").upper()
+        if not any(s in action for s in (
+                "CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")):
+            continue
+        ts_str = t.get("timestamp")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+            if ts.tzinfo is not None:
+                ts = ts.replace(tzinfo=None)
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        days.add(ts.strftime("%Y-%m-%d"))
+    return len(days)
+
+
 def _load_alert_state() -> dict:
     try:
         from app.config_manager import load_json
@@ -214,6 +255,7 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
     lookback_days = int(cfg.get("lookback_days", DEFAULT_LOOKBACK_DAYS))
     threshold_pct = float(cfg.get("drift_threshold_pct", DEFAULT_DRIFT_THRESHOLD_PCT))
     min_trades = int(cfg.get("min_trades", DEFAULT_MIN_TRADES))
+    min_distinct_days = int(cfg.get("min_distinct_days", DEFAULT_MIN_DISTINCT_DAYS))  # R-A53
     throttle_h = float(cfg.get("alert_throttle_hours", DEFAULT_ALERT_THROTTLE_HOURS))
     enabled = bool(cfg.get("enabled", True))  # Default ON
 
@@ -248,6 +290,26 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
     result["n_trades"] = n
     if live_sharpe is None or n < min_trades:
         result["skip_reason"] = f"Zu wenig Trades (n={n}, min={min_trades})"
+        return result
+
+    # R-A53 (29.05.2026): Min-Clean-Sample-Guard. Genug Trades reicht nicht —
+    # die daily-annualisierte Sharpe braucht genug DISTINKTE Trading-Tage.
+    # HALT-gestoerte Fenster (viele Trades, wenige Tage) sind unzuverlaessig.
+    # Ohne diesen Guard wuerde -175% Drift taeglich feuern waehrend Soak.
+    distinct_days = _count_distinct_trading_days(trade_history, lookback_days)
+    result["distinct_days"] = distinct_days
+    if distinct_days < min_distinct_days:
+        result["live_sharpe"] = round(live_sharpe, 3)
+        result["skip_reason"] = (
+            f"Zu wenig distinkte Trading-Tage (days={distinct_days}, "
+            f"min={min_distinct_days}) — Sample statistisch unzuverlaessig "
+            f"(HALT-gestoert?), kein Drift-Alert"
+        )
+        log.info(
+            "WFO-Drift R-A53: skip Alert — nur %d distinkte Tage (<%d), "
+            "live_sharpe=%.2f nicht aussagekraeftig",
+            distinct_days, min_distinct_days, live_sharpe,
+        )
         return result
     result["live_sharpe"] = round(live_sharpe, 3)
 
