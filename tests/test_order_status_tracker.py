@@ -347,13 +347,16 @@ def test_recover_marks_old_pending_as_stale(fresh_tracker):
 def test_recover_skips_recent_pending_without_ibkr_match(fresh_tracker):
     """Junge pending Order (<48h) bleibt unveraendert, NICHT staled."""
     tracker, storage = fresh_tracker
-    storage["trade_history.json"] = [{"symbol": "X", "order_id": 999}]
+    # R-A49: status="submitted" -> Helper schliesst aus (= nicht executed),
+    # damit der Stale-Pfad geprueft wird wie vor R-A49.
+    storage["trade_history.json"] = [{"symbol": "X", "order_id": 999, "status": "submitted"}]
     tracker.register(order_id=999, trade_entry={"symbol": "X", "order_id": 999})
     # registered_at = "jetzt" (default)
 
     ib = MagicMock()
     ib.openTrades.return_value = []
     ib.trades.return_value = []
+    ib.completedOrders.return_value = []  # R-A49
 
     stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
     assert stats["staled"] == 0
@@ -367,7 +370,8 @@ def test_recover_stale_threshold_configurable(fresh_tracker):
     from datetime import datetime, timezone, timedelta
 
     tracker, storage = fresh_tracker
-    storage["trade_history.json"] = [{"symbol": "Y", "order_id": 777}]
+    # R-A49: status="submitted" -> nicht executed -> Stale-Pfad greift
+    storage["trade_history.json"] = [{"symbol": "Y", "order_id": 777, "status": "submitted"}]
     tracker.register(order_id=777, trade_entry={"symbol": "Y", "order_id": 777})
 
     pending = storage["pending_orders.json"]["pending"]
@@ -378,6 +382,7 @@ def test_recover_stale_threshold_configurable(fresh_tracker):
     ib = MagicMock()
     ib.openTrades.return_value = []
     ib.trades.return_value = []
+    ib.completedOrders.return_value = []  # R-A49
 
     stats = tracker.recover_from_ibkr(ib, stale_after_hours=1)
     assert stats["staled"] == 1

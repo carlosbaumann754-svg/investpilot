@@ -41,6 +41,67 @@ IBKR_FINAL_STATUSES = {
     "Stale",  # v37e Tag 3: Custom-Status fuer no-match-after-bot-offline
 }
 
+# R-A49 (29.05.2026 Sprint-Tag-18): Pure-Function Helper fuer Triple-Source-
+# Recovery. Wird in recover_from_ibkr() genutzt um pending Orders gegen Bot's
+# eigene trade_history.json zu cross-referenzieren — Defense-in-Depth-Layer
+# falls IBKR-Server-Side-Quellen (openTrades + completedOrders) die Order
+# bereits archiviert haben oder ein orderStatusEvent zwischen Fill und Bot-
+# Reconnect verloren ging.
+# R-A49: Trade-Status-Strings die signalisieren "Order ist noch NICHT final
+# executed" — diese Trades werden bei der Cross-Ref aus pending_orders ausge-
+# schlossen. Beispiel: ein Trade-Entry mit status="submitted" wurde geloggt
+# (Submit erfolgreich) aber IBKR hat noch keinen Fill bestaetigt — wenn die
+# Order in pending_orders.json hängt, ist sie genau in dem Zustand wo sie der
+# Cross-Ref-Layer NICHT als "schon executed" markieren darf.
+# Trades OHNE status-Feld (Legacy + manche SCANNER_BUY-Logs) werden als
+# executed gewertet — Bot's eigener Logging-Layer schreibt sie nur nach
+# tatsaechlicher Execution.
+_R_A49_NON_EXECUTED_STATUSES = {
+    "submitted", "presubmitted", "pendingsubmit", "pendingcancel",
+    "apipending", "stale", "rejected", "cancelled", "apicancelled",
+    "inactive", "failed",
+}
+
+
+def _executed_order_ids_from_trade_history(trade_history) -> set[str]:
+    """R-A49: extrahiere Order-IDs aus trade_history.json (as string).
+
+    Pure function — testbar ohne IBKR-Mock.
+
+    Filter: Trades deren `status` (case-insensitive) in
+    `_R_A49_NON_EXECUTED_STATUSES` ist, werden ausgeschlossen — sie sind
+    eingeloggt aber noch nicht final filled, also kein gueltiges Recovery-
+    Signal.
+
+    Args:
+        trade_history: list[dict] (oder dict mit "trades"-Key). Jeder Trade
+            kann order_id-Feld haben (int oder str).
+
+    Returns:
+        set[str] der order_ids die in der Trade-History als EXECUTED stehen.
+        Alle als str normalisiert fuer konsistenten Lookup gegen
+        pending_orders.json keys (die auch str sind).
+    """
+    if isinstance(trade_history, dict):
+        trades = trade_history.get("trades", [])
+    elif isinstance(trade_history, list):
+        trades = trade_history
+    else:
+        return set()
+    out: set[str] = set()
+    for t in trades:
+        if not isinstance(t, dict):
+            continue
+        # R-A49 Filter: non-final status -> nicht als executed werten
+        status_val = (t.get("status") or "").lower()
+        if status_val in _R_A49_NON_EXECUTED_STATUSES:
+            continue
+        oid = t.get("order_id") or t.get("id")
+        if oid is not None and str(oid).strip() and str(oid) != "-":
+            out.add(str(oid))
+    return out
+
+
 # Fuer Tracking aktive Statuses (= weiter beobachten)
 IBKR_PENDING_STATUSES = {
     "Submitted",
@@ -199,11 +260,35 @@ class OrderStatusTracker:
         resolved_count = 0
         staled_count = 0
 
+        # R-A49 (29.05.2026 Sprint-Tag-18): Triple-Source Recovery.
+        # Vor R-A49 checkte nur openTrades + trades. Wenn IBKR die Order
+        # nach Fill bereits in completedOrders verschoben hatte (eine Stunde
+        # oder mehr nach Fill ueblich), war sie weder in openTrades noch
+        # trades → no-match → Order blieb stale in pending_orders.json bis
+        # >48h alt. Symptom: 9-12 Pending-Orders die laengst executed waren,
+        # Dashboard zeigte sie als "PendingSubmit" tagelang.
+        # Fix: erweitere current_trades um completedOrders() + fallback auf
+        # Bot's trade_history.json wenn IBKR alle Quellen leer (z.B. nach
+        # mehrtaegigem Bot-Offline und IBKR-Session-Wipe).
+        completed_count_log = 0
         try:
             ib.reqAllOpenOrders()
             ib.sleep(1.0)
             current_trades = list(ib.openTrades() or [])
             current_trades += list(ib.trades() or [])
+            # R-A49 Stufe 2: completedOrders (Filled-Orders die IBKR aus
+            # active-list bereits archiviert hat — typisch >5min nach Fill).
+            try:
+                ib.reqCompletedOrders(apiOnly=False)
+                ib.sleep(1.0)
+                completed = list(ib.completedOrders() or [])
+                completed_count_log = len(completed)
+                # completedOrders liefert OrderStatus-Objekte, aber wir
+                # brauchen Trade-aehnliche-Schnittstelle. completedOrders
+                # gibt eigentlich Trade-Objekte mit orderStatus zurueck.
+                current_trades += completed
+            except Exception as e:
+                log.warning("E27 recover R-A49: completedOrders() fetch failed: %s", e)
         except Exception as e:
             log.warning("E27 recover: IBKR fetch failed: %s", e)
             return {"resolved": 0, "staled": 0, "still_pending": 0}
@@ -219,6 +304,25 @@ class OrderStatusTracker:
             except Exception:
                 continue
 
+        # R-A49 Stufe 3: lade Bot's eigene Trade-History als zweite
+        # Wahrheitsquelle. Wenn Order-ID dort gefunden -> als Filled
+        # markieren (Trade-History wird nur bei tatsaechlicher Execution
+        # geschrieben). Defensiver Fallback gegen IBKR-Session-Wipe.
+        try:
+            from app.config_manager import load_json
+            trade_history_data = load_json("trade_history.json") or []
+            executed_in_history = _executed_order_ids_from_trade_history(trade_history_data)
+        except Exception as e:
+            log.warning("E27 recover R-A49: trade_history.json load failed: %s", e)
+            executed_in_history = set()
+
+        log.info(
+            "E27 recover R-A49: IBKR open=%d completed=%d, trade_history executed=%d",
+            len(current_trades) - completed_count_log, completed_count_log,
+            len(executed_in_history),
+        )
+
+        history_matched_count = 0
         now = datetime.now(timezone.utc)
         stale_threshold = now - timedelta(hours=stale_after_hours)
 
@@ -227,7 +331,7 @@ class OrderStatusTracker:
                 if entry.get("current_status") in IBKR_FINAL_STATUSES:
                     continue
 
-                # 1. IBKR-Match -> normal resolve
+                # 1. IBKR-Match (openTrades + trades + completedOrders) -> normal resolve
                 if key in ibkr_order_ids:
                     matching_trade = ibkr_trade_by_id[key]
                     try:
@@ -239,7 +343,19 @@ class OrderStatusTracker:
                         continue
                     continue
 
-                # 2. Kein IBKR-Match -> Stale-Check
+                # 2. R-A49: trade_history-Match -> als Filled markieren.
+                # Bot's eigene History sagt: diese Order ist executed.
+                # Wir markieren als Filled (Final-Status) damit Stale-Marker
+                # NICHT mehr triggert und Dashboard sauber wird.
+                if key in executed_in_history:
+                    entry["current_status"] = "Filled"
+                    entry["resolved_at"] = now.isoformat()
+                    entry["resolved_by"] = "R-A49-trade-history-cross-ref"
+                    history_matched_count += 1
+                    resolved_count += 1
+                    continue
+
+                # 3. Kein Match nirgendwo -> Stale-Check
                 registered_at_str = entry.get("registered_at")
                 if not registered_at_str:
                     continue
@@ -251,9 +367,21 @@ class OrderStatusTracker:
                     continue
 
                 if registered_at < stale_threshold:
-                    # Pending Order ist alt + nicht in IBKR -> stale-Marker
+                    # Pending Order ist alt + nicht in IBKR + nicht in History -> stale-Marker
                     self._mark_stale(key, entry)
                     staled_count += 1
+
+        if history_matched_count:
+            log.info(
+                "E27 recover R-A49: %d Orders via trade_history-Cross-Ref aufgeloest",
+                history_matched_count,
+            )
+            # Persist nach trade_history-resolves (sonst geht der status="Filled"
+            # bei Container-Restart verloren).
+            try:
+                self._save_state()
+            except Exception as e:
+                log.warning("E27 recover R-A49: save_state failed: %s", e)
 
         still_pending = self.get_pending_count()
         log.info(

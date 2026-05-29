@@ -255,13 +255,17 @@ def test_recovery_pending_order_NOT_in_ibkr_history(stress_tracker):
       C) Status auf 'cancelled' annehmen (konservativ) + cleanup-faehig
     """
     tracker, storage = stress_tracker
-    storage["trade_history.json"] = [{"symbol": "OLD", "order_id": 999}]
+    # R-A49: KEIN order_id in trade_history (Bot war >24h offline, IBKR session-
+    # history gewiped, Bot's eigene trade_history kennt diese Order auch nicht).
+    # Mit order_id wuerde R-A49 die Order als 'executed' resolven (anderer Test-Pfad).
+    storage["trade_history.json"] = [{"symbol": "OLD"}]
     tracker.register(order_id=999, trade_entry={"symbol": "OLD", "order_id": 999})
 
     # IBKR weiss nichts von der Order
     ib = MagicMock()
     ib.openTrades.return_value = []
     ib.trades.return_value = []
+    ib.completedOrders.return_value = []  # R-A49: completedOrders ebenfalls leer
 
     # v37e Tag 3 (Strategie B — stale-Marker): Order ist gerade-eben registered,
     # also <48h alt -> NOCH NICHT staled. Eintrag bleibt pending.
@@ -290,7 +294,8 @@ def test_stale_marker_triggers_pushover(stress_tracker, monkeypatch):
     from datetime import datetime, timezone, timedelta
 
     tracker, storage = stress_tracker
-    storage["trade_history.json"] = [{"symbol": "STALEX", "order_id": 555}]
+    # R-A49: KEIN order_id in trade_history (Order ist stale, nicht executed)
+    storage["trade_history.json"] = [{"symbol": "STALEX"}]
 
     # Order registrieren, dann registered_at auf 49h backdate (>48h Schwelle)
     tracker.register(order_id=555, trade_entry={"symbol": "STALEX", "order_id": 555})
@@ -312,6 +317,7 @@ def test_stale_marker_triggers_pushover(stress_tracker, monkeypatch):
     ib = MagicMock()
     ib.openTrades.return_value = []
     ib.trades.return_value = []
+    ib.completedOrders.return_value = []  # R-A49
 
     stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
 
@@ -335,7 +341,8 @@ def test_stale_marker_pushover_failure_does_not_break(stress_tracker, monkeypatc
     from datetime import datetime, timezone, timedelta
 
     tracker, storage = stress_tracker
-    storage["trade_history.json"] = [{"symbol": "PUSHFAIL", "order_id": 777}]
+    # R-A49: KEIN order_id in trade_history (Stale-Test-Setup)
+    storage["trade_history.json"] = [{"symbol": "PUSHFAIL"}]
     tracker.register(order_id=777, trade_entry={"symbol": "PUSHFAIL", "order_id": 777})
     backdated = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
     tracker._pending["777"]["registered_at"] = backdated
@@ -349,15 +356,21 @@ def test_stale_marker_pushover_failure_does_not_break(stress_tracker, monkeypatc
     ib = MagicMock()
     ib.openTrades.return_value = []
     ib.trades.return_value = []
+    ib.completedOrders.return_value = []  # R-A49
 
     # Soll NICHT crashen
     stats = tracker.recover_from_ibkr(ib, stale_after_hours=48)
     assert stats["staled"] == 1
 
-    # trade_history.json wurde trotz Pushover-Fail aktualisiert
-    history = storage.get("trade_history.json", [])
-    assert any(t.get("status") == "stale" for t in history), \
-        "Stale-Status muss persistieren auch bei Pushover-Failure"
+    # R-A49: Resilience-Pattern — Stale-Status persistiert in pending_orders.json
+    # auch wenn Pushover failed. (Vor R-A49 wurde gegen trade_history.json
+    # gecheckt, aber das setzt voraus dass order_id im trade_history-Setup
+    # existiert — was R-A49-Helper als 'executed' faelschlich resolven wuerde.
+    # Semantisch klarer: Stale-Marker MUSS in pending_orders.json sichtbar sein
+    # damit Bot's nuechster Cycle (Tracker2) den Status erkennt.)
+    pending = storage.get("pending_orders.json", {}).get("pending", {})
+    assert pending.get("777", {}).get("current_status") == "Stale", \
+        "Stale-Status muss in pending_orders persistieren auch bei Pushover-Failure"
 
 
 def test_stale_marker_persists_across_instances_no_pushover_spam(monkeypatch):
@@ -382,7 +395,8 @@ def test_stale_marker_persists_across_instances_no_pushover_spam(monkeypatch):
                         lambda fn, data: storage.__setitem__(fn, data))
     monkeypatch.setattr("app.config_manager.load_json",
                         lambda fn: storage.get(fn))
-    storage["trade_history.json"] = [{"symbol": "STUCK", "order_id": 122}]
+    # R-A49: KEIN order_id in trade_history (Cross-Instance Stale-Test)
+    storage["trade_history.json"] = [{"symbol": "STUCK"}]
 
     pushover_calls = []
     monkeypatch.setattr("app.alerts.send_pushover",
@@ -397,6 +411,7 @@ def test_stale_marker_persists_across_instances_no_pushover_spam(monkeypatch):
     ib = MagicMock()
     ib.openTrades.return_value = []
     ib.trades.return_value = []
+    ib.completedOrders.return_value = []  # R-A49
 
     stats1 = t1.recover_from_ibkr(ib, stale_after_hours=48)
     assert stats1["staled"] == 1, "Tracker1: Stale-Marker haette greifen muessen"
