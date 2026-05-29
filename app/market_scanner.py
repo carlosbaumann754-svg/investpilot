@@ -164,9 +164,49 @@ ASSET_UNIVERSE = {
 NO_INSTRUMENT_ID = -1
 
 
+# ============================================================
+# R-B1 Phase 4 (29.05.2026 Soak): Naming-Cleanup etoro_id -> internal_id
+# ============================================================
+# Strangler-Transition: Entries tragen BEIDE Keys (internal_id + etoro_id,
+# gleicher Wert). Neuer Code liest internal_id (via _meta_internal_id),
+# alter Code liest weiter etoro_id. So ist das System an JEDEM Migrations-
+# Zwischenstand lauffaehig (kein halb-fertiger-Rename-Bug). etoro_id wird
+# in finaler Phase entfernt wenn alle 136 Read-Sites migriert sind.
+# 'internal_id' = semantisch korrekt (stabiler interner Identifier, NICHT
+# eToro-spezifisch; Bot handelt rein ueber IBKR seit v36).
+
+def _meta_internal_id(meta: dict):
+    """R-B1 Phase 4: Single-Source-Accessor fuer die interne Instrument-ID
+    aus einem ASSET_UNIVERSE-Meta-Dict. Liest internal_id, faellt auf
+    etoro_id zurueck (Transition + persistierte Legacy-Entries). R-A46-
+    defensive: None/0/Falsy -> NO_INSTRUMENT_ID."""
+    if not meta:
+        return NO_INSTRUMENT_ID
+    return int(meta.get("internal_id") or meta.get("etoro_id") or NO_INSTRUMENT_ID)
+
+
+def _ensure_internal_ids(universe: dict = None) -> int:
+    """R-B1 Phase 4: Dual-Key-Shim. Setzt internal_id = etoro_id fuer alle
+    Entries die noch kein internal_id haben. Idempotent. Wird nach dem
+    ASSET_UNIVERSE-Literal UND nach dem Boot-Merge der Discoveries
+    aufgerufen. Returns Anzahl ergaenzter Entries."""
+    u = universe if universe is not None else ASSET_UNIVERSE
+    added = 0
+    for meta in u.values():
+        if "internal_id" not in meta and "etoro_id" in meta:
+            meta["internal_id"] = meta["etoro_id"]
+            added += 1
+    return added
+
+
+# Direkt nach dem Literal anwenden (Discovery-Boot-Merge ruft es erneut).
+_ensure_internal_ids(ASSET_UNIVERSE)
+
+
 def instrument_id_for_symbol(symbol: str):
-    """R-B1: Liefert die interne instrument_id (historisch etoro_id) fuer ein
-    Bot-Symbol. Liest live aus ASSET_UNIVERSE (inkl. Boot-gemergte Discoveries).
+    """R-B1: Liefert die interne instrument_id (internal_id, historisch
+    etoro_id) fuer ein Bot-Symbol. Liest live aus ASSET_UNIVERSE (inkl.
+    Boot-gemergte Discoveries).
 
     Returns int instrument_id, oder NO_INSTRUMENT_ID (-1) wenn unbekannt/keine
     Broker-ID (Discovery-Assets ohne eToro-ID). Defensive gegen None (R-A46).
@@ -174,8 +214,7 @@ def instrument_id_for_symbol(symbol: str):
     meta = ASSET_UNIVERSE.get(symbol)
     if not meta:
         return NO_INSTRUMENT_ID
-    # R-A46-Gotcha: .get(k) or default (None/0 -> default)
-    return int(meta.get("etoro_id") or NO_INSTRUMENT_ID)
+    return _meta_internal_id(meta)
 
 
 def symbol_for_instrument_id(instrument_id):
@@ -195,7 +234,7 @@ def symbol_for_instrument_id(instrument_id):
     if iid == NO_INSTRUMENT_ID:
         return None
     for sym, meta in ASSET_UNIVERSE.items():
-        if int(meta.get("etoro_id") or NO_INSTRUMENT_ID) == iid:
+        if _meta_internal_id(meta) == iid:
             return sym
     return None
 
@@ -209,7 +248,7 @@ def build_broker_id_map() -> dict:
     Map-Ebene, dann ist der Bot vollstaendig broker-agnostisch.
     """
     return {
-        sym: int(meta.get("etoro_id") or NO_INSTRUMENT_ID)
+        sym: _meta_internal_id(meta)
         for sym, meta in ASSET_UNIVERSE.items()
     }
 
@@ -1117,6 +1156,9 @@ try:
     _merged = merge_into_asset_universe(ASSET_UNIVERSE)
     if _merged:
         log.info(f"R-A45 Boot: {_merged} persisted Discoveries ins ASSET_UNIVERSE reloaded")
+    # R-B1 Phase 4: Boot-gemergte Discovery-Entries auch mit internal_id
+    # versehen (Dual-Key-Konsistenz).
+    _ensure_internal_ids(ASSET_UNIVERSE)
 except Exception as _e:
     # Non-fatal: Bot soll auch ohne discovery-persist hochfahren
     log.warning(f"R-A45 Boot-Merge failed (non-fatal): {_e}")
