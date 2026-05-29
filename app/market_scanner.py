@@ -140,6 +140,81 @@ ASSET_UNIVERSE = {
 
 
 # ============================================================
+# R-B1 (29.05.2026 Soak-Phase): Broker-ID-Abstraktion (Phase 1 Foundation)
+# ============================================================
+# Migration-Schuld aus eToro-Aera: das ASSET_UNIVERSE traegt eine "etoro_id",
+# obwohl der Bot seit v36 ausschliesslich ueber IBKR handelt. Die etoro_id
+# wird intern als instrument_id durchgereicht (client.buy, trade_history,
+# Cooldown-Keys, Position-Matching).
+#
+# R-B1 Ziel: Symbol als logischer Primary-Key, Broker-IDs als Adapter-Layer.
+# PHASE 1 (hier, ADDITIV, zero behavior change): zentrale Mapping-Helfer
+# einfuehren OHNE bestehende Aufrufer zu aendern. Spaetere Phasen migrieren
+# Call-Sites schrittweise auf symbol-basierte Lookups.
+#
+# WICHTIG: Die Werte (Zahlen) bleiben identisch (AAPL bleibt 6408) → KEINE
+# Migration persistierter Daten (trade_history instrument_id, Cooldown-Keys
+# bleiben gueltig). Nur die *konzeptionelle* Quelle wird ein Adapter-Layer.
+#
+# 'internal_id' ist die semantisch korrekte Bezeichnung (stabiler interner
+# Identifier, historisch == etoro_id). Naming-Cleanup etoro_id->internal_id
+# folgt in spaeterer Phase mit Backward-Compat.
+
+# Sentinel fuer Assets ohne bekannte Broker-ID (R-A46: SPOT/MRVL/STX/MU)
+NO_INSTRUMENT_ID = -1
+
+
+def instrument_id_for_symbol(symbol: str):
+    """R-B1: Liefert die interne instrument_id (historisch etoro_id) fuer ein
+    Bot-Symbol. Liest live aus ASSET_UNIVERSE (inkl. Boot-gemergte Discoveries).
+
+    Returns int instrument_id, oder NO_INSTRUMENT_ID (-1) wenn unbekannt/keine
+    Broker-ID (Discovery-Assets ohne eToro-ID). Defensive gegen None (R-A46).
+    """
+    meta = ASSET_UNIVERSE.get(symbol)
+    if not meta:
+        return NO_INSTRUMENT_ID
+    # R-A46-Gotcha: .get(k) or default (None/0 -> default)
+    return int(meta.get("etoro_id") or NO_INSTRUMENT_ID)
+
+
+def symbol_for_instrument_id(instrument_id):
+    """R-B1: Reverse-Lookup interne instrument_id -> Bot-Symbol.
+
+    Ermoeglicht symbol-basierte Logik OHNE persistierte instrument_ids zu
+    migrieren (alte trade_history/Cooldown-Eintraege mit etoro_id-Werten
+    bleiben aufloesbar). Returns symbol-str oder None wenn kein Match.
+
+    Sentinel-IDs (-1) werden NICHT gematcht (mehrere Discovery-Assets teilen
+    -1 → kein eindeutiges Symbol).
+    """
+    try:
+        iid = int(instrument_id)
+    except (TypeError, ValueError):
+        return None
+    if iid == NO_INSTRUMENT_ID:
+        return None
+    for sym, meta in ASSET_UNIVERSE.items():
+        if int(meta.get("etoro_id") or NO_INSTRUMENT_ID) == iid:
+            return sym
+    return None
+
+
+def build_broker_id_map() -> dict:
+    """R-B1: Adapter-Map Symbol -> interne instrument_id, live aus
+    ASSET_UNIVERSE abgeleitet (inkl. Discoveries). Single-Source-of-Truth
+    bleibt ASSET_UNIVERSE; diese Map ist die broker-agnostische Sicht darauf.
+
+    Zukunft (spaetere Phase): zusaetzliche Broker (ibkr conId) als weitere
+    Map-Ebene, dann ist der Bot vollstaendig broker-agnostisch.
+    """
+    return {
+        sym: int(meta.get("etoro_id") or NO_INSTRUMENT_ID)
+        for sym, meta in ASSET_UNIVERSE.items()
+    }
+
+
+# ============================================================
 # SYMBOL-MAPPING — Bot-internal <-> IBKR-Ticker (v37de)
 # ============================================================
 # Bot's Universum nutzt eigene Symbol-Names (z.B. SILVER, GOLD, OIL).
