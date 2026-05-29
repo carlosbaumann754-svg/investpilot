@@ -48,7 +48,7 @@
 
 ## 2. GO/NO-GO-Checkliste (am Cutover-Tag morgens)
 
-**Alle 8 Punkte muessen GRUEN sein.** Bei einem ROT: Cutover verschieben.
+**Alle 9 Punkte muessen GRUEN sein.** Bei einem ROT: Cutover verschieben.
 
 | # | Check | Erwartung |
 |---|---|---|
@@ -59,7 +59,8 @@
 | 5 | Backup von gestern Nacht da | /var/backups/investpilot/state_*.tar.gz frisch |
 | 6 | Trading-Toggle = ON | im Dashboard-Header gruen |
 | 7 | IBKR-Broker-Status = gruen | broker-badge im Header |
-| 8 | Test-Suite gruen | `ssh root@178.104.236.157 "cd /opt/investpilot && pytest -q"` — Erwartung **935+ passed, 0 failed, 0 errors** (Stand 26.05.2026 nach R-A47). Falls Test-Anzahl signifikant abweicht (<930) oder FAIL: Cutover verschieben. Alternativ lokal nach `git pull` |
+| 8 | Test-Suite gruen | `ssh root@178.104.236.157 "cd /opt/investpilot && pytest -q"` — Erwartung **1038+ passed, 0 failed, 0 errors** (Stand 29.05.2026 nach R-A53 + R-B1). Falls Test-Anzahl signifikant abweicht (<1030) oder FAIL: Cutover verschieben. Alternativ lokal nach `git pull` |
+| **9** | **⚠️ WFO-Drift-Watchdog RE-AKTIVIERT** | **KRITISCH: Am 29.05.2026 BEWUSST deaktiviert (R-A53, Soak-Cry-Wolf-Schutz). VOR Cutover wieder einschalten: `data/config.json` -> `wfo_drift_watchdog.enabled = true`. Dashboard-Card darf NICHT mehr "Feature disabled" zeigen. Sonst laeuft Real-Money OHNE Drift-Ueberwachung. Backup: config.json.pre-wfo-drift-disable-20260529_162347.bak** |
 
 **Bei NO-GO:** Nicht switchen. Verschieben um 1 Woche.
 
