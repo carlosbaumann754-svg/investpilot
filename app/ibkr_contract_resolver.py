@@ -148,6 +148,30 @@ def resolve_contract(ib, etoro_id: int, currency: str = "USD"):
         NotImplementedError fuer noch nicht unterstuetzte Asset-Klassen.
         RuntimeError wenn IBKR die Qualifikation ablehnt (Symbol unbekannt).
     """
+    # R-B1 Phase 2 (29.05.2026 Soak): 'etoro_id' akzeptiert jetzt zusaetzlich
+    # ein Bot-Symbol (str). Symbol wird zur kanonischen instrument_id
+    # normalisiert — danach laeuft der bestehende kritische Pfad BYTE-FUER-
+    # BYTE unveraendert (Cache-Key, Reverse-Lookup, Qualify). Param-Name
+    # bleibt 'etoro_id' (Keyword-Caller-Kompat; Rename -> instrument_id in
+    # Phase 4). Discovery-Assets ohne Broker-id (symbol-direkt) werden
+    # bewusst deferred (kommt mit Phase 3+, wenn trader.py Symbole durch-
+    # reicht — aktuelle Caller geben numerische ids).
+    # Normalisierung VOR ib_insync-Import: Input-Validierung braucht keinen
+    # Broker, klare Fehler ohne ib_insync-Dependency.
+    if isinstance(etoro_id, str) and not etoro_id.lstrip("-").isdigit():
+        from app.market_scanner import ASSET_UNIVERSE, instrument_id_for_symbol
+        if etoro_id not in ASSET_UNIVERSE:
+            raise ValueError(
+                f"Symbol '{etoro_id}' nicht in ASSET_UNIVERSE — kein Mapping."
+            )
+        _rid = instrument_id_for_symbol(etoro_id)
+        if _rid <= 0:
+            raise NotImplementedError(
+                f"Symbol '{etoro_id}' ist Discovery-Asset ohne Broker-id "
+                f"(id={_rid}) — symbol-direkte Resolution folgt in R-B1 Phase 3+"
+            )
+        etoro_id = _rid  # ab hier: exakt der bestehende numerische Pfad
+
     from ib_insync import Stock, Contract, Crypto, Forex
     # Optional: erweiterte Asset-Klassen (Index/Future) — falls in dieser
     # ib_insync-Version vorhanden (>=0.9.86 hat sie alle).
