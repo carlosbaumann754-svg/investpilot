@@ -105,7 +105,9 @@ def _compute_live_sharpe(trade_history: list, lookback_days: int) -> tuple[Optio
         return None, 0
 
     cutoff = datetime.now() - timedelta(days=lookback_days)
-    recent_pnls = []
+    # R-A52: (timestamp, pnl_pct)-Tupel sammeln fuer Daily-Grouping (statt
+    # nur pnl-Werte). Timestamp wird fuer die Kalender-Tag-Aggregation gebraucht.
+    recent_trade_days = []
 
     for t in trade_history:
         # Nur Close-Trades zaehlen (haben pnl)
@@ -130,22 +132,48 @@ def _compute_live_sharpe(trade_history: list, lookback_days: int) -> tuple[Optio
         if pnl_pct is None:
             continue
         try:
-            recent_pnls.append(float(pnl_pct))
+            recent_trade_days.append((ts, float(pnl_pct)))
         except (TypeError, ValueError):
             continue
 
-    n = len(recent_pnls)
+    n = len(recent_trade_days)
     if n < 2:
         return None, n
 
-    # Sharpe = mean / std (sample). Annualisiert nicht — Vergleich gegen
-    # WFO-OOS-Sharpe der gleicher Convention folgt.
-    mean = sum(recent_pnls) / n
-    var = sum((p - mean) ** 2 for p in recent_pnls) / (n - 1)
-    if var <= 0:
+    # R-A52 (29.05.2026 Sprint-Tag-18, Soak-Item WFO-Baseline-Methodik-Review):
+    # BUG vor R-A52: Live-Sharpe war rohes per-Trade mean/std OHNE Annualisierung.
+    # Verglichen wurde aber gegen den WFO-OOS-Sharpe, der DAILY-annualisiert ist
+    # (backtester.py: (daily_mean/daily_std) * sqrt(252)). Aepfel-mit-Birnen:
+    # ~16x systematischer Skalen-Offset → Drift-Watchdog feuerte DAUER-False-
+    # Positives (z.B. 29.05.: live=-0.31 vs wfo=6.40 = -105.8% "Drift", reines
+    # Mess-Artefakt). Der alte Kommentar ("Annualisiert nicht — gleiche
+    # Convention") war schlicht falsch: WFO IST annualisiert.
+    #
+    # Fix: Live-Sharpe auf DIESELBE Daily-annualized Convention bringen.
+    # Close-Trades nach Kalender-Tag gruppieren (Summe pnl_pct pro Tag =
+    # Tages-Rendite-Approximation, analog backtester daily_contrib), dann
+    # (daily_mean / daily_std) * sqrt(252).
+    #
+    # Bewusste Approximation: backtester verteilt Returns ueber Holding-Days;
+    # hier lumpen wir auf den Close-Tag (Live-trade_history hat keine sauberen
+    # Entry/Exit-Holding-Spans). Beide sind aber daily * sqrt(252) → gleiche
+    # Groessenordnung + gleicher Annualisierungs-Faktor → Vergleich valide.
+    daily_returns: dict[str, float] = {}
+    for ts, pnl in recent_trade_days:
+        day_key = ts.strftime("%Y-%m-%d")
+        daily_returns[day_key] = daily_returns.get(day_key, 0.0) + pnl
+
+    daily_vals = list(daily_returns.values())
+    if len(daily_vals) < 2:
         return None, n
-    std = var ** 0.5
-    return (mean / std), n
+
+    daily_mean = sum(daily_vals) / len(daily_vals)
+    daily_var = sum((r - daily_mean) ** 2 for r in daily_vals) / (len(daily_vals) - 1)
+    if daily_var <= 0:
+        return None, n
+    daily_std = daily_var ** 0.5
+    annualized_sharpe = (daily_mean / daily_std) * (252 ** 0.5)
+    return annualized_sharpe, n
 
 
 def _load_alert_state() -> dict:
