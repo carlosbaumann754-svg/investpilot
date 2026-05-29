@@ -278,17 +278,25 @@ class OrderStatusTracker:
             current_trades += list(ib.trades() or [])
             # R-A49 Stufe 2: completedOrders (Filled-Orders die IBKR aus
             # active-list bereits archiviert hat — typisch >5min nach Fill).
+            # ib_insync hat keine direkte completedOrders()-Methode — nach
+            # reqCompletedOrders() landen die Eintraege in ib.trades(). Wir
+            # diff-en gegen current_trades-Pre-Fetch um nur NEUE Eintraege
+            # zu zaehlen (fuer Log-Visibility), aber alle bleiben in
+            # current_trades durch das nachfolgende ib.trades()-Refresh.
+            pre_count = len(current_trades)
             try:
                 ib.reqCompletedOrders(apiOnly=False)
                 ib.sleep(1.0)
-                completed = list(ib.completedOrders() or [])
-                completed_count_log = len(completed)
-                # completedOrders liefert OrderStatus-Objekte, aber wir
-                # brauchen Trade-aehnliche-Schnittstelle. completedOrders
-                # gibt eigentlich Trade-Objekte mit orderStatus zurueck.
-                current_trades += completed
+                # Refresh trades() um completed Orders einzuschliessen
+                refreshed_trades = list(ib.trades() or [])
+                # Merge in current_trades (dedupliziert via Set spaeter)
+                seen_ids = {id(t) for t in current_trades}
+                for t in refreshed_trades:
+                    if id(t) not in seen_ids:
+                        current_trades.append(t)
+                completed_count_log = len(current_trades) - pre_count
             except Exception as e:
-                log.warning("E27 recover R-A49: completedOrders() fetch failed: %s", e)
+                log.warning("E27 recover R-A49: completedOrders fetch failed: %s", e)
         except Exception as e:
             log.warning("E27 recover: IBKR fetch failed: %s", e)
             return {"resolved": 0, "staled": 0, "still_pending": 0}
