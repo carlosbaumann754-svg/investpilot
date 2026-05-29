@@ -613,7 +613,7 @@ _BROKER_STATUS_STALE_MAX_SECONDS = 600  # 10 Min — danach gilt Cache als too-o
 
 
 @app.get("/api/broker-status")
-async def api_broker_status():
+async def api_broker_status():  # BEWUSST OHNE require_auth: scripts/cutover_switch.sh pollt diesen Endpoint unauthentifiziert (curl) zur Post-Cutover-Verifikation (mode=live + account=U...). Auth hier wuerde die Cutover-Verifikation brechen. Low-Sensitivity (nur Connection-Status). 29.05.2026 Audit.
     """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth.
 
     v36: 60s-Cache vor IBKR-Live-Call, damit Dashboard-Polling den
@@ -4861,7 +4861,7 @@ async def api_survivorship_history():
 
 
 @app.get("/api/cost_model/status")
-async def api_cost_model_status():
+async def api_cost_model_status(user=Depends(require_auth)):  # 29.05.2026: Auth ergaenzt (Info-Disclosure-Fix)
     """E2: Cost-Model Status fuer Dashboard-Card.
 
     Zeigt: Per-Asset-Klasse Default-Kosten + Calibrator-Status (Anzahl
@@ -5036,7 +5036,7 @@ def api_selftest_history(_user=Depends(require_auth)):
         return {"error": str(e), "history": []}
 
 @app.get("/api/cutover/readiness")
-async def api_cutover_readiness():
+async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth ergaenzt (Info-Disclosure-Fix)
     """v37p: Aggregierter Status aller Cutover-Hard-Gates + Sub-Komponenten.
 
     Eine zentrale Seite die fuer den Cutover-Tag (01.06.2026) alle wichtigen
@@ -5510,7 +5510,7 @@ async def api_earnings_exempt_remove(symbol: str, user=Depends(require_auth)):
 
 
 @app.get("/api/earnings/watchlist")
-async def api_earnings_watchlist():
+async def api_earnings_watchlist(user=Depends(require_auth)):  # 29.05.2026: Auth ergaenzt (Info-Disclosure-Fix)
     """v37z: Earnings-Watchlist fuer Dashboard.
 
     Listet alle Portfolio-Positionen mit Earnings in den naechsten 7 Tagen.
