@@ -37,68 +37,68 @@ except ImportError:
 
 ASSET_UNIVERSE = {
     # --- US Large Cap Tech ---
-    "AAPL":  {"etoro_id": 6408,  "yf": "AAPL",  "class": "stocks",  "name": "Apple",     "sector": "tech"},
-    "MSFT":  {"etoro_id": 1139,  "yf": "MSFT",  "class": "stocks",  "name": "Microsoft", "sector": "tech"},
-    "GOOGL": {"etoro_id": 1002,  "yf": "GOOGL", "class": "stocks",  "name": "Alphabet",  "sector": "tech"},
-    "AMZN":  {"etoro_id": 1026,  "yf": "AMZN",  "class": "stocks",  "name": "Amazon",    "sector": "consumer"},
-    "TSLA":  {"etoro_id": 1397,  "yf": "TSLA",  "class": "stocks",  "name": "Tesla",     "sector": "growth"},
-    "NVDA":  {"etoro_id": 1518,  "yf": "NVDA",  "class": "stocks",  "name": "NVIDIA",    "sector": "tech"},
-    "META":  {"etoro_id": 10548, "yf": "META",  "class": "stocks",  "name": "Meta",      "sector": "tech"},
-    "NFLX":  {"etoro_id": 1049,  "yf": "NFLX",  "class": "stocks",  "name": "Netflix",   "sector": "tech"},
-    "AMD":   {"etoro_id": 1004,  "yf": "AMD",   "class": "stocks",  "name": "AMD",       "sector": "tech"},
-    "INTC":  {"etoro_id": 1033,  "yf": "INTC",  "class": "stocks",  "name": "Intel",     "sector": "tech"},
+    "AAPL":  {"internal_id": 6408,  "yf": "AAPL",  "class": "stocks",  "name": "Apple",     "sector": "tech"},
+    "MSFT":  {"internal_id": 1139,  "yf": "MSFT",  "class": "stocks",  "name": "Microsoft", "sector": "tech"},
+    "GOOGL": {"internal_id": 1002,  "yf": "GOOGL", "class": "stocks",  "name": "Alphabet",  "sector": "tech"},
+    "AMZN":  {"internal_id": 1026,  "yf": "AMZN",  "class": "stocks",  "name": "Amazon",    "sector": "consumer"},
+    "TSLA":  {"internal_id": 1397,  "yf": "TSLA",  "class": "stocks",  "name": "Tesla",     "sector": "growth"},
+    "NVDA":  {"internal_id": 1518,  "yf": "NVDA",  "class": "stocks",  "name": "NVIDIA",    "sector": "tech"},
+    "META":  {"internal_id": 10548, "yf": "META",  "class": "stocks",  "name": "Meta",      "sector": "tech"},
+    "NFLX":  {"internal_id": 1049,  "yf": "NFLX",  "class": "stocks",  "name": "Netflix",   "sector": "tech"},
+    "AMD":   {"internal_id": 1004,  "yf": "AMD",   "class": "stocks",  "name": "AMD",       "sector": "tech"},
+    "INTC":  {"internal_id": 1033,  "yf": "INTC",  "class": "stocks",  "name": "Intel",     "sector": "tech"},
     # --- US Finance & Health ---
-    "JPM":   {"etoro_id": 1036,  "yf": "JPM",   "class": "stocks",  "name": "JPMorgan",            "sector": "finance"},
-    "V":     {"etoro_id": 1180,  "yf": "V",     "class": "stocks",  "name": "Visa",                "sector": "finance"},
-    "MA":    {"etoro_id": 1089,  "yf": "MA",    "class": "stocks",  "name": "Mastercard",           "sector": "finance"},
-    "UNH":   {"etoro_id": 1166,  "yf": "UNH",   "class": "stocks",  "name": "UnitedHealth",        "sector": "health"},
-    "JNJ":   {"etoro_id": 1035,  "yf": "JNJ",   "class": "stocks",  "name": "Johnson & Johnson",   "sector": "health"},
-    "PFE":   {"etoro_id": 1094,  "yf": "PFE",   "class": "stocks",  "name": "Pfizer",              "sector": "health"},
+    "JPM":   {"internal_id": 1036,  "yf": "JPM",   "class": "stocks",  "name": "JPMorgan",            "sector": "finance"},
+    "V":     {"internal_id": 1180,  "yf": "V",     "class": "stocks",  "name": "Visa",                "sector": "finance"},
+    "MA":    {"internal_id": 1089,  "yf": "MA",    "class": "stocks",  "name": "Mastercard",           "sector": "finance"},
+    "UNH":   {"internal_id": 1166,  "yf": "UNH",   "class": "stocks",  "name": "UnitedHealth",        "sector": "health"},
+    "JNJ":   {"internal_id": 1035,  "yf": "JNJ",   "class": "stocks",  "name": "Johnson & Johnson",   "sector": "health"},
+    "PFE":   {"internal_id": 1094,  "yf": "PFE",   "class": "stocks",  "name": "Pfizer",              "sector": "health"},
     # --- US Consumer & Industrial ---
-    "KO":    {"etoro_id": 1038,  "yf": "KO",    "class": "stocks",  "name": "Coca-Cola",           "sector": "consumer"},
-    "PG":    {"etoro_id": 1096,  "yf": "PG",    "class": "stocks",  "name": "Procter & Gamble",    "sector": "consumer"},
-    "DIS":   {"etoro_id": 1024,  "yf": "DIS",   "class": "stocks",  "name": "Disney",              "sector": "consumer"},
-    "BA":    {"etoro_id": 1008,  "yf": "BA",    "class": "stocks",  "name": "Boeing",              "sector": "consumer"},
-    "NKE":   {"etoro_id": 1053,  "yf": "NKE",   "class": "stocks",  "name": "Nike",                "sector": "consumer"},
-    "MCD":   {"etoro_id": 1044,  "yf": "MCD",   "class": "stocks",  "name": "McDonald's",          "sector": "consumer"},
+    "KO":    {"internal_id": 1038,  "yf": "KO",    "class": "stocks",  "name": "Coca-Cola",           "sector": "consumer"},
+    "PG":    {"internal_id": 1096,  "yf": "PG",    "class": "stocks",  "name": "Procter & Gamble",    "sector": "consumer"},
+    "DIS":   {"internal_id": 1024,  "yf": "DIS",   "class": "stocks",  "name": "Disney",              "sector": "consumer"},
+    "BA":    {"internal_id": 1008,  "yf": "BA",    "class": "stocks",  "name": "Boeing",              "sector": "consumer"},
+    "NKE":   {"internal_id": 1053,  "yf": "NKE",   "class": "stocks",  "name": "Nike",                "sector": "consumer"},
+    "MCD":   {"internal_id": 1044,  "yf": "MCD",   "class": "stocks",  "name": "McDonald's",          "sector": "consumer"},
     # --- US Growth / Tech ---
-    "PYPL":  {"etoro_id": 5765,  "yf": "PYPL",  "class": "stocks",  "name": "PayPal",       "sector": "growth"},
-    "SQ":    {"etoro_id": 7961,  "yf": "XYZ",   "class": "stocks",  "name": "Block (formerly Square)","sector": "growth"},  # v36i: SQ -> XYZ Rename Jan 2024 (Block, Inc.)
-    "SHOP":  {"etoro_id": 7905,  "yf": "SHOP",  "class": "stocks",  "name": "Shopify",      "sector": "growth"},
-    "UBER":  {"etoro_id": 14066, "yf": "UBER",  "class": "stocks",  "name": "Uber",         "sector": "growth"},
-    "COIN":  {"etoro_id": 18001, "yf": "COIN",  "class": "stocks",  "name": "Coinbase",     "sector": "crypto_major"},
-    "PLTR":  {"etoro_id": 17181, "yf": "PLTR",  "class": "stocks",  "name": "Palantir",     "sector": "tech"},
-    "SNAP":  {"etoro_id": 8014,  "yf": "SNAP",  "class": "stocks",  "name": "Snap",         "sector": "tech"},
-    "ROKU":  {"etoro_id": 8150,  "yf": "ROKU",  "class": "stocks",  "name": "Roku",         "sector": "tech"},
-    "CRM":   {"etoro_id": 1021,  "yf": "CRM",   "class": "stocks",  "name": "Salesforce",   "sector": "tech"},
-    "ADBE":  {"etoro_id": 1003,  "yf": "ADBE",  "class": "stocks",  "name": "Adobe",        "sector": "tech"},
+    "PYPL":  {"internal_id": 5765,  "yf": "PYPL",  "class": "stocks",  "name": "PayPal",       "sector": "growth"},
+    "SQ":    {"internal_id": 7961,  "yf": "XYZ",   "class": "stocks",  "name": "Block (formerly Square)","sector": "growth"},  # v36i: SQ -> XYZ Rename Jan 2024 (Block, Inc.)
+    "SHOP":  {"internal_id": 7905,  "yf": "SHOP",  "class": "stocks",  "name": "Shopify",      "sector": "growth"},
+    "UBER":  {"internal_id": 14066, "yf": "UBER",  "class": "stocks",  "name": "Uber",         "sector": "growth"},
+    "COIN":  {"internal_id": 18001, "yf": "COIN",  "class": "stocks",  "name": "Coinbase",     "sector": "crypto_major"},
+    "PLTR":  {"internal_id": 17181, "yf": "PLTR",  "class": "stocks",  "name": "Palantir",     "sector": "tech"},
+    "SNAP":  {"internal_id": 8014,  "yf": "SNAP",  "class": "stocks",  "name": "Snap",         "sector": "tech"},
+    "ROKU":  {"internal_id": 8150,  "yf": "ROKU",  "class": "stocks",  "name": "Roku",         "sector": "tech"},
+    "CRM":   {"internal_id": 1021,  "yf": "CRM",   "class": "stocks",  "name": "Salesforce",   "sector": "tech"},
+    "ADBE":  {"internal_id": 1003,  "yf": "ADBE",  "class": "stocks",  "name": "Adobe",        "sector": "tech"},
     # --- EU Stocks ---
-    "SAP":   {"etoro_id": 1341,  "yf": "SAP",   "class": "stocks",  "name": "SAP",    "sector": "tech"},
-    "ASML":  {"etoro_id": 5523,  "yf": "ASML",  "class": "stocks",  "name": "ASML",   "sector": "tech"},
-    "LVMH":  {"etoro_id": 1350,  "yf": "MC.PA", "class": "stocks",  "name": "LVMH",   "sector": "consumer"},
+    "SAP":   {"internal_id": 1341,  "yf": "SAP",   "class": "stocks",  "name": "SAP",    "sector": "tech"},
+    "ASML":  {"internal_id": 5523,  "yf": "ASML",  "class": "stocks",  "name": "ASML",   "sector": "tech"},
+    "LVMH":  {"internal_id": 1350,  "yf": "MC.PA", "class": "stocks",  "name": "LVMH",   "sector": "consumer"},
     # --- ETFs ---
-    "SPY":   {"etoro_id": 1116,  "yf": "SPY",   "class": "etf",     "name": "S&P 500 ETF",        "sector": "broad_market"},
-    "QQQ":   {"etoro_id": 1321,  "yf": "QQQ",   "class": "etf",     "name": "NASDAQ 100 ETF",     "sector": "tech"},
-    "IWM":   {"etoro_id": 1108,  "yf": "IWM",   "class": "etf",     "name": "Russell 2000 ETF",   "sector": "broad_market"},
-    "DIA":   {"etoro_id": 1101,  "yf": "DIA",   "class": "etf",     "name": "Dow Jones ETF",      "sector": "broad_market"},
-    "XLK":   {"etoro_id": 1125,  "yf": "XLK",   "class": "etf",     "name": "Technology ETF",     "sector": "tech"},
-    "XLF":   {"etoro_id": 1123,  "yf": "XLF",   "class": "etf",     "name": "Financial ETF",      "sector": "finance"},
-    "XLE":   {"etoro_id": 1122,  "yf": "XLE",   "class": "etf",     "name": "Energy ETF",         "sector": "energy"},
-    "GLD":   {"etoro_id": 1105,  "yf": "GLD",   "class": "etf",     "name": "Gold ETF",           "sector": "commodities"},
-    "SLV":   {"etoro_id": 1115,  "yf": "SLV",   "class": "etf",     "name": "Silver ETF",         "sector": "commodities"},
-    "TLT":   {"etoro_id": 1120,  "yf": "TLT",   "class": "etf",     "name": "20Y Treasury ETF",   "sector": "bonds"},
-    "EEM":   {"etoro_id": 1102,  "yf": "EEM",   "class": "etf",     "name": "Emerging Markets ETF","sector": "broad_market"},
-    "VNQ":   {"etoro_id": 1127,  "yf": "VNQ",   "class": "etf",     "name": "Real Estate ETF",    "sector": "real_estate"},
+    "SPY":   {"internal_id": 1116,  "yf": "SPY",   "class": "etf",     "name": "S&P 500 ETF",        "sector": "broad_market"},
+    "QQQ":   {"internal_id": 1321,  "yf": "QQQ",   "class": "etf",     "name": "NASDAQ 100 ETF",     "sector": "tech"},
+    "IWM":   {"internal_id": 1108,  "yf": "IWM",   "class": "etf",     "name": "Russell 2000 ETF",   "sector": "broad_market"},
+    "DIA":   {"internal_id": 1101,  "yf": "DIA",   "class": "etf",     "name": "Dow Jones ETF",      "sector": "broad_market"},
+    "XLK":   {"internal_id": 1125,  "yf": "XLK",   "class": "etf",     "name": "Technology ETF",     "sector": "tech"},
+    "XLF":   {"internal_id": 1123,  "yf": "XLF",   "class": "etf",     "name": "Financial ETF",      "sector": "finance"},
+    "XLE":   {"internal_id": 1122,  "yf": "XLE",   "class": "etf",     "name": "Energy ETF",         "sector": "energy"},
+    "GLD":   {"internal_id": 1105,  "yf": "GLD",   "class": "etf",     "name": "Gold ETF",           "sector": "commodities"},
+    "SLV":   {"internal_id": 1115,  "yf": "SLV",   "class": "etf",     "name": "Silver ETF",         "sector": "commodities"},
+    "TLT":   {"internal_id": 1120,  "yf": "TLT",   "class": "etf",     "name": "20Y Treasury ETF",   "sector": "bonds"},
+    "EEM":   {"internal_id": 1102,  "yf": "EEM",   "class": "etf",     "name": "Emerging Markets ETF","sector": "broad_market"},
+    "VNQ":   {"internal_id": 1127,  "yf": "VNQ",   "class": "etf",     "name": "Real Estate ETF",    "sector": "real_estate"},
     # --- Crypto ---
-    "BTC":   {"etoro_id": 100000, "yf": "BTC-USD",  "class": "crypto", "name": "Bitcoin",    "sector": "crypto_major"},
-    "ETH":   {"etoro_id": 100001, "yf": "ETH-USD",  "class": "crypto", "name": "Ethereum",   "sector": "crypto_major"},
-    "XRP":   {"etoro_id": 100004, "yf": "XRP-USD",  "class": "crypto", "name": "Ripple",     "sector": "crypto_alt"},
-    "ADA":   {"etoro_id": 100044, "yf": "ADA-USD",  "class": "crypto", "name": "Cardano",    "sector": "crypto_alt"},
-    "SOL":   {"etoro_id": 100077, "yf": "SOL-USD",  "class": "crypto", "name": "Solana",     "sector": "crypto_alt"},
-    "DOGE":  {"etoro_id": 100060, "yf": "DOGE-USD", "class": "crypto", "name": "Dogecoin",   "sector": "crypto_alt"},
-    "DOT":   {"etoro_id": 100063, "yf": "DOT-USD",  "class": "crypto", "name": "Polkadot",   "sector": "crypto_alt"},
-    "AVAX":  {"etoro_id": 100072, "yf": "AVAX-USD", "class": "crypto", "name": "Avalanche",  "sector": "crypto_alt"},
-    "LINK":  {"etoro_id": 100010, "yf": "LINK-USD", "class": "crypto", "name": "Chainlink",  "sector": "crypto_alt"},
+    "BTC":   {"internal_id": 100000, "yf": "BTC-USD",  "class": "crypto", "name": "Bitcoin",    "sector": "crypto_major"},
+    "ETH":   {"internal_id": 100001, "yf": "ETH-USD",  "class": "crypto", "name": "Ethereum",   "sector": "crypto_major"},
+    "XRP":   {"internal_id": 100004, "yf": "XRP-USD",  "class": "crypto", "name": "Ripple",     "sector": "crypto_alt"},
+    "ADA":   {"internal_id": 100044, "yf": "ADA-USD",  "class": "crypto", "name": "Cardano",    "sector": "crypto_alt"},
+    "SOL":   {"internal_id": 100077, "yf": "SOL-USD",  "class": "crypto", "name": "Solana",     "sector": "crypto_alt"},
+    "DOGE":  {"internal_id": 100060, "yf": "DOGE-USD", "class": "crypto", "name": "Dogecoin",   "sector": "crypto_alt"},
+    "DOT":   {"internal_id": 100063, "yf": "DOT-USD",  "class": "crypto", "name": "Polkadot",   "sector": "crypto_alt"},
+    "AVAX":  {"internal_id": 100072, "yf": "AVAX-USD", "class": "crypto", "name": "Avalanche",  "sector": "crypto_alt"},
+    "LINK":  {"internal_id": 100010, "yf": "LINK-USD", "class": "crypto", "name": "Chainlink",  "sector": "crypto_alt"},
     # v36i: MATIC entfernt — Polygon Token-Migration Sept 2024 (MATIC -> POL),
     # nach Migration ist das Asset auf Yahoo Finance nicht mehr abrufbar
     # (POL-USD / POL / POLYGON-USD alle EMPTY). Falls Polygon zurueck
@@ -110,32 +110,32 @@ ASSET_UNIVERSE = {
     # routen wir bei IBKR ueber liquide ETFs auf ARCA (gleiche Asset-Exposure,
     # echte Settlement, kein Futures-Roll-Risiko fuer Bot-Position-Sizing).
     # yfinance-Symbol bleibt das Future fuer Technische Analyse.
-    "GOLD":  {"etoro_id": 5002,  "yf": "GC=F",   "class": "commodities", "name": "Gold",
+    "GOLD":  {"internal_id": 5002,  "yf": "GC=F",   "class": "commodities", "name": "Gold",
               "ibkr_override": {"symbol": "GLD",  "secType": "STK", "exchange": "ARCA",
                                 "name": "SPDR Gold Trust"}},
-    "SILVER":{"etoro_id": 5003,  "yf": "SI=F",   "class": "commodities", "name": "Silver",
+    "SILVER":{"internal_id": 5003,  "yf": "SI=F",   "class": "commodities", "name": "Silver",
               "ibkr_override": {"symbol": "SLV",  "secType": "STK", "exchange": "ARCA",
                                 "name": "iShares Silver Trust"}},
-    "OIL":   {"etoro_id": 5001,  "yf": "CL=F",   "class": "commodities", "name": "Crude Oil",
+    "OIL":   {"internal_id": 5001,  "yf": "CL=F",   "class": "commodities", "name": "Crude Oil",
               "ibkr_override": {"symbol": "USO",  "secType": "STK", "exchange": "ARCA",
                                 "name": "United States Oil Fund"}},
-    "NGAS":  {"etoro_id": 5007,  "yf": "NG=F",   "class": "commodities", "name": "Natural Gas",
+    "NGAS":  {"internal_id": 5007,  "yf": "NG=F",   "class": "commodities", "name": "Natural Gas",
               "ibkr_override": {"symbol": "UNG",  "secType": "STK", "exchange": "ARCA",
                                 "name": "United States Natural Gas Fund"}},
-    "COPPER":{"etoro_id": 5009,  "yf": "HG=F",   "class": "commodities", "name": "Copper",
+    "COPPER":{"internal_id": 5009,  "yf": "HG=F",   "class": "commodities", "name": "Copper",
               "ibkr_override": {"symbol": "CPER", "secType": "STK", "exchange": "ARCA",
                                 "name": "United States Copper Index Fund"}},
     # --- Forex ---
-    "EURUSD":{"etoro_id": 1,     "yf": "EURUSD=X","class": "forex", "name": "EUR/USD"},
-    "GBPUSD":{"etoro_id": 2,     "yf": "GBPUSD=X","class": "forex", "name": "GBP/USD"},
-    "USDJPY":{"etoro_id": 3,     "yf": "JPY=X",   "class": "forex", "name": "USD/JPY"},
-    "USDCHF":{"etoro_id": 4,     "yf": "CHF=X",   "class": "forex", "name": "USD/CHF"},
-    "AUDUSD":{"etoro_id": 5,     "yf": "AUDUSD=X","class": "forex", "name": "AUD/USD"},
+    "EURUSD":{"internal_id": 1,     "yf": "EURUSD=X","class": "forex", "name": "EUR/USD"},
+    "GBPUSD":{"internal_id": 2,     "yf": "GBPUSD=X","class": "forex", "name": "GBP/USD"},
+    "USDJPY":{"internal_id": 3,     "yf": "JPY=X",   "class": "forex", "name": "USD/JPY"},
+    "USDCHF":{"internal_id": 4,     "yf": "CHF=X",   "class": "forex", "name": "USD/CHF"},
+    "AUDUSD":{"internal_id": 5,     "yf": "AUDUSD=X","class": "forex", "name": "AUD/USD"},
     # --- Indices (CFDs) ---
-    "SPX500": {"etoro_id": 10136, "yf": "^GSPC",  "class": "indices", "name": "S&P 500"},
-    "NSDQ100":{"etoro_id": 10137, "yf": "^IXIC",  "class": "indices", "name": "NASDAQ 100"},
-    "DJ30":   {"etoro_id": 10138, "yf": "^DJI",   "class": "indices", "name": "Dow Jones 30"},
-    "DAX":    {"etoro_id": 10141, "yf": "^GDAXI", "class": "indices", "name": "DAX 40"},
+    "SPX500": {"internal_id": 10136, "yf": "^GSPC",  "class": "indices", "name": "S&P 500"},
+    "NSDQ100":{"internal_id": 10137, "yf": "^IXIC",  "class": "indices", "name": "NASDAQ 100"},
+    "DJ30":   {"internal_id": 10138, "yf": "^DJI",   "class": "indices", "name": "Dow Jones 30"},
+    "DAX":    {"internal_id": 10141, "yf": "^GDAXI", "class": "indices", "name": "DAX 40"},
 }
 
 
@@ -186,14 +186,25 @@ def _meta_internal_id(meta: dict):
 
 
 def _ensure_internal_ids(universe: dict = None) -> int:
-    """R-B1 Phase 4: Dual-Key-Shim. Setzt internal_id = etoro_id fuer alle
-    Entries die noch kein internal_id haben. Idempotent. Wird nach dem
-    ASSET_UNIVERSE-Literal UND nach dem Boot-Merge der Discoveries
-    aufgerufen. Returns Anzahl ergaenzter Entries."""
+    """R-B1 Phase 4: BIDIREKTIONALER Dual-Key-Shim. Stellt sicher dass jeder
+    Entry BEIDE Keys hat (internal_id + etoro_id, gleicher Wert) — kopiert
+    den jeweils fehlenden vom vorhandenen.
+
+    Phase 4c: Die ASSET_UNIVERSE-Literale wurden auf 'internal_id' umbenannt
+    (Domain-Modell sauber von eToro-Naming). Dieser Shim re-ergaenzt etoro_id
+    zur Laufzeit, damit die ~130 Legacy-Reader (meta.get("etoro_id"),
+    candidate["etoro_id"], ...) + persistierte Daten OHNE Migration weiter
+    funktionieren. Transparente Backward-Compat-Maschinerie, kein Naming-Leak
+    im Quell-Domain-Modell. Idempotent. Returns Anzahl ergaenzter Keys."""
     u = universe if universe is not None else ASSET_UNIVERSE
     added = 0
     for meta in u.values():
-        if "internal_id" not in meta and "etoro_id" in meta:
+        has_int = "internal_id" in meta
+        has_eto = "etoro_id" in meta
+        if has_int and not has_eto:
+            meta["etoro_id"] = meta["internal_id"]  # Compat-Rueck-Ergaenzung
+            added += 1
+        elif has_eto and not has_int:
             meta["internal_id"] = meta["etoro_id"]
             added += 1
     return added
@@ -323,7 +334,7 @@ def get_asset_class_for_instrument_id(instrument_id) -> Optional[str]:
     except (ValueError, TypeError):
         return None
     for info in ASSET_UNIVERSE.values():
-        if info.get("etoro_id") == iid:
+        if _meta_internal_id(info) == iid:  # R-B1 Phase 4c
             return info.get("class")
     return None
 
@@ -525,7 +536,10 @@ def analyze_single_asset(symbol, asset_info):
             "symbol": symbol,
             "name": asset_info["name"],
             "class": asset_info["class"],
-            "etoro_id": asset_info["etoro_id"],
+            # R-B1 Phase 4c: internal_id (kanonisch) + etoro_id (Dual-Key,
+            # entfernt in 4d). Beide via Accessor -> robust gegen Literal-Rename.
+            "internal_id": _meta_internal_id(asset_info),
+            "etoro_id": _meta_internal_id(asset_info),
             "price": round(current_price, 4),
             "rsi": round(rsi, 1),
             "macd": round(macd_val, 4),
@@ -862,7 +876,9 @@ def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
             "symbol": symbol,
             "name": info["name"],
             "class": info["class"],
-            "etoro_id": info["etoro_id"],
+            # R-B1 Phase 4c: internal_id (kanonisch) + etoro_id (Dual-Key)
+            "internal_id": _meta_internal_id(info),
+            "etoro_id": _meta_internal_id(info),
             "score": score,
             "signal": signal,
             "analysis": analysis,
