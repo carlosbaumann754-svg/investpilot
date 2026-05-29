@@ -61,6 +61,37 @@ AUDIT_METADATA = {
 }
 
 
+def _canon_instrument_key(ref):
+    """R-B1 Phase 3a (29.05.2026 Soak): kanonischer Instrument-Key.
+
+    Symbol bevorzugt (stabil, broker-agnostisch, eindeutig auch fuer
+    Discovery-Assets), Zahl-Fallback. Macht ALTE (etoro_id-Zahl) und NEUE
+    (Symbol) Instrument-Referenzen vergleichbar → Position-Matching +
+    Cooldown werden symbol-primaer OHNE persistierte Daten zu migrieren.
+
+    Akzeptiert:
+      - Bot-Symbol-str (in ASSET_UNIVERSE) -> direkt zurueck (eindeutig)
+      - etoro_id Zahl/numerischer str -> Reverse-Lookup zu Symbol
+      - sonst -> str(ref) (stabiler Fallback, nie Crash)
+
+    Backward-Compat: alte Cooldown-Keys "6408" und neue "AAPL" normalisieren
+    beide zu "AAPL" → interoperieren nahtlos, keine Migration noetig.
+    """
+    try:
+        from app.market_scanner import ASSET_UNIVERSE, symbol_for_instrument_id
+    except Exception:
+        return str(ref)
+    # Symbol direkt (haeufigster Fall: candidate["symbol"])
+    if isinstance(ref, str) and ref in ASSET_UNIVERSE:
+        return ref
+    # Zahl/numerischer-str -> Reverse zu Symbol (eindeutig fuer echte IDs)
+    sym = symbol_for_instrument_id(ref)
+    if sym:
+        return sym
+    # Fallback: stabiler String (Discovery -1, unbekannte conIds, etc.)
+    return str(ref)
+
+
 def save_trade(trade_entry):
     """Trade-Historie persistent speichern.
 
@@ -1773,7 +1804,11 @@ def execute_scanner_trades(client, config, scan_results):
     for candidate in sell_candidates:
         for pos in positions:
             p = EtoroClient.parse_position(pos)
-            if p["instrument_id"] == candidate["etoro_id"] and p["invested"] > 0:
+            # R-B1 Phase 3a: symbol-kanonischer Vergleich (akzeptiert alt=Zahl
+            # + neu=Symbol). candidate["symbol"] direkt, Position-id reverse.
+            if (_canon_instrument_key(p["instrument_id"])
+                    == _canon_instrument_key(candidate.get("symbol") or candidate["etoro_id"])
+                    and p["invested"] > 0):
                 log.info(f"  SCANNER SELL: {candidate['symbol']} "
                          f"(Score={candidate['score']:+.1f}, {candidate['signal']})")
 
@@ -1877,8 +1912,20 @@ def execute_scanner_trades(client, config, scan_results):
 
     cooldown_state = {k: v for k, v in cooldown_state.items() if _cooldown_fresh(v)}
 
-    def _in_cooldown(sym_id: int) -> tuple[bool, str]:
-        rec = cooldown_state.get(str(sym_id))
+    # R-B1 Phase 3a: Cooldown-State symbol-kanonisch normalisieren. Alte
+    # Zahlen-Keys ("6408") und neue Symbol-Keys ("AAPL") werden beide auf
+    # Symbol gemappt → alte persistierte Cooldowns bleiben gueltig, neue
+    # Writes nutzen Symbol. Keine Migration noetig.
+    _canon_cooldown = {}
+    for _k, _v in cooldown_state.items():
+        _ck = _canon_instrument_key(_k)
+        # Bei Kollision (sollte nicht vorkommen): juengsten Eintrag behalten
+        if _ck not in _canon_cooldown:
+            _canon_cooldown[_ck] = _v
+
+    def _in_cooldown(ref) -> tuple[bool, str]:
+        # ref kann Symbol oder etoro_id sein -> kanonisch nachschlagen
+        rec = _canon_cooldown.get(_canon_instrument_key(ref))
         if not rec:
             return False, ""
         dt = _parse_iso_safe(rec.get("last_attempt"))
@@ -1899,7 +1946,8 @@ def execute_scanner_trades(client, config, scan_results):
     blocked_by_cooldown = []
     filtered = []
     for c in buy_candidates:
-        in_cd, reason = _in_cooldown(c["etoro_id"])
+        # R-B1 Phase 3a: symbol-kanonisch (candidate["symbol"] bevorzugt)
+        in_cd, reason = _in_cooldown(c.get("symbol") or c["etoro_id"])
         if in_cd:
             blocked_by_cooldown.append((c["symbol"], reason))
         else:
@@ -2356,7 +2404,11 @@ def execute_scanner_trades(client, config, scan_results):
                     # v36 — Cooldown-State updaten: jeder Buy wird notiert,
                     # damit das Symbol fuer cooldown_cycles nicht erneut
                     # gekauft wird (auch wenn Broker keine Position bestaetigt).
-                    sym_key = str(candidate["etoro_id"])
+                    # R-B1 Phase 3a: symbol-kanonischer Key (statt str(etoro_id)).
+                    # Discovery-Assets bekommen so eindeutige Cooldowns (vorher
+                    # haetten alle etoro_id=-1 denselben Key "-1" geteilt).
+                    # _in_cooldown normalisiert alte Zahlen-Keys mit → Kompat.
+                    sym_key = _canon_instrument_key(candidate.get("symbol") or candidate["etoro_id"])
                     prev = cooldown_state.get(sym_key, {})
                     cooldown_state[sym_key] = {
                         "symbol": symbol,
