@@ -285,6 +285,22 @@ _SENTRY_NOISE_PATTERNS = (
     # 2 generic Catches: HTTP Error 404 + quoteSummary-Response-Pattern.
     "HTTP Error 404: {\"quoteSummary\"",
     "quoteSummary\":{\"result\":null",
+    # R-A50 (29.05.2026 Sprint-Tag-18 Nachmittag): Boot-Race-Condition
+    # zwischen Container-Restart und IBKR-Connection-Aufbau. R-A49 (heute
+    # morgen) fuegte ib.reqAllOpenOrders + ib.reqCompletedOrders in den
+    # E27-Recovery-Pfad ein. Bei Container-Recreate (Daily-Restart 05:15
+    # UTC + manuell) braucht IBKR-Connection ~10-30s zum Aufbau. Wenn
+    # Recovery in dem Fenster feuert: TimeoutError. Bot's Healthcheck-
+    # Retry-Logic faengt es ab (Cycle wird sicher uebersprungen), aber
+    # ib_insync.ib loggt ERROR -> Sentry sammelt.
+    # Defense-Layer (siehe R-A50 Teil B in order_status_tracker.py):
+    #   - recover_from_ibkr macht jetzt Connection-Ready-Check
+    #   - completedOrders/openOrders calls in try/except TimeoutError
+    # → Restbestand-Logging hier filtern.
+    "completed orders request timed out",
+    "open orders request timed out",
+    "Broker-Healthcheck fehlgeschlagen",
+    "Broker-Healthcheck attempt",
 )
 
 

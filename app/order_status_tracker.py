@@ -257,6 +257,22 @@ class OrderStatusTracker:
         if not ib:
             return {"resolved": 0, "staled": 0, "still_pending": 0}
 
+        # R-A50 (29.05.2026 Sprint-Tag-18 Nachmittag): Connection-Ready-Check
+        # vor IBKR-Calls. Bei Container-Restart braucht IBKR-Connection
+        # ~10-30s zum Aufbau. R-A49-NEU eingefuehrtes reqAllOpenOrders +
+        # reqCompletedOrders feuerten gleich nach Subscribe → TimeoutError
+        # wenn Connection noch nicht ready (Sentry-Events 11:05 UTC heute).
+        # Defense: wenn nicht connected, skip Recovery this-cycle und kein
+        # ERROR-Log. Naechster Cycle laeuft normal weiter.
+        try:
+            if hasattr(ib, "isConnected") and not ib.isConnected():
+                log.info("E27 recover R-A50: ib nicht connected (Boot-Phase) — skip this cycle")
+                return {"resolved": 0, "staled": 0, "still_pending": self.get_pending_count()}
+        except Exception:
+            # isConnected-Check schlug fehl → vorsichtshalber skip
+            log.info("E27 recover R-A50: isConnected-Check failed — skip this cycle")
+            return {"resolved": 0, "staled": 0, "still_pending": self.get_pending_count()}
+
         resolved_count = 0
         staled_count = 0
 
@@ -295,8 +311,26 @@ class OrderStatusTracker:
                     if id(t) not in seen_ids:
                         current_trades.append(t)
                 completed_count_log = len(current_trades) - pre_count
+            except TimeoutError as e:
+                # R-A50 (29.05.2026): Boot-Phase TimeoutError ist erwartet
+                # bei frischen Connections. WARNING statt ERROR, kein
+                # Sentry-Spam. Stufe 3 (trade_history-Cross-Ref) faengt
+                # die Recovery-Faelle eh ab.
+                log.warning("E27 recover R-A50: completedOrders TimeoutError (Boot-Phase erwartet): %s", e)
             except Exception as e:
                 log.warning("E27 recover R-A49: completedOrders fetch failed: %s", e)
+        except TimeoutError as e:
+            # R-A50 (29.05.2026): Outer Timeout bei reqAllOpenOrders + openTrades
+            # — gleiche Boot-Phase-Wurzel wie inner. Skip Recovery this cycle,
+            # naechster Cycle laeuft normal. Stufe 3 (trade_history) faengt
+            # die meisten Recovery-Faelle ab, aber muss ueber current_trades
+            # gehen — bei None-current_trades returnen wir mit still_pending=
+            # aktuell gemerkten Pending.
+            log.warning(
+                "E27 recover R-A50: outer IBKR-fetch TimeoutError "
+                "(Boot-Phase erwartet) — skip this cycle: %s", e,
+            )
+            return {"resolved": 0, "staled": 0, "still_pending": self.get_pending_count()}
         except Exception as e:
             log.warning("E27 recover: IBKR fetch failed: %s", e)
             return {"resolved": 0, "staled": 0, "still_pending": 0}
