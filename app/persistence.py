@@ -1635,18 +1635,43 @@ def check_and_reload_wfo_output():
         if last_applied.get("last_wfo_push") == gist_push:
             return False  # bereits angewendet
 
-        # Reload Files
+        # R-A51 (29.05.2026 Sprint-Tag-18): Truncation-sicherer Reload.
+        # BUG vor R-A51: dieser Watchdog las roh f.get("content") statt den
+        # gemeinsamen Helper _fetch_gist_file_content() zu nutzen (wie alle
+        # anderen Watchdogs). GitHub-Gist-API liefert bei vielen/grossen
+        # Files truncated=True + leeren inline-content + raw_url. Folge:
+        # "if f and f.get(content)" war falsy → Reload still uebersprungen,
+        # ABER WFO_LAST_APPLIED_FILE wurde UNBEDINGT danach gesetzt → Marker
+        # auf "applied" obwohl wfo_status.json nie aktualisiert. Naechster
+        # Lauf: last_applied == gist_push → "bereits angewendet" → nie Retry.
+        # Dashboard zeigte wochenlang stale WFO-Daten.
+        # Fix: (1) _fetch_gist_file_content (raw_url-Fallback), (2) Marker
+        # nur setzen wenn mindestens 1 File erfolgreich reloaded.
+        reloaded_count = 0
         for filename in WFO_OUTPUT_FILES:
             f = files.get(filename)
-            if f and f.get("content"):
-                try:
-                    data = json.loads(f["content"])
-                    save_json(filename, data)
-                except Exception as e:
-                    log.warning(f"WFO reload {filename} failed: {e}")
+            if not f:
+                continue
+            raw = _fetch_gist_file_content(f, token)
+            if not raw:
+                log.warning(f"WFO reload {filename}: kein content (truncated+raw_url-Fehler?)")
+                continue
+            try:
+                data = json.loads(raw)
+                save_json(filename, data)
+                reloaded_count += 1
+            except Exception as e:
+                log.warning(f"WFO reload {filename} failed: {e}")
+
+        if reloaded_count == 0:
+            # R-A51: KEIN Marker-Update wenn nichts geladen — sonst wird der
+            # Push als "applied" markiert obwohl Daten fehlen → permanenter
+            # Stale-State. Lieber naechster Watchdog-Lauf retry.
+            log.warning(f"WFO-Reload: 0 Files geladen — Marker NICHT gesetzt (Retry naechster Lauf)")
+            return False
         save_json(WFO_LAST_APPLIED_FILE, {"last_wfo_push": gist_push,
                                            "applied_at": datetime.now().isoformat()})
-        log.info(f"WFO-Reload OK (Gist push {gist_push})")
+        log.info(f"WFO-Reload OK (Gist push {gist_push}, {reloaded_count} Files)")
 
         # Telegram-Alert pruefen (3 Hard-Gates)
         try:
