@@ -185,6 +185,114 @@ def _compute_live_sharpe(trade_history: list, lookback_days: int) -> tuple[Optio
     return annualized_sharpe, n
 
 
+# R-B5 (01.06.2026, Soak-Investigation #1): PF-Cap fuer verlustfreie Fenster.
+# PF = Brutto-Gewinn/Brutto-Verlust ist mathematisch unendlich wenn keine
+# Verluste -> das ist GESUND (kein Decay). Cap auf 10.0 ("aussergewoehnlich
+# gut") reicht fuer den Drift-Vergleich und verhindert inf/Division-Probleme.
+_LIVE_PF_CAP = 10.0
+
+
+def _get_wfo_target_pf() -> tuple[Optional[float], Optional[float]]:
+    """Liest Mean OOS Profit-Factor + Win-Rate aus letztem WFO-Run.
+
+    R-B5 (01.06.2026, Soak-Investigation #1): PF/Win-Rate als Drift-Baseline
+    statt Sharpe. Begruendung: Der Backtest-Sharpe (mean OOS 6.40) ist ein
+    ARTEFAKT — (a) backtester glaettet Trade-Returns ueber Haltetage ->
+    unterschaetzte Vola, (b) explosives Position-Sizing-Compounding (per-Window
+    annual_return bis 5.2 Mrd. %, Sharpe 10.49 BEI 51.7% DD), (c) OOS-Sharpe
+    6.40 > IS-Sharpe 4.22 (decay 151.7%) = fuer eine echte Edge statistisch
+    unmoeglich. PF ist scale-invariant (Verhaeltnis Brutto-Gewinn/Brutto-
+    Verlust) -> von diesen Artefakten NICHT betroffen. WFO-OOS-PF lag
+    realistisch bei 1.6-2.97 -> brauchbare Baseline.
+
+    Returns (mean_pf, mean_win_rate) oder (None, None) wenn keine Daten.
+    """
+    try:
+        from app.config_manager import load_json
+        wfo = load_json("wfo_status.json") or {}
+    except Exception:
+        return None, None
+
+    windows = wfo.get("windows", []) if isinstance(wfo, dict) else []
+    pfs: list[float] = []
+    wrs: list[float] = []
+    for w in windows:
+        if not isinstance(w, dict):
+            continue
+        metrics = w.get("oos_metrics")
+        if not isinstance(metrics, dict):
+            continue
+        pf = metrics.get("pf")
+        if pf is not None:
+            try:
+                pfs.append(float(pf))
+            except (TypeError, ValueError):
+                pass
+        wr = metrics.get("win_rate")
+        if wr is not None:
+            try:
+                wrs.append(float(wr))
+            except (TypeError, ValueError):
+                pass
+
+    mean_pf = sum(pfs) / len(pfs) if pfs else None
+    mean_wr = sum(wrs) / len(wrs) if wrs else None
+    return mean_pf, mean_wr
+
+
+def _compute_live_pf(trade_history: list,
+                     lookback_days: int) -> tuple[Optional[float], Optional[float], int]:
+    """Profit-Factor + Win-Rate aus den Close-Trades der letzten N Tage.
+
+    PF = Brutto-Gewinn / Brutto-Verlust (R-B5 Drift-Baseline-Metrik, scale-
+    invariant). Returns (pf, win_rate_pct, n_trades). pf=None wenn < 2 Trades.
+    Verlustfreies Fenster -> pf = _LIVE_PF_CAP (gesund, kein Decay).
+    """
+    if not trade_history:
+        return None, None, 0
+
+    cutoff = datetime.now() - timedelta(days=lookback_days)
+    pnls: list[float] = []
+    for t in trade_history:
+        action = (t.get("action") or "").upper()
+        if not any(s in action for s in (
+                "CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")):
+            continue
+        ts_str = t.get("timestamp")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+            if ts.tzinfo is not None:
+                ts = ts.replace(tzinfo=None)
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        pnl_pct = t.get("pnl_net_pct", t.get("pnl_pct"))
+        if pnl_pct is None:
+            continue
+        try:
+            pnls.append(float(pnl_pct))
+        except (TypeError, ValueError):
+            continue
+
+    n = len(pnls)
+    if n < 2:
+        return None, None, n
+
+    gross_win = sum(p for p in pnls if p > 0)
+    gross_loss = abs(sum(p for p in pnls if p < 0))
+    wins = sum(1 for p in pnls if p > 0)
+    win_rate = wins / n * 100.0
+
+    if gross_loss <= 0:
+        pf = _LIVE_PF_CAP if gross_win > 0 else None
+    else:
+        pf = min(gross_win / gross_loss, _LIVE_PF_CAP)
+    return pf, win_rate, n
+
+
 def _count_distinct_trading_days(trade_history: list, lookback_days: int) -> int:
     """R-A53 (29.05.2026): Anzahl DISTINKTER Kalender-Tage mit Close-Trades
     im Lookback-Fenster.
@@ -234,13 +342,22 @@ def _save_alert_state(state: dict) -> None:
 
 
 def check_wfo_drift(config: Optional[dict] = None) -> dict:
-    """Hauptfunktion: prueft Sharpe-Drift + sendet Pushover-Alert bei Threshold.
+    """Hauptfunktion: prueft Edge-Drift + sendet Pushover-Alert bei Threshold.
+
+    R-B5 (01.06.2026): PRIMAERE Metrik = Profit-Faktor (PF), NICHT Sharpe.
+    Der WFO-Sharpe (6.40) ist ein Artefakt (Soak-Investigation #1) -> PF ist
+    scale-invariant + zuverlaessig. Sharpe bleibt informativ. Sharpe-Gating
+    nur als Fallback wenn WFO keine PF-Daten hat.
 
     Returns Status-Dict mit:
-        wfo_sharpe (float | None)         WFO-Empfehlung
-        live_sharpe (float | None)        Live-Realitaet letzte N Tage
-        drift_pct (float | None)          (live-wfo)/wfo*100 (negativ = Decay)
+        drift_metric (str)                "pf" (primaer) oder "sharpe" (Fallback)
+        drift_pct (float | None)          (live-wfo)/wfo*100 der Primaer-Metrik
+        wfo_pf / live_pf (float | None)   Profit-Faktor Baseline vs Live
+        pf_drift_pct (float | None)       PF-Drift (= drift_pct wenn metric=pf)
+        wfo_win_rate / live_win_rate      Win-Rate (informativ)
+        wfo_sharpe / live_sharpe          Sharpe (informativ, NICHT mehr gating)
         n_trades (int)                    Sample-Size
+        distinct_days (int)               R-A53 Clean-Sample-Guard
         alert_triggered (bool)            Wurde Pushover gesendet?
         skip_reason (str | None)          Falls geskipped (zu wenig Daten etc.)
     """
@@ -273,11 +390,23 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
         result["skip_reason"] = "Feature disabled (config.wfo_drift_watchdog.enabled=False)"
         return result
 
+    # R-B5 (01.06.2026, Soak-Investigation #1): PF ist die PRIMAERE Drift-Metrik.
+    # Der WFO-Sharpe (mean OOS 6.40) ist ein Artefakt (Return-Glaettung +
+    # explosives Compounding + OOS>IS-Anomalie) -> als absolute Baseline
+    # unbrauchbar. PF (scale-invariant) ist zuverlaessig. Sharpe wird weiterhin
+    # INFORMATIV berechnet/reportet. Fallback auf Sharpe-Gating NUR falls die
+    # WFO-Daten keinen PF enthalten (alte wfo_status vor R-B4 / Error-Windows).
+    wfo_pf, wfo_win_rate = _get_wfo_target_pf()
     wfo_sharpe = _get_wfo_target_sharpe()
-    if wfo_sharpe is None:
+    if wfo_pf is None and wfo_sharpe is None:
         result["skip_reason"] = "Keine WFO-Daten in wfo_status.json"
         return result
-    result["wfo_sharpe"] = round(wfo_sharpe, 3)
+    if wfo_pf is not None:
+        result["wfo_pf"] = round(wfo_pf, 3)
+    if wfo_win_rate is not None:
+        result["wfo_win_rate"] = round(wfo_win_rate, 1)
+    if wfo_sharpe is not None:
+        result["wfo_sharpe"] = round(wfo_sharpe, 3)
 
     try:
         from app.config_manager import load_json
@@ -286,20 +415,35 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
         result["skip_reason"] = "trade_history.json nicht ladbar"
         return result
 
-    live_sharpe, n = _compute_live_sharpe(trade_history, lookback_days)
+    # Live-Metriken: PF + Win-Rate (primaer) + Sharpe (informativ/Fallback)
+    live_pf, live_win_rate, n = _compute_live_pf(trade_history, lookback_days)
+    live_sharpe, _n_sharpe = _compute_live_sharpe(trade_history, lookback_days)
     result["n_trades"] = n
-    if live_sharpe is None or n < min_trades:
+
+    # Primaer-Metrik waehlen: PF wenn WFO-PF + Live-PF vorhanden, sonst Sharpe.
+    use_pf = wfo_pf is not None and live_pf is not None
+    drift_metric = "pf" if use_pf else "sharpe"
+    result["drift_metric"] = drift_metric
+    live_val = live_pf if use_pf else live_sharpe
+    wfo_val = wfo_pf if use_pf else wfo_sharpe
+
+    if live_val is None or n < min_trades:
         result["skip_reason"] = f"Zu wenig Trades (n={n}, min={min_trades})"
         return result
 
     # R-A53 (29.05.2026): Min-Clean-Sample-Guard. Genug Trades reicht nicht —
-    # die daily-annualisierte Sharpe braucht genug DISTINKTE Trading-Tage.
-    # HALT-gestoerte Fenster (viele Trades, wenige Tage) sind unzuverlaessig.
-    # Ohne diesen Guard wuerde -175% Drift taeglich feuern waehrend Soak.
+    # die Metrik braucht genug DISTINKTE Trading-Tage. HALT-gestoerte Fenster
+    # (viele Trades, wenige Tage) sind unzuverlaessig. Ohne diesen Guard wuerde
+    # Drift taeglich feuern waehrend Soak.
     distinct_days = _count_distinct_trading_days(trade_history, lookback_days)
     result["distinct_days"] = distinct_days
     if distinct_days < min_distinct_days:
-        result["live_sharpe"] = round(live_sharpe, 3)
+        if live_pf is not None:
+            result["live_pf"] = round(live_pf, 3)
+        if live_win_rate is not None:
+            result["live_win_rate"] = round(live_win_rate, 1)
+        if live_sharpe is not None:
+            result["live_sharpe"] = round(live_sharpe, 3)
         result["skip_reason"] = (
             f"Zu wenig distinkte Trading-Tage (days={distinct_days}, "
             f"min={min_distinct_days}) — Sample statistisch unzuverlaessig "
@@ -307,18 +451,26 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
         )
         log.info(
             "WFO-Drift R-A53: skip Alert — nur %d distinkte Tage (<%d), "
-            "live_sharpe=%.2f nicht aussagekraeftig",
-            distinct_days, min_distinct_days, live_sharpe,
+            "metric=%s live=%.3f nicht aussagekraeftig",
+            distinct_days, min_distinct_days, drift_metric, live_val,
         )
         return result
-    result["live_sharpe"] = round(live_sharpe, 3)
+
+    if live_pf is not None:
+        result["live_pf"] = round(live_pf, 3)
+    if live_win_rate is not None:
+        result["live_win_rate"] = round(live_win_rate, 1)
+    if live_sharpe is not None:
+        result["live_sharpe"] = round(live_sharpe, 3)
 
     # Drift in % — negativ = Decay
-    if wfo_sharpe == 0:
-        result["skip_reason"] = "WFO-Sharpe = 0, kann nicht dividieren"
+    if wfo_val == 0:
+        result["skip_reason"] = f"WFO-{drift_metric} = 0, kann nicht dividieren"
         return result
-    drift_pct = (live_sharpe - wfo_sharpe) / abs(wfo_sharpe) * 100
+    drift_pct = (live_val - wfo_val) / abs(wfo_val) * 100
     result["drift_pct"] = round(drift_pct, 2)
+    if use_pf:
+        result["pf_drift_pct"] = round(drift_pct, 2)
 
     # Pushover-Alert bei Decay > Threshold (drift_pct < -threshold)
     if drift_pct < -threshold_pct:
@@ -339,9 +491,12 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
         if not skip_alert:
             try:
                 from app.alerts import send_alert
+                _label = "Profit-Faktor" if drift_metric == "pf" else "Sharpe"
+                _wr_hint = (f" Win-Rate live={live_win_rate:.0f}%"
+                            if live_win_rate is not None else "")
                 msg = (
-                    f"WFO-DRIFT-ALARM: Live-Sharpe {live_sharpe:.2f} vs "
-                    f"WFO-Empfehlung {wfo_sharpe:.2f} ({drift_pct:+.1f}%% Decay). "
+                    f"WFO-DRIFT-ALARM ({_label}): Live {live_val:.2f} vs "
+                    f"WFO-Baseline {wfo_val:.2f} ({drift_pct:+.1f}% Decay).{_wr_hint} "
                     f"N={n} Trades letzte {lookback_days}d. "
                     f"Aktion: pruefe ob Regime-Shift -> manueller WFO-Re-Run sinnvoll."
                 )
@@ -349,12 +504,13 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
                 result["alert_triggered"] = True
                 state["last_alert_at"] = datetime.now().isoformat()
                 state["last_drift_pct"] = round(drift_pct, 2)
-                state["last_live_sharpe"] = round(live_sharpe, 3)
-                state["last_wfo_sharpe"] = round(wfo_sharpe, 3)
+                state["last_drift_metric"] = drift_metric
+                state["last_live_val"] = round(live_val, 3)
+                state["last_wfo_val"] = round(wfo_val, 3)
                 _save_alert_state(state)
                 log.warning(
-                    f"WFO-Drift-Alert gesendet: live={live_sharpe:.2f}, "
-                    f"wfo={wfo_sharpe:.2f}, drift={drift_pct:+.1f}%%"
+                    f"WFO-Drift-Alert gesendet (metric={drift_metric}): "
+                    f"live={live_val:.2f}, wfo={wfo_val:.2f}, drift={drift_pct:+.1f}%"
                 )
             except Exception as e:
                 log.warning(f"WFO-Drift-Alert konnte nicht gesendet werden: {e}")
