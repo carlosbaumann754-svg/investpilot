@@ -1,8 +1,15 @@
-"""v37h+2 (17.05.2026) — Sharpe-Drift-Watchdog zwischen WFO-Runs.
+"""v37h+2 (17.05.2026) — Edge-Drift-Watchdog zwischen WFO-Runs.
+
+R-B5 (01.06.2026): PRIMAERE Metrik ist jetzt der PROFIT-FAKTOR (PF), NICHT
+mehr Sharpe. Grund (Soak-Investigation #1): der WFO-Sharpe (mean OOS 6.40)
+ist ein Artefakt (Return-Glaettung + explosives Compounding + OOS>IS-Anomalie)
+-> als absolute Baseline unbrauchbar. PF ist scale-invariant + zuverlaessig.
+Sharpe wird weiterhin informativ berechnet. Details: check_wfo_drift /
+_get_wfo_target_pf Docstrings.
 
 PROBLEM: WFO laeuft monatlich (1. Sonntag). Zwischen den Runs gibt es
-keinen automatischen Sanity-Check ob die Live-Sharpe-Realitaet zur WFO-
-Empfehlung passt. Bei plötzlichem Sharpe-Decay (Regime-Shift, Strategy-
+keinen automatischen Sanity-Check ob die Live-Edge-Realitaet zur WFO-
+Empfehlung passt. Bei ploetzlichem Edge-Decay (Regime-Shift, Strategy-
 Edge erodiert) wuerde Carlos das 30 Tage lang nicht sehen.
 
 LOESUNG: Taeglicher leichtgewichtiger Drift-Check der:
@@ -29,7 +36,7 @@ log = logging.getLogger(__name__)
 
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
-    "purpose": "Sharpe-Drift-Watchdog: Daily-Check Live-Sharpe vs WFO-OOS-Sharpe, Alert bei >30% Drift",
+    "purpose": "Edge-Drift-Watchdog (R-B5: PF-basiert): Daily-Check Live-PF vs WFO-OOS-PF (Sharpe nur informativ), Alert bei Drift > Threshold",
     "config_section": None,
     "state_files": ["wfo_status.json"],
     "self_tests": [],
