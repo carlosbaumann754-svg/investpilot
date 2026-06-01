@@ -63,6 +63,15 @@ V12_DISABLED_SYMBOLS = [
     # haette beide vermutlich beim naechsten WFO-Run gleichermassen
     # disabled — wir nehmen das hier vorweg.
     "SILVER", "IWM",
+    # R-B3 (01.06.2026): VITAX (Vanguard Information Technology Index Fund) ist
+    # ein MUTUAL FUND — nur Tages-NAV, kein Boersen-/Intraday-Handel. Wurde von
+    # der Wochen-Discovery faelschlich eingesammelt -> 15x/48h "possibly
+    # delisted; no price data found" im Scan. Der R-B3-instrumentType-Filter
+    # (market_scanner.analyze_single_asset) verhindert KUENFTIGE Fonds; VITAX ist
+    # aber bereits persistiert + inzwischen voellig dataless (leere History
+    # greift vor dem Filter) -> hier gezielt deaktivieren, damit der Scanner es
+    # gar nicht erst zu fetchen versucht. Bleibt im Universe-Filter sichtbar.
+    "VITAX",
 ]
 
 V12_SECTIONS: dict[str, dict[str, Any]] = {
