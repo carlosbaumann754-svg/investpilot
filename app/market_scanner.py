@@ -455,6 +455,31 @@ def calc_bollinger_position(prices, period=20):
     return max(0, min(1, (current - lower) / (upper - lower)))
 
 
+# --- R-B3 (01.06.2026): Fonds-/Nicht-Handels-Filter -----------------------
+# yfinance liefert pro Symbol einen instrumentType. Boersengehandelte Klassen
+# (EQUITY/ETF/CRYPTOCURRENCY/CURRENCY/FUTURE) sind handelbar; MUTUALFUND/INDEX/
+# MONEYMARKET nicht (nur Tages-NAV bzw. kein Intraday) -> gehoeren nie ins
+# Trading-Universum. VITAX (Vanguard Mutual Fund) loeste 15x/48h "possibly
+# delisted"-Fehler aus, weil die Discovery ihn einsammelte. analyze_single_asset
+# ist der gemeinsame Chokepoint von Discovery UND Live-Scanner -> ein Filter
+# hier wirkt an beiden Stellen.
+_NON_TRADEABLE_INSTRUMENT_TYPES = {"MUTUALFUND", "INDEX", "MONEYMARKET"}
+
+
+def _instrument_type(ticker):
+    """yfinance-instrumentType aus den History-Metadaten (gratis — von
+    ticker.history() gefuellt, kein Extra-Call). Fail-open: bei Unsicherheit
+    None, damit handelbare Assets nie faelschlich gefiltert werden."""
+    try:
+        meta = getattr(ticker, "history_metadata", None)
+        if isinstance(meta, dict):
+            t = meta.get("instrumentType")
+            return t.upper() if isinstance(t, str) else None
+    except Exception:
+        pass
+    return None
+
+
 def analyze_single_asset(symbol, asset_info):
     """Technische Analyse fuer ein einzelnes Asset."""
     if yf is None:
@@ -467,6 +492,17 @@ def analyze_single_asset(symbol, asset_info):
         hist = ticker.history(period="3mo", interval="1d")
 
         if hist.empty or len(hist) < 20:
+            return None
+
+        # R-B3: Nicht-handelbare Instrumente (Fonds/Index) ausfiltern.
+        # Mutual Funds bestehen den Tages-History-Check oben (NAV-Daten),
+        # scheitern aber im Live-Intraday-Scan -> hier sauber abfangen.
+        itype = _instrument_type(ticker)
+        if itype in _NON_TRADEABLE_INSTRUMENT_TYPES:
+            log.info(
+                f"  {symbol} ({yf_symbol}): Instrument-Typ '{itype}' nicht "
+                f"boersenhandelbar -> uebersprungen (R-B3 Fonds-Filter)"
+            )
             return None
 
         closes = hist["Close"].tolist()
