@@ -127,6 +127,30 @@ class Window:
     oos_metrics: dict = field(default_factory=dict)
 
 
+def _window_to_payload(w: "Window") -> dict:
+    """Serialisiert ein Window fuer wfo_status.json windows[].
+
+    R-B4 (01.06.2026, Soak-Investigation #2): `oos_sharpe` explizit als
+    Top-Level-Feld exponieren. Vorher lag der per-Window-Sharpe nur nested
+    in oos_metrics["sharpe"] -> Konsumenten (Dashboard / Drift-Watchdog), die
+    window["oos_sharpe"] lasen, bekamen None (Visibility-Luecke). oos_score
+    enthaelt denselben Wert, aber `oos_sharpe` ist der erwartete Feldname.
+    """
+    return {
+        "idx": w.idx,
+        "train_start": w.train_start.date().isoformat(),
+        "train_end": w.train_end.date().isoformat(),
+        "test_start": w.test_start.date().isoformat(),
+        "test_end": w.test_end.date().isoformat(),
+        "best_params": w.best_params,
+        "is_score": w.is_score,
+        "oos_score": w.oos_score,
+        "oos_trades": w.oos_trades,
+        "oos_metrics": w.oos_metrics,
+        "oos_sharpe": (w.oos_metrics or {}).get("sharpe"),
+    }
+
+
 # ============================================================
 # PHASE 1: ROLLING-WINDOWS GENERIEREN
 # ============================================================
@@ -450,18 +474,7 @@ def run_walk_forward(
     log.info("WFO Aggregate: %s", aggregate)
 
     # Persist
-    windows_payload = [{
-        "idx": w.idx,
-        "train_start": w.train_start.date().isoformat(),
-        "train_end": w.train_end.date().isoformat(),
-        "test_start": w.test_start.date().isoformat(),
-        "test_end": w.test_end.date().isoformat(),
-        "best_params": w.best_params,
-        "is_score": w.is_score,
-        "oos_score": w.oos_score,
-        "oos_trades": w.oos_trades,
-        "oos_metrics": w.oos_metrics,
-    } for w in windows]
+    windows_payload = [_window_to_payload(w) for w in windows]
     write_status("done",
                  windows=windows_payload,
                  aggregate=aggregate,
