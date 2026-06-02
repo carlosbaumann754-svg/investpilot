@@ -63,7 +63,11 @@ ASSET_UNIVERSE = {
     "MCD":   {"internal_id": 1044,  "yf": "MCD",   "class": "stocks",  "name": "McDonald's",          "sector": "consumer"},
     # --- US Growth / Tech ---
     "PYPL":  {"internal_id": 5765,  "yf": "PYPL",  "class": "stocks",  "name": "PayPal",       "sector": "growth"},
-    "SQ":    {"internal_id": 7961,  "yf": "XYZ",   "class": "stocks",  "name": "Block (formerly Square)","sector": "growth"},  # v36i: SQ -> XYZ Rename Jan 2024 (Block, Inc.)
+    "SQ":    {"internal_id": 7961,  "yf": "XYZ",   "class": "stocks",  "name": "Block (formerly Square)","sector": "growth",
+              # R-B6 (02.06.2026): SQ->XYZ Rename (Block, Jan 2024) war nur datenseitig (yf) migriert. Der IBKR-Resolver
+              # nutzte den Universe-Key 'SQ' -> Stock('SQ','SMART') -> IBKR Error 200, jeder STRONG_BUY scheiterte.
+              # ibkr_override setzt das echte IBKR-Ticker XYZ (gleicher Mechanismus wie GOLD->GLD).
+              "ibkr_override": {"symbol": "XYZ", "secType": "STK", "exchange": "SMART"}},
     "SHOP":  {"internal_id": 7905,  "yf": "SHOP",  "class": "stocks",  "name": "Shopify",      "sector": "growth"},
     "UBER":  {"internal_id": 14066, "yf": "UBER",  "class": "stocks",  "name": "Uber",         "sector": "growth"},
     "COIN":  {"internal_id": 18001, "yf": "COIN",  "class": "stocks",  "name": "Coinbase",     "sector": "crypto_major"},
