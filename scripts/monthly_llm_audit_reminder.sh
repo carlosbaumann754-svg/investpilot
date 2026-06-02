@@ -12,11 +12,18 @@ set -e
 LOG=/var/log/health-audit.log
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 DOM=$(date -u +%-d)
+DOW=$(date -u +%u)   # 1=Mo … 7=So
 
-# Gating: nur an 1. Sonntag im Monat (DOM 1-7 + dow=0 ist via cron geprüft,
-# DOM zusaetzlich hier weil GH-Cron-OR-Falle moeglich)
-if [ "$DOM" -gt 7 ]; then
-    echo "[$TS] Monthly-LLM-Reminder skip: DOM=$DOM > 7 (nicht 1. Sonntag)" >> "$LOG"
+# Gating: NUR am 1. Sonntag im Monat.
+# BUGFIX 02.06.2026: Cron-Eintrag '0 14 1-7 * 0' loest wegen der Cron-OR-Falle
+# (DOM UND DOW beide gesetzt = ODER-Verknuepfung) an JEDEM Tag 1.-7. PLUS jedem
+# Sonntag aus. Der alte Guard fing nur DOM>7 ab -> Reminder feuerte taeglich
+# 1.-7. (z.B. Mo 01.06. + Di 02.06.) statt nur am 1. Sonntag. Fix: zusaetzlich
+# DOW==7 (Sonntag) verlangen. 1. Sonntag = DOM<=7 UND Sonntag.
+# (date -u: Cron laeuft 14:00 UTC = 16:00 CEST, gleicher Kalendertag -> kein
+#  Zeitzonen-Grenzfall.)
+if [ "$DOM" -gt 7 ] || [ "$DOW" -ne 7 ]; then
+    echo "[$TS] Monthly-LLM-Reminder skip: nicht 1. Sonntag (DOM=$DOM DOW=$DOW)" >> "$LOG"
     exit 0
 fi
 
