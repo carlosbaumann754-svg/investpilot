@@ -637,6 +637,46 @@ class OrderStatusTracker:
 
 
 # ============================================================
+# R-B7 (03.06.2026): Prozess-Singleton-Tracker
+# ============================================================
+# Grund (systematic-debugging-Befund): IbkrBroker wird PRO Cycle neu via
+# get_broker() erzeugt -> vorher bekam jeder Broker einen EIGENEN Tracker mit
+# eigener in-memory _pending-Map. Die ib.orderStatusEvent-Subscription haengt
+# aber am Tracker des ERSTEN (Boot-)Brokers (nur Fresh-Connect-Pfad subscribt;
+# Pool-Hit nicht). Spaetere Zyklus-Broker registrieren Orders auf IHREN
+# Trackern -> der subscribte Boot-Tracker kennt sie nie (in-memory _pending von
+# __init__-Zeit) -> handle_status_event skippt sie als "unbekannt" -> Phantom-
+# PendingSubmit bis 48h-Recover. Singleton (wie der Connection-Pool) = EINE
+# _pending-Map fuer ALLE Broker -> register() + handle_status_event kohaerent.
+_SHARED_TRACKER: Optional["OrderStatusTracker"] = None
+_SHARED_TRACKER_LOCK = threading.Lock()
+
+
+def get_shared_tracker(data_dir: Optional[Path] = None,
+                       status_mapper: Optional[Any] = None) -> "OrderStatusTracker":
+    """Prozess-weiter Singleton-OrderStatusTracker (R-B7).
+
+    Erster Aufruf erzeugt die Instanz (mit den uebergebenen Args); spaetere
+    Aufrufe liefern dieselbe Instanz (Args dann ignoriert). So teilen alle
+    IbkrBroker-Instanzen EINE _pending-Map -> register() und der subscribte
+    handle_status_event arbeiten kohaerent auf demselben State.
+    """
+    global _SHARED_TRACKER
+    with _SHARED_TRACKER_LOCK:
+        if _SHARED_TRACKER is None:
+            _SHARED_TRACKER = OrderStatusTracker(
+                data_dir=data_dir, status_mapper=status_mapper)
+        return _SHARED_TRACKER
+
+
+def _reset_shared_tracker_for_tests() -> None:
+    """Nur fuer Tests: Singleton zuruecksetzen (Cross-Test-Isolation)."""
+    global _SHARED_TRACKER
+    with _SHARED_TRACKER_LOCK:
+        _SHARED_TRACKER = None
+
+
+# ============================================================
 # Public Helper: daily maintenance fuer scheduler.py
 # ============================================================
 

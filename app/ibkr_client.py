@@ -344,9 +344,14 @@ class IbkrBroker(BrokerBase):
             "asset_class_order_settings", {}
         )
         try:
-            from app.order_status_tracker import OrderStatusTracker
-            self._tracker = OrderStatusTracker()
-            log.info("E27 OrderStatusTracker instantiiert (enabled=%s, pending=%d)",
+            # R-B7 (03.06.2026): Prozess-Singleton statt pro-Broker-Instanz.
+            # Vorher bekam jeder per-Cycle-Broker einen eigenen Tracker; die
+            # orderStatusEvent-Subscription haftete am Boot-Tracker, dessen
+            # in-memory _pending spaeter registrierte Orders nie sah -> Phantom-
+            # PendingSubmit. Singleton = geteilte _pending-Map -> kohaerent.
+            from app.order_status_tracker import get_shared_tracker
+            self._tracker = get_shared_tracker()
+            log.info("E27 OrderStatusTracker (Singleton R-B7) bereit (enabled=%s, pending=%d)",
                      self._e27_enabled, self._tracker.get_pending_count())
         except Exception as e:
             log.warning("E27 Tracker-Init failed (non-fatal): %s", e)
