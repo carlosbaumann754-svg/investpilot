@@ -2411,10 +2411,11 @@ async def api_discovery_status(user=Depends(require_auth)):
         log.debug(f"check_and_reload_discovery_output skipped: {e}")
 
     from app.config_manager import load_json
+    from app.status_staleness import mark_stale_if_old
     status = load_json("discovery_status.json")
     if not status:
         return {"state": "idle", "message": "Noch kein Discovery-Lauf gestartet"}
-    return status
+    return mark_stale_if_old(status)  # R-B8: toter 'running'-Job -> 'stale'
 
 
 @app.get("/api/weekly-report/pdf")
@@ -3412,10 +3413,11 @@ async def api_run_optimizer(background_tasks: BackgroundTasks, user=Depends(requ
 async def api_optimizer_status(user=Depends(require_auth)):
     """Status des letzten/laufenden Optimizer-Background-Laufs."""
     from app.config_manager import load_json
+    from app.status_staleness import mark_stale_if_old
     status = load_json("optimizer_status.json")
     if not status:
         return {"state": "idle", "message": "Noch kein Optimizer-Lauf gestartet"}
-    return status
+    return mark_stale_if_old(status)  # R-B8: toter 'running'-Job -> 'stale'
 
 
 @app.post("/api/optimizer/rollback")
@@ -3588,10 +3590,11 @@ async def api_kelly_sweep_status(user=Depends(require_auth)):
     except Exception:
         pass
     from app.config_manager import load_json
+    from app.status_staleness import mark_stale_if_old
     status = load_json("kelly_sweep_status.json")
     if not status:
         return {"state": "idle", "message": "Noch kein Kelly Sweep gelaufen"}
-    return status
+    return mark_stale_if_old(status)  # R-B8: toter 'running'-Job -> 'stale'
 
 
 @app.get("/api/kelly-sweep")

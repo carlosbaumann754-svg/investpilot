@@ -1714,6 +1714,14 @@ async function loadLastRunTimestamps() {
             } else if (s.state === 'running') {
                 el.textContent = ep.label + ': laeuft...';
                 el.style.color = 'var(--orange)';
+            } else if (s.state === 'stale') {
+                // R-B8 (03.06.2026): Server-seitig markierter toter Job (running
+                // ohne Update seit >Timeout; Kill/OOM/Neustart umging das
+                // Runner-Error-Handling). Staleness wird SERVER-seitig berechnet
+                // (gleiche Uhr wie updated_at -> kein Browser-Zeitzonen-Skew).
+                const ageH = s.stale_age_min ? ', ~' + Math.max(1, Math.round(s.stale_age_min / 60)) + 'h' : '';
+                el.textContent = ep.label + ': abgebrochen (veraltet' + ageH + ')';
+                el.style.color = 'var(--red)';
             } else if (s.state === 'error') {
                 el.textContent = ep.label + ': Fehler';
                 el.style.color = 'var(--red)';
