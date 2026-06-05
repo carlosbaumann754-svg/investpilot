@@ -479,28 +479,37 @@ class OrderStatusTracker:
         log.info("E27 STALE: order_id=%s symbol=%s — Bot war wahrscheinlich >24h offline",
                  key, entry.get("symbol"))
 
-        # v37e Tag 6: Pushover-Alert bei Stale-Marker
-        # Visibility-Loch geschlossen — Stale ist eine echte Anomalie
-        # die manuelles IBKR-Web-Login erfordert. Priority=1 (HIGH).
-        try:
-            from app.alerts import send_pushover
-            symbol = entry.get("symbol", "?")
-            order_id = key
-            registered_at = entry.get("registered_at", "?")
-            msg = (
-                f"STALE_ORDER: {symbol} (order_id={order_id}) "
-                f">48h pending, kein IBKR-Match. "
-                f"Registered: {registered_at}. "
-                f"Aktion: IBKR-Web-Login (cbaumann_view) pruefen ob Position offen."
-            )
-            send_pushover(
-                msg,
-                title="InvestPilot STALE_ORDER",
-                priority=1,  # HIGH — überbrückt Quiet-Hours
-                sound="siren",
-            )
-        except Exception as exc:  # pragma: no cover — Pushover-Failure soll Stale-Marker nicht brechen
-            log.warning("E27 STALE: Pushover-Alert failed: %s", exc)
+        # v37e Tag 6: Pushover-Alert bei Stale-Marker — R-B9 (05.06.2026): nur
+        # EINMAL pro Order. Vorher feuerte der Alert bei JEDEM Recover-Lauf erneut
+        # (Bot-Prozess + Reconcile-Cron-Prozess haben getrennte In-Memory-Tracker
+        # -> bis sie sich einig sind, re-staled + re-alarmiert -> Cry-Wolf-Spam,
+        # z.B. 18:18 + 19:00 fuer dieselben 6 Orders). Der Z.373-FINAL_STATUSES-
+        # Skip greift nur INNERHALB eines Prozesses (R-B7-Singleton ist per-Prozess).
+        # Dedup via PERSISTIERTEM stale_alerted-Flag (in pending_orders.json, von
+        # _save_state unten geschrieben) -> JEDER Prozess sieht 'schon alarmiert'
+        # -> garantiert genau 1 Pushover pro Order, prozess-uebergreifend.
+        already_alerted = bool(entry.get("stale_alerted"))
+        entry["stale_alerted"] = now_iso
+        if not already_alerted:
+            try:
+                from app.alerts import send_pushover
+                symbol = entry.get("symbol", "?")
+                order_id = key
+                registered_at = entry.get("registered_at", "?")
+                msg = (
+                    f"STALE_ORDER: {symbol} (order_id={order_id}) "
+                    f">48h pending, kein IBKR-Match. "
+                    f"Registered: {registered_at}. "
+                    f"Aktion: IBKR-Web-Login (cbaumann_view) pruefen ob Position offen."
+                )
+                send_pushover(
+                    msg,
+                    title="InvestPilot STALE_ORDER",
+                    priority=1,  # HIGH — überbrückt Quiet-Hours
+                    sound="siren",
+                )
+            except Exception as exc:  # pragma: no cover — Pushover-Failure soll Stale-Marker nicht brechen
+                log.warning("E27 STALE: Pushover-Alert failed: %s", exc)
 
         # BUGFIX 10.05.2026: pending_orders.json persistieren damit der
         # "Stale"-Marker den Cross-Instance-Idempotenz-Check ueberlebt.
