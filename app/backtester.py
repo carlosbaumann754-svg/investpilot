@@ -1972,12 +1972,17 @@ def walk_forward_validate(histories, config=None, train_pct=0.8,
             "metrics": train_metrics,
             "equity_curve": train_curve,
             "trades_count": len(train_trades),
+            # R-B14 Phase 0/1: Per-Feature-IC in-sample (Vergleichswert zu OOS)
+            "feature_ics": _compute_feature_ics(train_trades, train_histories),
         },
         "out_of_sample": {
             "period": f"{test_start} - {test_end}",
             "metrics": test_metrics,
             "equity_curve": test_curve,
             "trades_count": len(test_trades),
+            # R-B14: Per-Feature-IC OUT-OF-SAMPLE — der entscheidende Test, ob das
+            # RSI-Signal (+0.07 full-period) auf ungesehenen Daten ueberlebt.
+            "feature_ics": _compute_feature_ics(test_trades, test_histories),
         },
     }
 

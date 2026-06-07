@@ -56,6 +56,17 @@ def test_feature_ics_too_few_trades():
         assert v["ic_spearman"] is None
 
 
+def test_wfo_exposes_oos_feature_ics():
+    """walk_forward_validate haengt feature_ics an in_sample UND out_of_sample
+    (der OOS-Wert ist der entscheidende Test, ob ein Feature-Signal echt ist)."""
+    from pathlib import Path
+    src = (Path(__file__).parent.parent / "app" / "backtester.py").read_text(encoding="utf-8")
+    start = src.find("def walk_forward_validate(")
+    body = src[start:start + 3500]
+    assert '"feature_ics": _compute_feature_ics(test_trades, test_histories)' in body
+    assert '"feature_ics": _compute_feature_ics(train_trades, train_histories)' in body
+
+
 def test_feature_ics_ignores_trades_without_pnl_or_date():
     histories = {"AAA": _hist([100 + i * 0.3 for i in range(90)])}
     trades = [{"symbol": "AAA"}, {"entry_date": "2024-03-01"},
