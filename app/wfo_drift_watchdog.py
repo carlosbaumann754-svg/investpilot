@@ -259,7 +259,8 @@ def _compute_live_pf(trade_history: list,
         return None, None, 0
 
     cutoff = datetime.now() - timedelta(days=lookback_days)
-    pnls: list[float] = []
+    pnls: list[float] = []        # gewichtete Netto-Returns aller Closes
+    final_pnls: list[float] = []  # nur finale Closes (Win-Rate-Basis, M2)
     for t in trade_history:
         action = (t.get("action") or "").upper()
         if not any(s in action for s in (
@@ -280,9 +281,19 @@ def _compute_live_pf(trade_history: list,
         if pnl_pct is None:
             continue
         try:
-            pnls.append(float(pnl_pct))
+            val = float(pnl_pct)
         except (TypeError, ValueError):
             continue
+        # R-B11/M2: Teil-Closes anteilig gewichten — konsistent zur Backtester-
+        # Positions-Aggregation (M1). Sonst Live-PF (echte Teil-Closes als volle
+        # Trades) vs WFO-PF (Partials gefaltet) = Aepfel/Birnen.
+        if "PARTIAL" in action:
+            pcp = t.get("partial_close_pct")
+            frac = (float(pcp) / 100.0) if pcp else 1.0
+            pnls.append(val * frac)
+        else:
+            pnls.append(val)
+            final_pnls.append(val)  # nur finale Closes = unabhaengige Position
 
     n = len(pnls)
     if n < 2:
@@ -290,8 +301,11 @@ def _compute_live_pf(trade_history: list,
 
     gross_win = sum(p for p in pnls if p > 0)
     gross_loss = abs(sum(p for p in pnls if p < 0))
-    wins = sum(1 for p in pnls if p > 0)
-    win_rate = wins / n * 100.0
+    # Win-Rate auf unabhaengigen Positionen (finale Closes); Partials wuerden die
+    # Quote sonst aufblaehen (per Definition Gewinne). Fallback: alle Closes.
+    wr_basis = final_pnls if final_pnls else pnls
+    wins = sum(1 for p in wr_basis if p > 0)
+    win_rate = wins / len(wr_basis) * 100.0
 
     if gross_loss <= 0:
         pf = _LIVE_PF_CAP if gross_win > 0 else None

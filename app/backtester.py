@@ -655,7 +655,8 @@ def simulate_trades_fast(precomputed, config=None, earnings_blackouts=None,
         for sym, pos in open_positions.items():
             sec = pos.get("sector", "unknown")
             sector_count[sec] += 1
-            val = pos.get("entry_price", 1.0)
+            val = 1.0  # R-B11/M5: Equal-Weight statt entry_price (=Preis/Aktie,
+            # bedeutungsloser Wert-Proxy: gewichtete teure Aktien 40x staerker).
             sector_value[sec] += val
             total_value += val
 
@@ -1096,7 +1097,8 @@ def simulate_trades(histories, config=None, use_realistic_filters=True,
             sec = pos.get("sector", "unknown")
             sector_count[sec] += 1
             # Use entry price as proxy for position value (equal weight assumed)
-            val = pos.get("entry_price", 1.0)
+            val = 1.0  # R-B11/M5: Equal-Weight statt entry_price (=Preis/Aktie,
+            # bedeutungsloser Wert-Proxy: gewichtete teure Aktien 40x staerker).
             sector_value[sec] += val
             total_value += val
 
@@ -1476,6 +1478,90 @@ def _build_position_sizing_from_config(config):
     }
 
 
+_PROFIT_FACTOR_CAP = 10.0  # R-B11/M6: PF-Deckel (kein float('inf') -> invalides JSON)
+
+
+def _aggregate_positions(trades):
+    """R-B11/M1 — faltet Teil-Closes zurueck zur Original-Position.
+
+    Jeder PARTIAL_CLOSE-Trade schloss `partial_close_pct`% der Position (ein
+    Gewinn-Lock, per Definition profitabel); der finale Close (SL/TP/Trailing/
+    Time/EOD) schliesst den verbleibenden Anteil. Frueher zaehlte JEDER Teil-
+    Close als voller Trade -> Win-Rate & Profit-Factor inflationiert (die in
+    R-B5 als 'verlaesslich' deklarierten Gate-Metriken).
+
+    Gruppiert nach (symbol|entry_date) und liefert pro Position den
+    FRAKTIONS-GEWICHTETEN Netto-/Brutto-Return (UNskaliert, ohne Kelly).
+    """
+    from collections import defaultdict as _dd
+    groups = _dd(list)
+    for t in trades:
+        pid = f"{t.get('symbol')}|{t.get('entry_date')}"
+        groups[pid].append(t)
+
+    positions = []
+    for pid, ts in groups.items():
+        partials = [t for t in ts if t.get("exit_reason") == "PARTIAL_CLOSE"]
+        finals = [t for t in ts if t.get("exit_reason") != "PARTIAL_CLOSE"]
+        sum_frac = sum((t.get("partial_close_pct") or 0) / 100.0 for t in partials)
+        net = sum((t.get("pnl_net_pct", 0) / 100.0) * ((t.get("partial_close_pct") or 0) / 100.0)
+                  for t in partials)
+        gross = sum((t.get("pnl_pct", 0) / 100.0) * ((t.get("partial_close_pct") or 0) / 100.0)
+                    for t in partials)
+        remaining = max(0.0, 1.0 - sum_frac)
+        if finals:
+            per = remaining / len(finals)
+            for f in finals:
+                net += (f.get("pnl_net_pct", 0) / 100.0) * per
+                gross += (f.get("pnl_pct", 0) / 100.0) * per
+        entry_dates = [t.get("entry_date") for t in ts if t.get("entry_date")]
+        exit_dates = [t.get("exit_date") for t in ts if t.get("exit_date")]
+        positions.append({
+            "position_id": pid,
+            "net_return": net,
+            "gross_return": gross,
+            "entry_date": min(entry_dates) if entry_dates else None,
+            "exit_date": max(exit_dates) if exit_dates else None,
+            "days_held": max((t.get("days_held", 0) for t in ts), default=0),
+        })
+    return positions
+
+
+def _daily_return_map(positions, kelly_frac):
+    """R-B11/M3 — verteilt jeden Positions-Return gleichmaessig ueber seine
+    Haltedauer (Werktage) und summiert die Beitraege pro Kalendertag.
+
+    Ergebnis ist EINE Tages-Return-Reihe, aus der total_return, drawdown UND
+    sharpe konsistent kommen — statt ueberlappende Positionen sequentiell zu
+    compounden (was den Return systematisch aufblies).
+    """
+    from datetime import timedelta as _td
+    daily: dict = {}
+    for p in positions:
+        try:
+            d_entry = datetime.strptime(p["entry_date"], "%Y-%m-%d")
+            d_exit = datetime.strptime(p["exit_date"], "%Y-%m-%d")
+        except (ValueError, KeyError, TypeError):
+            continue
+        # Werktage im Haltezeitraum SAMMELN, dann den Return exakt darauf
+        # aufteilen (Summe ueber die Tage == Positions-Return). Frueher teilte
+        # der Sharpe-Code durch span_days(Kalender) und iterierte inklusive ->
+        # Summe ueberzaehlte (Doppelzaehlung). Hier sauber.
+        weekdays = []
+        cur = d_entry
+        while cur <= d_exit:
+            if cur.weekday() < 5:  # nur Werktage (grobe Markt-Kalender-Approx)
+                weekdays.append(cur.strftime("%Y-%m-%d"))
+            cur = cur + _td(days=1)
+        if not weekdays:
+            weekdays = [d_entry.strftime("%Y-%m-%d")]
+        r = p["net_return"] * kelly_frac
+        daily_r = r / len(weekdays)
+        for key in weekdays:
+            daily[key] = daily.get(key, 0.0) + daily_r
+    return daily
+
+
 def calculate_metrics(trades, position_sizing=None):
     """Calculate performance metrics from a list of trades.
 
@@ -1492,114 +1578,92 @@ def calculate_metrics(trades, position_sizing=None):
     if not trades:
         return _empty_metrics()
 
-    # v12: Bei Position-Sizing rechnen wir die Trade-Returns runter
-    # auf Equity-Anteil. Beispiel: Trade gewinnt 10%, Position war 1%
-    # der Equity → realer Equity-Return = 0.1%.
+    # === R-B11/M1+M3+M6: Positions-Aggregation + tagesbasierte Equity ===
+    # M1: Teil-Closes werden mit ihrem Original-Positions-Anteil GEWICHTET und
+    # mit dem finalen Close zur Position gefaltet (statt jeden Teil-Close als
+    # vollen, per Definition profitablen Trade zu zaehlen) -> Win-Rate & PF
+    # werden ehrlich (= die R-B5-Gate-Metriken).
+    # M3: total_return/drawdown/sharpe kommen aus EINER tagesbasierten Equity-
+    # Reihe (Positions-Return ueber Haltedauer verteilt), statt ueberlappende
+    # Positionen sequentiell zu compounden (was den Return aufblies).
+    kelly_frac = 1.0
     if position_sizing:
-        # v22: nutze effective_fraction (= min(kelly, max_single_trade_pct))
-        # statt nur kelly_fraction. Backwards-compat: fallback auf kelly_fraction
-        # wenn alte Sizing-Dicts ohne effective_fraction kommen.
+        # v22: effective_fraction (= min(kelly, max_single_trade_pct)) bevorzugt.
         kelly_frac = position_sizing.get("effective_fraction") \
                      or position_sizing.get("kelly_fraction", 0.01)
-        # Trades nach exit_date sortieren fuer sequentielle Equity-Update
-        try:
-            sorted_trades = sorted(trades, key=lambda t: t.get("exit_date", ""))
-        except Exception:
-            sorted_trades = trades
-        net_returns = [(t["pnl_net_pct"] / 100) * kelly_frac for t in sorted_trades]
-        gross_returns = [(t["pnl_pct"] / 100) * kelly_frac for t in sorted_trades]
-        trades = sorted_trades
-    else:
-        net_returns = [t["pnl_net_pct"] / 100 for t in trades]
-        gross_returns = [t["pnl_pct"] / 100 for t in trades]
+
+    positions = _aggregate_positions(trades)
+    positions.sort(key=lambda p: p.get("exit_date") or "")
+
+    net_returns = [p["net_return"] * kelly_frac for p in positions]
+    gross_returns = [p["gross_return"] * kelly_frac for p in positions]
 
     wins = [r for r in net_returns if r > 0]
     losses = [r for r in net_returns if r <= 0]
 
-    total_return = 1.0
-    for r in net_returns:
-        total_return *= (1 + r)
-    total_return -= 1
-
-    # Time span
+    # Time span (aus Positions-Entry/Exit)
     dates = []
-    for t in trades:
-        try:
-            dates.append(datetime.strptime(t["entry_date"], "%Y-%m-%d"))
-            dates.append(datetime.strptime(t["exit_date"], "%Y-%m-%d"))
-        except (ValueError, KeyError):
-            pass
-
+    for p in positions:
+        for _dk in ("entry_date", "exit_date"):
+            try:
+                dates.append(datetime.strptime(p[_dk], "%Y-%m-%d"))
+            except (ValueError, KeyError, TypeError):
+                pass
     if len(dates) >= 2:
         span_days = (max(dates) - min(dates)).days
         years = max(span_days / 365.25, 0.1)
     else:
         years = 1.0
 
-    annual_return = (1 + total_return) ** (1 / years) - 1 if total_return > -1 else -1
-
-    # Sharpe Ratio (annualized, risk-free = 0)
-    #
-    # Bei position_sizing: aus dem Equity-Curve auf Tagesbasis rechnen.
-    # Verteilt jeden Trade-Return gleichmaessig ueber seine Holding-Days und
-    # summiert die Contribution pro Kalendertag. Das ist die ehrliche Form
-    # eines Strategy-Sharpe — scale-invariant ist nur die Trade-Level-Form.
-    sharpe = 0
-    if position_sizing and len(trades) >= 2:
-        from datetime import timedelta as _td
-        daily_contrib: dict[str, float] = {}
-        for t, r_scaled in zip(trades, net_returns):
-            try:
-                d_entry = datetime.strptime(t["entry_date"], "%Y-%m-%d")
-                d_exit = datetime.strptime(t["exit_date"], "%Y-%m-%d")
-            except (ValueError, KeyError):
-                continue
-            span_days = max((d_exit - d_entry).days, 1)
-            daily_r = r_scaled / span_days
-            cur = d_entry
-            while cur <= d_exit:
-                # Nur Werktage zaehlen (grobe Approximation des Markt-Kalenders)
-                if cur.weekday() < 5:
-                    key = cur.strftime("%Y-%m-%d")
-                    daily_contrib[key] = daily_contrib.get(key, 0.0) + daily_r
-                cur = cur + _td(days=1)
-        if len(daily_contrib) >= 2:
-            daily_rets = list(daily_contrib.values())
+    # Tagesbasierte Equity-Reihe (M3) — Quelle fuer total_return, drawdown, sharpe
+    daily_map = _daily_return_map(positions, kelly_frac)
+    if daily_map:
+        ordered_days = sorted(daily_map.keys())
+        equity = [1.0]
+        for _d in ordered_days:
+            equity.append(equity[-1] * (1 + daily_map[_d]))
+        total_return = equity[-1] - 1
+        # Max Drawdown aus derselben Kurve
+        peak = equity[0]
+        max_dd = 0
+        for val in equity:
+            if val > peak:
+                peak = val
+            dd = (peak - val) / peak if peak > 0 else 0
+            if dd > max_dd:
+                max_dd = dd
+        # Sharpe aus der Tagesreihe (annualisiert, rf=0, 252 Handelstage)
+        daily_rets = [daily_map[_d] for _d in ordered_days]
+        if len(daily_rets) >= 2:
             mean_d = sum(daily_rets) / len(daily_rets)
             std_d = (sum((r - mean_d) ** 2 for r in daily_rets) / (len(daily_rets) - 1)) ** 0.5
-            if std_d > 0:
-                # 252 trading days per year
-                sharpe = (mean_d / std_d) * (252 ** 0.5)
-    elif len(net_returns) >= 2:
-        # Fallback: Trade-Level (scale-invariant, verzerrt bei Kelly-Vergleich)
-        mean_r = sum(net_returns) / len(net_returns)
-        std_r = (sum((r - mean_r) ** 2 for r in net_returns) / (len(net_returns) - 1)) ** 0.5
-        trades_per_year = len(net_returns) / years
-        sharpe = (mean_r * trades_per_year) / (std_r * (trades_per_year ** 0.5)) if std_r > 0 else 0
+            sharpe = (mean_d / std_d) * (252 ** 0.5) if std_d > 0 else 0
+        else:
+            sharpe = 0
+    else:
+        total_return = 0.0
+        max_dd = 0
+        sharpe = 0
 
-    # Max Drawdown
-    equity = [1.0]
-    for r in net_returns:
-        equity.append(equity[-1] * (1 + r))
-    peak = equity[0]
-    max_dd = 0
-    for val in equity:
-        if val > peak:
-            peak = val
-        dd = (peak - val) / peak if peak > 0 else 0
-        if dd > max_dd:
-            max_dd = dd
+    annual_return = (1 + total_return) ** (1 / years) - 1 if total_return > -1 else -1
 
-    # Win rate
+    # Win rate (positions-basiert — M1)
     win_rate = len(wins) / len(net_returns) * 100 if net_returns else 0
 
-    # Profit factor
+    # Profit factor (positions-basiert, M6: Cap statt float('inf'))
     gross_profit = sum(wins) if wins else 0
     gross_loss = abs(sum(losses)) if losses else 0
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf") if gross_profit > 0 else 0
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    elif gross_profit > 0:
+        profit_factor = _PROFIT_FACTOR_CAP
+    else:
+        profit_factor = 0
+    profit_factor = min(profit_factor, _PROFIT_FACTOR_CAP)
 
-    # Average duration
-    avg_duration = sum(t.get("days_held", 0) for t in trades) / len(trades)
+    # Average duration (positions-basiert — M1)
+    avg_duration = (sum(p.get("days_held", 0) for p in positions) / len(positions)
+                    if positions else 0)
 
     # Total costs
     # v12.1 Fix: Wenn position_sizing aktiv ist, hat jeder Trade nur einen
@@ -1624,6 +1688,7 @@ def calculate_metrics(trades, position_sizing=None):
         "profit_factor": round(profit_factor, 2),
         "avg_trade_days": round(avg_duration, 1),
         "total_trades": len(trades),
+        "total_positions": len(positions),  # M1: unabhaengige Trades (Partials gefaltet)
         "total_costs_pct": round(total_costs, 2),
         "best_trade_pct": round(max(net_returns) * 100, 2) if net_returns else 0,
         "worst_trade_pct": round(min(net_returns) * 100, 2) if net_returns else 0,
