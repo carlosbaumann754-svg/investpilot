@@ -1562,6 +1562,74 @@ def _daily_return_map(positions, kelly_frac):
     return daily
 
 
+def _pearson(xs, ys):
+    """Pearson-Korrelation (pure)."""
+    import math as _m
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sx = _m.sqrt(sum((x - mx) ** 2 for x in xs))
+    sy = _m.sqrt(sum((y - my) ** 2 for y in ys))
+    return cov / (sx * sy) if sx > 0 and sy > 0 else 0.0
+
+
+def _ranks(vals):
+    """Durchschnitts-Raenge (Ties korrekt gemittelt) — fuer Spearman."""
+    idx = sorted(range(len(vals)), key=lambda i: vals[i])
+    ranks = [0.0] * len(vals)
+    i = 0
+    while i < len(idx):
+        j = i
+        while j + 1 < len(idx) and vals[idx[j + 1]] == vals[idx[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1  # 1-basierter Durchschnitts-Rang
+        for k in range(i, j + 1):
+            ranks[idx[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _compute_signal_ic(trades):
+    """R-B13 (07.06.2026): Signal-Qualitaet — sagt der entry_score die Trade-
+    Rendite (pnl_net_pct) ueberhaupt voraus?
+
+    Liefert Information-Coefficient (Pearson + Spearman-Rang, robust gegen
+    Ausreisser) + Top-vs-Bottom-Quartil-Spread. Interpretation:
+      |IC| < 0.03  -> praktisch KEIN Edge (Score trennt nicht)
+      0.03..0.05   -> sehr schwach
+      > 0.05       -> schwach-aber-real (in Finanzdaten schon brauchbar)
+    Macht 'hat das Signal einen Edge?' zu einer STEHENDEN, ehrlich gemessenen
+    Metrik — die Grundlage fuer jede kuenftige Signal-Forschung.
+    """
+    pairs = [(t.get("entry_score"), t.get("pnl_net_pct")) for t in trades
+             if t.get("entry_score") is not None and t.get("pnl_net_pct") is not None]
+    n = len(pairs)
+    if n < 20:
+        return {"n": n, "ic_pearson": None, "ic_spearman": None,
+                "top_quartile_avg_pct": None, "bottom_quartile_avg_pct": None,
+                "verdict": "zu wenig Trades"}
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    ic_p = _pearson(xs, ys)
+    ic_s = _pearson(_ranks(xs), _ranks(ys))  # Spearman = Pearson auf Raengen
+    srt = sorted(pairs, key=lambda p: p[0])
+    q = max(1, n // 4)
+    bottom = [p[1] for p in srt[:q]]
+    top = [p[1] for p in srt[-q:]]
+    abs_s = abs(ic_s)
+    verdict = ("KEIN Edge (Score trennt nicht)" if abs_s < 0.03
+               else "sehr schwach" if abs_s < 0.05 else "schwach-aber-real")
+    return {"n": n,
+            "ic_pearson": round(ic_p, 4),
+            "ic_spearman": round(ic_s, 4),
+            "top_quartile_avg_pct": round(sum(top) / len(top), 2),
+            "bottom_quartile_avg_pct": round(sum(bottom) / len(bottom), 2),
+            "verdict": verdict}
+
+
 def calculate_metrics(trades, position_sizing=None):
     """Calculate performance metrics from a list of trades.
 
@@ -2149,6 +2217,8 @@ def run_full_backtest(config=None, symbols=None, years=5,
     # 5. Compile results
     results = {
         "timestamp": datetime.now().isoformat(),
+        # R-B13: Signal-Qualitaet (IC) — sagt der entry_score die Rendite voraus?
+        "signal_quality": _compute_signal_ic(all_trades),
         "config_used": {
             "strategy": config.get("demo_trading", {}).get("strategy", "unknown"),
             "stop_loss_pct": config.get("demo_trading", {}).get("stop_loss_pct", -5),
