@@ -115,6 +115,14 @@ def _load_context():
         ctx["fear_greed_index"] = None
         ctx["market_regime"] = "unknown"
         ctx["_stale"] = True  # Audit-Flag fuer Caller die genau wissen wollen
+    elif ctx.get("_stale"):
+        # R-B12 (07.06.2026 HOTFIX): _stale wird FRISCH pro Load bewertet. Ein in
+        # die Datei GELEAKTES _stale=True (update_full_context hat einen waehrend
+        # einer Stale-Phase geladenen ctx gespeichert) darf NICHT dauerhaft blocken,
+        # wenn die Daten real frisch sind. Sonst haelt der R1-Block (Batch-2)
+        # permanent an, obwohl VIX/F&G vorhanden sind.
+        ctx = dict(ctx)
+        ctx["_stale"] = False
     return ctx
 
 
@@ -583,6 +591,12 @@ def update_full_context(config=None):
         log.warning(f"Macro-Signale Update fehlgeschlagen (non-fatal): {e}", exc_info=True)
 
     ctx["last_update"] = now.isoformat()
+    # R-B12 (07.06.2026 HOTFIX): _stale ist ein TRANSIENTES Audit-Flag (von
+    # _load_context auf einer Kopie gesetzt) und darf NIE in die Datei. Wenn der
+    # ctx oben waehrend einer Stale-Phase geladen wurde, trug er _stale=True;
+    # ohne dieses pop wuerde es persistiert -> R1 blockt permanent trotz frischer
+    # Daten. Frische Werte stehen jetzt drin -> Flag entfernen.
+    ctx.pop("_stale", None)
     ctx["position_size_multiplier"] = get_position_size_multiplier(events, vix)
 
     _save_context(ctx)
