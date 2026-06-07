@@ -115,13 +115,24 @@ def test_script_changes_both_files_atomically():
 
 
 def test_script_verifies_live_account_prefix():
-    """Verify-Logik muss U-Account-Praefix checken (nicht DU = paper)."""
+    """R-B11/C1: Verify muss gegen die TATSAECHLICH emittierten Werte pruefen.
+
+    /api/broker-status emittiert fuer IBKR mode="real" (NICHT "live" — der String
+    existiert im Code nicht) und account_type="live". Frueher grep auf
+    '"mode":"live"' -> verify schlug IMMER fehl -> main() machte Auto-Rollback ->
+    Cutover konnte strukturell nie durchgehen. Dieser Test kodierte vorher den Bug.
+    """
     src = SCRIPT.read_text(encoding="utf-8")
     verify_start = src.index("verify_live()")
     verify_end = src.index("\n}", verify_start)
     verify_body = src[verify_start:verify_end]
-    assert '"mode":"live"' in verify_body, "Mode-Check fehlt"
-    assert 'U[0-9]' in verify_body, "U-Praefix-Check fehlt (DU... waere paper)"
+    assert '"mode":"real"' in verify_body, "Mode-Check muss auf 'real' pruefen"
+    assert '"account_type":"live"' in verify_body, "account_type-Live-Check fehlt"
+    # Regression-Guard: der alte (buggy) live-String darf NICHT zurueckkehren
+    assert '"mode":"live"' not in verify_body, (
+        "Regression: '\"mode\":\"live\"' existiert im API-Output NICHT -> verify "
+        "wuerde immer failen + Auto-Rollback ausloesen."
+    )
 
 
 def test_runbook_mentions_both_steps_atomically():

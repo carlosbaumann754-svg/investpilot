@@ -105,11 +105,27 @@ def _save_state(state: WatchdogState) -> None:
 
 
 def _load_config() -> dict:
-    """Erlaubt Overrides via config.json -> session_watchdog: { ... }."""
+    """Erlaubt Overrides via config.json -> session_watchdog: { ... }.
+
+    R-B11 (C2, 07.06.2026): ibkr_host/ibkr_port defaulten auf die HAUPT-ibkr-
+    Config (config.json -> ibkr.host/port), damit der Watchdog automatisch den
+    tatsaechlich genutzten Gateway-Port probt. Frueher hartkodiert 4004 -> nach
+    dem Cutover (ibkr.port -> 4001) haette der Watchdog den toten Paper-Port
+    geprobt -> ConnectionRefused -> Restart-Loop am LIVE-Gateway + Priority-2-
+    Fehlalarme genau am Cutover-Tag. Ein explizites session_watchdog.ibkr_port
+    ueberschreibt den Default weiterhin.
+    """
     cfg = dict(DEFAULT_CONFIG)
     try:
         from app.config_manager import load_config
         full = load_config() or {}
+        # C2: Haupt-ibkr-Config als Default fuer host/port uebernehmen
+        ibkr_main = full.get("ibkr") or {}
+        if ibkr_main.get("host"):
+            cfg["ibkr_host"] = ibkr_main["host"]
+        if ibkr_main.get("port"):
+            cfg["ibkr_port"] = ibkr_main["port"]
+        # Explizite session_watchdog-Overrides gewinnen
         overrides = full.get("session_watchdog") or {}
         for k, v in overrides.items():
             if k in cfg:

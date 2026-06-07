@@ -562,6 +562,28 @@ def maybe_alert(report: dict) -> None:
         log.warning("Alert-Dispatch fehlgeschlagen: %s", e)
 
 
+def _persist_reconcile_status(report: dict) -> None:
+    """R-B11 (C6, 07.06.2026): Heartbeat fuer das Cutover-Readiness-Gate #1.
+
+    Schreibt ts/status/drift-count nach reconcile_status.json, damit das
+    Dashboard-Gate den ECHTEN letzten Reconcile-Stand anzeigt statt hartkodiert
+    'green/passive'. Single-Writer (nur dieser Cron) -> kein Cross-Prozess-Race.
+    Best-effort — ein Fehler hier darf den Reconcile nie killen.
+    """
+    try:
+        from app.config_manager import save_json
+        from datetime import datetime, timezone
+        save_json("reconcile_status.json", {
+            "ts": report.get("ts") or datetime.now(timezone.utc).isoformat(),
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "status": report.get("status", "ERROR"),
+            "drift_count": len(report.get("drifts", []) or []),
+            "error": report.get("error"),
+        })
+    except Exception as e:
+        log.warning("reconcile_status.json Persist fehlgeschlagen: %r", e)
+
+
 def main():
     parser = argparse.ArgumentParser(description="IBKR Reconciliation")
     parser.add_argument("--lookback-hours", type=int, default=24,
@@ -622,7 +644,10 @@ def main():
         # leeren __str__, vorher loggte das 'Reconciliation failed: ' ohne
         # Diagnose-Info. Jetzt sieht man den Exception-Type explizit.
         log.error("Reconciliation failed: %r", e)
+        _persist_reconcile_status({"status": "ERROR", "error": repr(e)})  # C6
         return 2
+
+    _persist_reconcile_status(report)  # C6: Heartbeat fuer Readiness-Gate #1
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))

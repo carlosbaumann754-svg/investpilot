@@ -169,17 +169,24 @@ restart_containers() {
 }
 
 verify_live() {
-    log "Verify: /api/broker-status sollte mode=live + account=U... zeigen"
+    # R-B11/C1 (07.06.2026): /api/broker-status emittiert fuer IBKR mode=real
+    # (NICHT der alte live-String, den es im Code gar nicht gibt) + account_type
+    # live. Frueher wurde auf den live-Mode-String geprueft -> verify schlug IMMER
+    # fehl -> Auto-Rollback -> der Cutover konnte strukturell nie durchgehen.
+    # account_type ist non-sensitive (R-B11/C3): die rohe Account-Nr wird im
+    # unauth-Response nicht mehr geleakt, daher hier darueber verifizieren.
+    log "Verify: /api/broker-status sollte mode=real + account_type=live + connected=true zeigen"
     local resp
     resp=$(curl -s -m 10 http://localhost:8000/api/broker-status || echo '{}')
     log "Response: $resp"
 
-    if echo "$resp" | grep -q '"mode":"live"' && \
-       echo "$resp" | grep -qE '"account":"U[0-9]'; then
+    if echo "$resp" | grep -q '"mode":"real"' && \
+       echo "$resp" | grep -q '"account_type":"live"' && \
+       echo "$resp" | grep -q '"connected":true'; then
         log "VERIFY OK — Cutover erfolgreich."
         return 0
     fi
-    err "VERIFY FAIL — Response zeigt nicht live+U-account."
+    err "VERIFY FAIL — Response zeigt nicht real+live-account+connected."
     return 1
 }
 

@@ -546,6 +546,40 @@ async def api_universe_reset(user=Depends(require_auth)):
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
 
+def _derive_account_mode(broker_name: str, account, etoro_env: str = "demo"):
+    """Reine Mode/account_type-Ableitung (R-B11, testbar).
+
+    Returns (mode, account_type):
+      - mode: "real" | "paper" | "demo" | "unknown"  (UI/Logik)
+      - account_type: "live" | "paper" | None         (non-sensitive Cutover-Verify)
+
+    C5: account=None (Connect-Fail) -> mode="unknown" statt faelschlich "paper"
+    (sonst ununterscheidbar von echtem Paper -> Cutover-Verify unzuverlaessig).
+    C3: account_type ist die non-sensitive Groesse, ueber die das Cutover-Skript
+    unauth verifizieren kann (ohne rohe Account-Nr/Equity).
+    """
+    if broker_name == "etoro":
+        mode = "real" if etoro_env == "real" else "demo"
+        return mode, ("live" if mode == "real" else "paper")
+    if broker_name == "ibkr" and account:
+        is_paper = str(account).startswith(("DU", "DUP"))
+        return ("paper" if is_paper else "real"), ("paper" if is_paper else "live")
+    return "unknown", None
+
+
+def _public_broker_status(d: dict) -> dict:
+    """Strippt sensible Felder fuer unauth-Anfragen (C3 / R-B11).
+
+    account_type + mode bleiben (non-sensitive, genuegen dem Cutover-Verify);
+    rohe Account-Nr und Equity raus, damit der bewusst-unauth Endpoint sie nicht
+    oeffentlich (ueber bot.cbaumann.ch) leakt.
+    """
+    safe = dict(d)
+    safe.pop("account", None)
+    safe.pop("equity", None)
+    return safe
+
+
 def _broker_status_sync():
     """Sync-Logic fuer api_broker_status — laeuft in eigenem Thread.
 
@@ -581,13 +615,8 @@ def _broker_status_sync():
                     client.disconnect()
             except Exception:
                 pass
-    mode = "paper"
-    if broker_name == "etoro":
-        env = (config.get("etoro", {}) or {}).get("environment", "demo")
-        mode = "real" if env == "real" else "demo"
-    elif broker_name == "ibkr":
-        if account:
-            mode = "real" if not account.startswith(("DU", "DUP")) else "paper"
+    etoro_env = (config.get("etoro", {}) or {}).get("environment", "demo")
+    mode, account_type = _derive_account_mode(broker_name, account, etoro_env)
     return {
         "broker": broker_name,
         "configured": bool(client.configured),
@@ -595,6 +624,7 @@ def _broker_status_sync():
         "account": account,
         "equity": equity,
         "mode": mode,
+        "account_type": account_type,
         "error": error,
     }
 
@@ -612,9 +642,24 @@ _BROKER_STATUS_TTL_SECONDS = 60
 _BROKER_STATUS_STALE_MAX_SECONDS = 600  # 10 Min — danach gilt Cache als too-old
 
 
+async def _request_is_authenticated(request: Request) -> bool:
+    """Optionaler Auth-Check (R-B11) — wirft NICHT.
+
+    True, wenn die Anfrage einen gueltigen Bearer-Token traegt (Dashboard via
+    apiFetch). False fuer anonyme Anfragen (Cutover-curl, oeffentlich). Wird
+    genutzt, um sensible Broker-Felder nur authentifiziert zu exposen.
+    """
+    try:
+        from web.auth import verify_request
+        await verify_request(request)
+        return True
+    except Exception:
+        return False
+
+
 @app.get("/api/broker-status")
-async def api_broker_status():  # BEWUSST OHNE require_auth: scripts/cutover_switch.sh pollt diesen Endpoint unauthentifiziert (curl) zur Post-Cutover-Verifikation (mode=live + account=U...). Auth hier wuerde die Cutover-Verifikation brechen. Low-Sensitivity (nur Connection-Status). 29.05.2026 Audit.
-    """Liefert aktuellen Broker-Status (Name, Configured, Connected) ohne Auth.
+async def api_broker_status(request: Request):  # BEWUSST OHNE require_auth: scripts/cutover_switch.sh pollt diesen Endpoint unauthentifiziert (curl) zur Post-Cutover-Verifikation (mode=real + account_type=live). Auth hier wuerde die Cutover-Verifikation brechen. R-B11 (07.06.2026): sensible Felder (account-Nr/equity) werden fuer UNAUTH-Anfragen gestrippt -> kein oeffentlicher Leak ueber bot.cbaumann.ch; authentifizierte Anfragen (Dashboard via Bearer) bekommen weiterhin die vollen Felder.
+    """Liefert aktuellen Broker-Status (Name, Configured, Connected).
 
     v36: 60s-Cache vor IBKR-Live-Call, damit Dashboard-Polling den
     Scheduler-Cycle nicht mit parallelen Connections stoert.
@@ -623,6 +668,10 @@ async def api_broker_status():  # BEWUSST OHNE require_auth: scripts/cutover_swi
     (Container-Restart, IBKR-Maintenance), returnen wir letzten gueltigen
     Cache mit _stale-Marker statt Error an Dashboard zu pushen. Verhindert
     'broker_unavailable'-Flicker im UI waehrend kurzer Disconnects.
+
+    R-B11 (C3): account-Nr + equity nur fuer authentifizierte Anfragen.
+    Unauth (Cutover-Skript, oeffentlich) bekommt Minimal-Antwort inkl.
+    non-sensitivem account_type (genuegt dem Verify).
     """
     import asyncio, time
     now = time.time()
@@ -632,38 +681,44 @@ async def api_broker_status():  # BEWUSST OHNE require_auth: scripts/cutover_swi
 
     # Fresh-Cache-Hit (<60s alt)
     if cached is not None and cache_age < _BROKER_STATUS_TTL_SECONDS:
-        return {**cached, "_cached": True, "_age_s": int(cache_age)}
+        result = {**cached, "_cached": True, "_age_s": int(cache_age)}
+    else:
+        # Cache expired oder leer -> Live-Fetch
+        try:
+            fresh = await asyncio.to_thread(_broker_status_sync)
+            _BROKER_STATUS_CACHE["data"] = fresh
+            _BROKER_STATUS_CACHE["ts"] = now
+            result = fresh
+        except Exception as e:
+            # R-A29: Stale-Cache-Fallback bei Live-Fetch-Fail
+            err_str = f"{type(e).__name__}: {e}"
+            # Sentry-Bubble unterdruecken — Container-Restart-Cascade ist erwartet
+            # (Self-Test #11 deckt echte Disconnects ab)
+            log.info("broker_status live-fetch fehlgeschlagen (%s), versuche Stale-Cache", err_str)
 
-    # Cache expired oder leer -> Live-Fetch
-    try:
-        result = await asyncio.to_thread(_broker_status_sync)
-        _BROKER_STATUS_CACHE["data"] = result
-        _BROKER_STATUS_CACHE["ts"] = now
-        return result
-    except Exception as e:
-        # R-A29: Stale-Cache-Fallback bei Live-Fetch-Fail
-        err_str = f"{type(e).__name__}: {e}"
-        # Sentry-Bubble unterdruecken — Container-Restart-Cascade ist erwartet
-        # (Self-Test #11 deckt echte Disconnects ab)
-        log.info("broker_status live-fetch fehlgeschlagen (%s), versuche Stale-Cache", err_str)
+            # Wenn Stale-Cache noch jung genug (<10 Min) — nutzen
+            if cached is not None and cache_age < _BROKER_STATUS_STALE_MAX_SECONDS:
+                result = {
+                    **cached,
+                    "_cached": True,
+                    "_stale": True,
+                    "_age_s": int(cache_age),
+                    "_stale_reason": err_str,
+                }
+            else:
+                # Kein brauchbarer Cache -> echter Fehler
+                result = {
+                    "broker": "?",
+                    "configured": False,
+                    "connected": False,
+                    "error": err_str,
+                    "_unavailable_since": int(now),
+                }
 
-        # Wenn Stale-Cache noch jung genug (<10 Min) — nutzen
-        if cached is not None and cache_age < _BROKER_STATUS_STALE_MAX_SECONDS:
-            return {
-                **cached,
-                "_cached": True,
-                "_stale": True,
-                "_age_s": int(cache_age),
-                "_stale_reason": err_str,
-            }
-        # Kein brauchbarer Cache -> echter Fehler
-        return {
-            "broker": "?",
-            "configured": False,
-            "connected": False,
-            "error": err_str,
-            "_unavailable_since": int(now),
-        }
+    # R-B11 (C3): sensible Felder nur fuer authentifizierte Anfragen exposen.
+    if not await _request_is_authenticated(request):
+        result = _public_broker_status(result)
+    return result
 
 
 def _portfolio_from_brain_cache():
@@ -5064,13 +5119,45 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
 
     gates: list[dict] = []
 
-    # --- Gate #1: Reconciliation (passive cron 13/43 Min) ---
-    gates.append({
-        "nr": 1, "title": "Reconciliation 7 Tage in Folge",
-        "status": "green",
-        "detail": "Cron laeuft alle 30 Min, Drift-Alerts via Pushover.",
-        "last_check": "passive",
-    })
+    # --- Gate #1: Reconciliation (R-B11/C6: echter Heartbeat statt hartkodiert) ---
+    try:
+        from app.config_manager import load_json as _load_json_g1
+        rec = _load_json_g1("reconcile_status.json") or {}
+        rec_status = rec.get("status")
+        rec_ts = rec.get("written_at") or rec.get("ts")
+        if rec_status == "OK":
+            g1 = {"nr": 1, "status": "green",
+                  "detail": f"Letzter Reconcile OK, 0 Drifts.",
+                  "last_check": rec_ts}
+        elif rec_status == "ERROR":
+            g1 = {"nr": 1, "status": "red",
+                  "detail": f"Reconcile fehlgeschlagen: {rec.get('error', '?')}",
+                  "last_check": rec_ts}
+        elif rec_status:
+            g1 = {"nr": 1, "status": "yellow",
+                  "detail": f"Reconcile {rec_status}: {rec.get('drift_count', '?')} Drift(s).",
+                  "last_check": rec_ts}
+        else:
+            g1 = {"nr": 1, "status": "yellow",
+                  "detail": "Noch kein Reconcile-Heartbeat (reconcile_status.json fehlt).",
+                  "last_check": None}
+        # Staleness: Cron laeuft alle 30 Min -> >90 Min ohne Heartbeat = yellow
+        try:
+            if rec_ts and g1["status"] == "green":
+                age_min = (_dt.now(_tz.utc) - _dt.fromisoformat(rec_ts)).total_seconds() / 60
+                if age_min > 90:
+                    g1["status"] = "yellow"
+                    g1["detail"] += f" (Heartbeat {int(age_min)} Min alt — Cron pruefen)"
+        except Exception:
+            pass
+        g1["title"] = "Reconciliation 7 Tage in Folge"
+        gates.append(g1)
+    except Exception:
+        gates.append({
+            "nr": 1, "title": "Reconciliation 7 Tage in Folge",
+            "status": "yellow", "detail": "Reconcile-Status nicht ladbar.",
+            "last_check": None,
+        })
 
     # --- Gate #2: WFO Sharpe > 2.0 ---
     try:
