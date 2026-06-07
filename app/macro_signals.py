@@ -85,7 +85,12 @@ def fetch_yield_curve():
                         except ValueError:
                             continue
         except Exception as e:
-            log.warning(f"FRED Yield-Curve Fetch fehlgeschlagen: {e}", exc_info=True)
+            # R-B10 (07.06.2026): KEIN exc_info — abgefangener externer Timeout
+            # (FRED 10s-Read-Timeout) mit yfinance-Fallback. Ein voller Traceback
+            # ist Boilerplate-Laerm UND der Bot-Watchdog zaehlt jede 'Traceback'-
+            # Zeile als kritisches Fehlermuster -> Cry-Wolf (ERROR-Karte) obwohl
+            # graceful degradiert. Message allein reicht.
+            log.warning(f"FRED Yield-Curve Fetch fehlgeschlagen: {e}")
 
     # Fallback: yfinance 10Y via ^TNX
     if yf is not None:
@@ -105,7 +110,7 @@ def fetch_yield_curve():
                     "observation_date": datetime.now().strftime("%Y-%m-%d"),
                 }
         except Exception as e:
-            log.warning(f"yfinance Yield-Curve Fallback fehlgeschlagen: {e}", exc_info=True)
+            log.warning(f"yfinance Yield-Curve Fallback fehlgeschlagen: {e}")  # R-B10: kein Traceback (abgefangen)
 
     log.error("Yield-Curve: keine Datenquelle erfolgreich (FRED + yfinance beide down)")
     return None
@@ -189,7 +194,10 @@ def fetch_credit_spread():
             "observation_date": datetime.now().strftime("%Y-%m-%d"),
         }
     except Exception as e:
-        log.error(f"Credit-Spread Fetch fehlgeschlagen: {e}", exc_info=True)
+        # R-B10 (07.06.2026): warning statt error, kein Traceback — abgefangener
+        # externer yfinance-Fetch (HYG/IEF), degradiert graceful (score_credit_
+        # spread liefert 0 bei None). Vermeidet Bot-Watchdog-Cry-Wolf.
+        log.warning(f"Credit-Spread Fetch fehlgeschlagen: {e}")
         return None
 
 
@@ -263,7 +271,9 @@ def fetch_market_breadth():
             "observation_date": datetime.now().strftime("%Y-%m-%d"),
         }
     except Exception as e:
-        log.error(f"Marktbreite Fetch fehlgeschlagen: {e}", exc_info=True)
+        # R-B10 (07.06.2026): warning statt error, kein Traceback — abgefangener
+        # externer yfinance-Fetch (SPY/RSP), degradiert graceful. Anti-Cry-Wolf.
+        log.warning(f"Marktbreite Fetch fehlgeschlagen: {e}")
         return None
 
 
