@@ -9,6 +9,7 @@ Persistent Disk: DATA_DIR auto-detects /data mount (see _resolve_data_dir below)
 import json
 import os
 import logging
+import tempfile
 import threading
 from pathlib import Path
 
@@ -127,10 +128,18 @@ _file_locks_lock = threading.Lock()
 
 
 def _get_file_lock(filename):
-    """Hole oder erstelle einen Lock fuer eine bestimmte Datei."""
+    """Hole oder erstelle einen Lock fuer eine bestimmte Datei.
+
+    R-B11/S2 (07.06.2026): RLock (reentrant) statt Lock. Damit kann ein Aufrufer
+    die GESAMTE load->modify->save-Sequenz atomar umklammern
+    (`with _get_file_lock(f): load_json(f); ...; save_json(f, ...)`), ohne dass
+    der innere load_json/save_json-Re-Acquire im selben Thread deadlockt. Behebt
+    Lost-Update-Races (trade_history, disabled_symbols) INNERHALB eines Prozesses.
+    (Cross-Prozess bleibt offen -> separater Filelock-Follow-up.)
+    """
     with _file_locks_lock:
         if filename not in _file_locks:
-            _file_locks[filename] = threading.Lock()
+            _file_locks[filename] = threading.RLock()
         return _file_locks[filename]
 
 
@@ -211,11 +220,18 @@ def save_config(config):
             if secret_key in etoro:
                 del etoro[secret_key]
 
-        # Atomic write: erst temp-file, dann umbenennen
-        tmp_path = config_path.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(safe_config, f, indent=2, ensure_ascii=False)
-        os.replace(str(tmp_path), str(config_path))
+        # Atomic write mit PID/zufalls-eindeutiger Temp-Datei (R-B11/S4).
+        fd, tmp_name = tempfile.mkstemp(dir=str(config_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(safe_config, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_name, str(config_path))
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
 
 def load_json(filename):
@@ -234,7 +250,17 @@ def save_json(filename, data):
     lock = _get_file_lock(filename)
     with lock:
         path = get_data_path(filename)
-        tmp_path = path.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-        os.replace(str(tmp_path), str(path))
+        # R-B11/S4: PID/zufalls-eindeutige Temp-Datei statt fixem '.tmp' — sonst
+        # ueberschreiben zwei Prozesse (Bot + docker-exec-Cron) dieselbe '.tmp'
+        # und os.replace promotet halb-geschriebene Daten des anderen (Korruption).
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+            os.replace(tmp_name, str(path))
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise

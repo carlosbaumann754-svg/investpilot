@@ -374,15 +374,32 @@ def _save_risk_state(state):
 # DRAWDOWN TRACKING & AUTO-PAUSE
 # ============================================================
 
-def update_portfolio_tracking(portfolio_value):
-    """Aktualisiere taegliche/woechentliche P/L Tracking."""
+def update_portfolio_tracking(portfolio_value, account_key=None):
+    """Aktualisiere taegliche/woechentliche P/L Tracking.
+
+    R-B11/C4 (07.06.2026): account_key (z.B. Base-Currency oder Account-Nr).
+    Wechselt er (Cutover Paper->Live, USD->CHF-Base), wird das Drawdown-Tracking
+    RE-BASELINED statt einen kuenstlichen FX-Sprung (~-12%) als Drawdown zu
+    registrieren — der haette am Cutover-Tag sofort einen Drawdown-Stop ausgeloest.
+    """
     state = _load_risk_state()
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
     week_start = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
 
-    # Tagesreset
-    if state["last_daily_reset"] != today:
+    # C4: Account-/Currency-Wechsel erkennen -> Re-Baseline (Diskontinuitaet,
+    # kein PnL ueber den Sprung hinweg).
+    rebaseline = False
+    if account_key is not None and state.get("account_key") not in (None, account_key):
+        rebaseline = True
+        log.warning(
+            f"  Risk: Account/Currency-Wechsel ({state.get('account_key')} -> "
+            f"{account_key}) -> Drawdown-Tracking re-baselined (C4)")
+    if account_key is not None:
+        state["account_key"] = account_key
+
+    # Tagesreset (auch bei Re-Baseline)
+    if state["last_daily_reset"] != today or rebaseline:
         state["daily_start_value"] = portfolio_value
         state["daily_pnl_usd"] = 0
         state["daily_pnl_pct"] = 0
@@ -390,8 +407,8 @@ def update_portfolio_tracking(portfolio_value):
         state["daily_trades"] = 0
         log.info(f"  Risk: Tagesstart-Wert = ${portfolio_value:,.2f}")
 
-    # Wochenreset
-    if state["last_weekly_reset"] != week_start:
+    # Wochenreset (auch bei Re-Baseline)
+    if state["last_weekly_reset"] != week_start or rebaseline:
         state["weekly_start_value"] = portfolio_value
         state["weekly_pnl_usd"] = 0
         state["weekly_pnl_pct"] = 0
@@ -577,10 +594,14 @@ def calculate_position_size(portfolio_value, stop_loss_pct, config=None):
     # Nie mehr als konfiguriertes Maximum
     position_size = min(position_size, max_single_trade)
 
-    # Nie mehr als 10% des Portfolios in einer Position (Kelly kann das ueberschreiben)
+    # Nie mehr als 10% des Portfolios in einer Position.
+    # R-B11/R5 (07.06.2026): Kelly darf den harten Single-Position-Cap nur SENKEN,
+    # NICHT ueberschreiben. Frueher ersetzte kelly_max_pos_pct den 10%-Cap (bis
+    # 15%) -> Optimizer-Output hebelte den Konzentrations-Floor aus (verletzt die
+    # Validation-Hierarchie: Optimizer ist Vorschlag, nicht Wahrheit).
     max_position_pct = risk_cfg.get("max_single_position_pct", 10)
     if kelly_max_pos_pct is not None:
-        max_position_pct = kelly_max_pos_pct
+        max_position_pct = min(max_position_pct, kelly_max_pos_pct)
     position_size = min(position_size, portfolio_value * max_position_pct / 100)
 
     return round(max(position_size, 0), 2)
@@ -1455,8 +1476,15 @@ def validate_trade(portfolio_value, amount_usd, leverage, asset_class,
             reasons.append(sec_reason)
 
     # 6. Margin Safety
+    # R-B11/R2 (07.06.2026): Candidate EINRECHNEN -> Post-Trade-Zustand pruefen,
+    # nicht nur den Ist-Zustand. Frueher floss der zu oeffnende amount_usd*leverage
+    # nie in die Exposure-/Margin-Puffer-Rechnung ein -> ein Trade, der
+    # max_total_exposure_pct oder den Margin-Puffer ueberschreitet, wurde im
+    # selben Cycle nicht geblockt.
+    candidate_pos = {"invested": amount_usd, "leverage": leverage,
+                     "instrument_id": "__candidate__"}
     margin_ok, margin_reason, _ = check_margin_safety(
-        portfolio_value, existing_positions, config)
+        portfolio_value, list(existing_positions) + [candidate_pos], config)
     if not margin_ok:
         reasons.append(margin_reason)
 

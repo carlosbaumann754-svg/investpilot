@@ -9,11 +9,22 @@ import logging
 import time
 from datetime import datetime
 
-from app.config_manager import load_config, save_json, load_json
+from app.config_manager import load_config, save_json, load_json, _get_file_lock
 from app.etoro_client import EtoroClient  # noqa: F401  — static parse_position() bleibt genutzt
 from app.broker_base import get_broker
 
 log = logging.getLogger("Trader")
+
+# R-B11/S2 (07.06.2026): trade_history.json wird im selben Prozess von MEHREREN
+# Threads geschrieben — dem Bot-Main-Loop (save_trade) UND dem ib_insync-
+# orderStatusEvent-Callback (OrderStatusTracker._update_trade_history). Ohne Lock
+# ueber die GESAMTE load->append->save-Sequenz gehen Updates verloren (Lost
+# Update). record_snapshot bekam dafuer schon _BRAIN_LOCK (11.05. $21k-Drift),
+# save_trade blieb offen. Wir nutzen den GETEILTEN per-File-RLock aus
+# config_manager, damit BEIDE Schreiber (hier + Tracker) dasselbe Lock-Objekt
+# halten; der RLock ist reentrant, daher deadlockt der innere load_json/save_json
+# (das den Lock erneut nimmt) im selben Thread nicht.
+_TRADE_HISTORY_LOCK = _get_file_lock("trade_history.json")
 
 
 # R-A48 (28.05.2026 Sprint-Tag-17): Idempotenz-State fuer REGIME-HALT-Notifications.
@@ -99,9 +110,12 @@ def save_trade(trade_entry):
     automatisch Meta-Labeler outcome-Update. Vorher landete kein outcome je
     in meta_labeling_shadow.json → Treffer-Quote war immer 0%.
     """
-    history = load_json("trade_history.json") or []
-    history.append(trade_entry)
-    save_json("trade_history.json", history)
+    # S2: gesamte load->append->save-Sequenz unter Lock (Lost-Update-Schutz
+    # gegen den parallel schreibenden orderStatusEvent-Thread).
+    with _TRADE_HISTORY_LOCK:
+        history = load_json("trade_history.json") or []
+        history.append(trade_entry)
+        save_json("trade_history.json", history)
 
     # R-A41: Meta-Labeler outcome-Hook fuer Close-Events
     try:
@@ -421,7 +435,7 @@ def _is_zero_filled(summary: str) -> bool:
         return False
 
 
-def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
+def _check_close_idempotent(client, instrument_id, is_partial=False) -> tuple[bool, str]:
     """v37cu: Pre-Close-Check vor jeder close_position-Aufruf.
 
     v37h (14.05.2026): ruft jetzt _cleanup_pending_closes() vorab auf
@@ -450,11 +464,19 @@ def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
                     from datetime import datetime as _dt2
                     age_sec = (_dt2.now() - last_dt).total_seconds()
                     if age_sec < _PENDING_CLOSE_COOLDOWN_SEC:
-                        return True, (
-                            f"Anti-Loop: Close fuer {instrument_id} bereits "
-                            f"vor {age_sec:.0f}s submitted (Cooldown "
-                            f"{_PENDING_CLOSE_COOLDOWN_SEC}s)"
-                        )
+                        # R-B11/E2: ein VOLLER/Risk-Close (is_partial=False) darf
+                        # NICHT von einem pending PARTIAL-Close geblockt werden —
+                        # sonst verzoegert sich ein Stop-Loss bis zu Cooldown-Sek,
+                        # waehrend die Position weiter faellt. Nur gleichartige
+                        # Closes blocken (partial-nach-partial, full-nach-full).
+                        pending_is_partial = bool(pending[key].get("is_partial"))
+                        if not (pending_is_partial and not is_partial):
+                            return True, (
+                                f"Anti-Loop: Close fuer {instrument_id} bereits "
+                                f"vor {age_sec:.0f}s submitted (Cooldown "
+                                f"{_PENDING_CLOSE_COOLDOWN_SEC}s)"
+                            )
+                        # else: voller Close nach pending Partial -> durchlassen
     except Exception:
         pass
 
@@ -483,9 +505,13 @@ def _check_close_idempotent(client, instrument_id) -> tuple[bool, str]:
     return False, ""
 
 
-def _track_pending_close(instrument_id, result):
+def _track_pending_close(instrument_id, result, is_partial=False):
     """v37cu: Nach erfolgreicher close_position()-Aufruf das Submitted-
-    Timestamp persistieren. Cleanup von >24h alten Eintraegen."""
+    Timestamp persistieren. Cleanup von >24h alten Eintraegen.
+
+    R-B11/E2: is_partial wird mitgespeichert, damit ein spaeterer voller/Risk-
+    Close nicht von einem pending Partial-Close geblockt wird.
+    """
     if instrument_id is None or not result:
         return
     if isinstance(result, dict) and result.get("_already_closed"):
@@ -497,6 +523,7 @@ def _track_pending_close(instrument_id, result):
         pending[key] = {
             "submitted_at": _dt3.now().isoformat(),
             "result_summary": str(result)[:200],
+            "is_partial": bool(is_partial),
         }
         save_json("pending_closes.json", pending)
         # v37h (14.05.2026): Cleanup via _cleanup_pending_closes() — ISO-Z-
@@ -536,7 +563,7 @@ def _partial_close_safe(client, position_id, close_pct, instrument_id, action_na
     Returns:
         Dict wie partial_close() oder {_skipped_idempotent: True, reason: ...}.
     """
-    skip, reason = _check_close_idempotent(client, instrument_id)
+    skip, reason = _check_close_idempotent(client, instrument_id, is_partial=True)
     if skip:
         log.warning(f"  {action_name} SKIP fuer {instrument_id}: {reason}")
         return {"_skipped_idempotent": True, "reason": reason}
@@ -545,7 +572,7 @@ def _partial_close_safe(client, position_id, close_pct, instrument_id, action_na
         return {"_unsupported": True, "_broker": getattr(client, "broker_name", "?")}
 
     result = client.partial_close(position_id, close_pct, instrument_id)
-    _track_pending_close(instrument_id, result)
+    _track_pending_close(instrument_id, result, is_partial=True)
     return result
 
 
@@ -838,7 +865,10 @@ def show_portfolio_status(client):
     # Risk Manager: Drawdown-Tracking
     rm = _import_risk_manager()
     if rm:
-        state = rm.update_portfolio_tracking(total_value)
+        # C4: Base-Currency als Wechsel-Schluessel -> Re-Baseline am Cutover
+        # (USD-Paper -> CHF-Live) statt FX-Sprung als Drawdown zu werten.
+        state = rm.update_portfolio_tracking(
+            total_value, account_key=portfolio.get("_base_currency"))
         log.info(f"  Tages-P/L:         {state['daily_pnl_pct']:+.2f}% (${state['daily_pnl_usd']:+,.2f})")
         log.info(f"  Wochen-P/L:        {state['weekly_pnl_pct']:+.2f}% (${state['weekly_pnl_usd']:+,.2f})")
 
@@ -970,7 +1000,10 @@ def build_initial_portfolio(client, config):
 
                 save_trade(_attach_fill_prices(trade_entry, result))
                 trades_executed.append(trade_entry)
-                credit -= amount
+                # R-B11/E5: nur dekrementieren wenn der Buy Kapital gebunden hat
+                # (executed/partial/submitted) — nicht bei rejected/cancelled.
+                if bot_status in ("executed", "partial", "submitted"):
+                    credit -= amount
                 log.info(f"    -> GEKAUFT: ${amount:,.2f} {leverage}x (Order: {order.get('orderID')})")
 
                 # Alert
@@ -1662,7 +1695,13 @@ def execute_scanner_trades(client, config, scan_results):
         # equity_chf ist (typisch CHF=BASE-Konto ohne Multi-Currency-Reporting):
         # nutze credit als Fallback. Sonst lieber konservativ 0.
         if cash_chf is None:
-            cash_chf = effective_cash  # Best-Effort Fallback
+            # R-B11/R4 (07.06.2026): Fallback KONSISTENT in derselben Currency wie
+            # effective_cash (USD/Top-Level). Frueher blieb equity_chf evtl. in CHF
+            # (_base_net_liquidation) waehrend cash auf USD-effective_cash fiel ->
+            # Reserve (%-von-CHF-Equity) gegen USD-Cash -> Buffer um die FX-Drift
+            # (~10%) unterschritten. Konservativ: beide auf Top-Level/USD.
+            cash_chf = effective_cash  # Best-Effort Fallback (USD)
+            equity_chf = total_value   # gleiche Currency wie cash_chf
         required_reserve_chf = get_required_reserve_chf(equity_chf, config)
         if required_reserve_chf > 0:
             deployable_chf = compute_deployable_cash_chf(
@@ -1727,11 +1766,28 @@ def execute_scanner_trades(client, config, scan_results):
             vts = ctx.get("vix_term_structure") or {}
             vts_cfg = config.get("vix_term_structure", {}) or {}
             if vts_cfg.get("panic_dip_override_enabled", True) and vts.get("panic_dip_buy_signal"):
-                log.warning(f"  PANIC-DIP-BUY OVERRIDE: VIX Term "
-                            f"ratio={vts.get('ratio_9d_vs_30d')} "
-                            f"shape={vts.get('shape')} — Regime Halt aufgehoben")
-                regime_halt = False
-                ctx_multiplier *= vts_cfg.get("panic_dip_position_multiplier", 0.6)
+                # R-B11/R6 (07.06.2026): Der Panic-Dip-Override hebt den
+                # HAERTESTEN Schutz (Regime-Halt) auf — das darf ein EINZELNES
+                # VIX-Term-Structure-Signal nicht, wenn der Bot sonst in eine
+                # echte Baer-/Drawdown-Kapitulation hineinkauft. Zusatz-
+                # Bestaetigung: Brain-Regime != bear UND kein aktiver Drawdown-Stop.
+                brain_regime = (regime_data or {}).get("brain_regime", "unknown")
+                dd_ok = True
+                if rm:
+                    try:
+                        dd_ok, _ = rm.check_drawdown_limits()
+                    except Exception:
+                        dd_ok = True
+                if brain_regime != "bear" and dd_ok:
+                    log.warning(f"  PANIC-DIP-BUY OVERRIDE: VIX Term "
+                                f"ratio={vts.get('ratio_9d_vs_30d')} "
+                                f"shape={vts.get('shape')} — Regime Halt aufgehoben")
+                    regime_halt = False
+                    ctx_multiplier *= vts_cfg.get("panic_dip_position_multiplier", 0.6)
+                else:
+                    log.warning(f"  PANIC-DIP-OVERRIDE UNTERDRUECKT (R6): "
+                                f"brain_regime={brain_regime}, drawdown_ok={dd_ok} "
+                                f"-> Regime-Halt bleibt aktiv")
 
         # R-A48 (28.05.2026 Sprint-Tag-17): Idempotente Notification.
         # Push NUR bei State-Change (halt-on oder halt-off), nicht jeden Cycle.
@@ -1973,6 +2029,15 @@ def execute_scanner_trades(client, config, scan_results):
                 # durchgehen weil parsed_positions noch nicht aktualisiert).
                 within_cycle_buys = {}  # symbol -> count
                 conc_filtered = []
+                # R-B11/R3 (07.06.2026): konservativer Schaetzbetrag statt 0 —
+                # sonst ist der %-Cap (max_exposure_per_symbol_pct) wirkungslos
+                # (future_exposure = same_symbol_invested + 0). Der echte Betrag
+                # steht hier noch nicht fest (Sizing erst nach dem Filter); wir
+                # schaetzen eine Position so gross wie der Single-Position-Cap
+                # (konservativ -> blockt eher als zu spaet).
+                _sc_rm_cfg = config.get("risk_management", {})
+                _est_single_pct = _sc_rm_cfg.get("max_single_position_pct", 10)
+                est_amount = total_value * (_est_single_pct / 100.0)
                 for c in buy_candidates:
                     cand_sym = c.get("symbol")
                     # Simuliere "wie wenn dieser Symbol bereits eine
@@ -1981,9 +2046,9 @@ def execute_scanner_trades(client, config, scan_results):
                     sim_positions = list(parsed_positions)
                     for sim_sym, sim_count in within_cycle_buys.items():
                         for _ in range(sim_count):
-                            sim_positions.append({"symbol": sim_sym, "invested": 0})
+                            sim_positions.append({"symbol": sim_sym, "invested": est_amount})
                     allowed, reason = rm.check_symbol_concentration(
-                        cand_sym, 0, sim_positions, total_value, config)
+                        cand_sym, est_amount, sim_positions, total_value, config)
                     if not allowed:
                         log.info(f"  CONCENTRATION-BLOCK {cand_sym}: {reason}")
                         count, push_triggered = rm.record_concentration_block(
@@ -2127,8 +2192,14 @@ def execute_scanner_trades(client, config, scan_results):
         except Exception as e:
             log.debug(f"  ML Scoring nicht verfuegbar: {e}")
 
-    available_slots = max_positions - len(positions) + len(
-        [t for t in trades_executed if t["action"] == "SCANNER_SELL"])
+    # R-B11/E4: ein SCANNER_SELL gibt den Slot erst frei, wenn er FILLED ist
+    # (executed/partial) — nicht schon bei reiner Submission. Sonst oeffnet der
+    # Bot einen neuen Buy auf einem noch nicht freien Slot -> kurzzeitig ueber
+    # max_positions, wenn der Sell nicht fuellt.
+    freed_slots = [t for t in trades_executed
+                   if t.get("action") == "SCANNER_SELL"
+                   and t.get("status") in ("executed", "partial")]
+    available_slots = max_positions - len(positions) + len(freed_slots)
     if available_slots <= 0 or effective_cash < 100:
         log.info(f"  Keine Slots oder Cash fuer neue Trades")
     else:
@@ -2398,8 +2469,13 @@ def execute_scanner_trades(client, config, scan_results):
 
                     save_trade(_attach_fill_prices(trade_entry, result))
                     trades_executed.append(trade_entry)
-                    credit -= amount
-                    effective_cash -= amount
+                    # R-B11/E5: nur dekrementieren wenn der Buy tatsaechlich Kapital
+                    # gebunden hat (executed/partial/submitted), NICHT bei rejected/
+                    # cancelled/failed — sonst "verbraucht" der Bot Budget, das real
+                    # noch da ist, und unterinvestiert Folge-Kandidaten im Cycle.
+                    if trade_entry.get("status") in ("executed", "partial", "submitted"):
+                        credit -= amount
+                        effective_cash -= amount
 
                     # v36 — Cooldown-State updaten: jeder Buy wird notiert,
                     # damit das Symbol fuer cooldown_cycles nicht erneut

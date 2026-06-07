@@ -71,20 +71,25 @@ def _graceful_shutdown():
         log.warning(f"IBKR disconnect during shutdown: {e}")
 
     # 2. Brain-State + Performance-Snapshots persist
+    # R-B11/S6: unter _BRAIN_LOCK — derselbe Lock, den brain.record_snapshot
+    # haelt. Sonst kann der SIGTERM-Flush einen parallel laufenden Heartbeat-
+    # Snapshot verwerfen (load->append->save-Race im Shutdown-Fenster).
     try:
         from app.config_manager import load_json, save_json
-        brain = load_json("brain_state.json") or {}
-        if brain:
-            from datetime import datetime, timezone
-            brain.setdefault("audit_log", []).append({
-                "event": "graceful_shutdown",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "reason": _SHUTDOWN_REASON,
-            })
-            # Keep audit_log <= 50 Eintraege
-            brain["audit_log"] = brain["audit_log"][-50:]
-            save_json("brain_state.json", brain)
-            log.info("brain_state.json final-flushed ✓")
+        from app.brain import _BRAIN_LOCK
+        with _BRAIN_LOCK:
+            brain = load_json("brain_state.json") or {}
+            if brain:
+                from datetime import datetime, timezone
+                brain.setdefault("audit_log", []).append({
+                    "event": "graceful_shutdown",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "reason": _SHUTDOWN_REASON,
+                })
+                # Keep audit_log <= 50 Eintraege
+                brain["audit_log"] = brain["audit_log"][-50:]
+                save_json("brain_state.json", brain)
+                log.info("brain_state.json final-flushed ✓")
     except Exception as e:
         log.warning(f"brain_state final-flush failed: {e}")
 

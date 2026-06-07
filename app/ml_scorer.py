@@ -321,31 +321,44 @@ def train_model(histories, train_pct=0.8):
 
     train_acc = accuracy_score(y_train, train_pred)
 
-    # Threshold-Tuning: optimiere F1 auf Test-Set (sicherer Default: F1 = Mittelweg
-    # zwischen Precision und Recall)
+    # R-B11/M4 (07.06.2026): Threshold-Selection-Leakage vermeiden.
+    # Frueher wurde best_threshold per F1-Scan ueber X_test/y_test gewaehlt UND
+    # genau dieselben Daten als test_*-Metriken berichtet -> in-sample-optimistisch,
+    # und der live-gating _tuned_threshold war auf das Test-Set ueberfittet.
+    # Fix: Test-Set chronologisch in Validation (Threshold-Tuning) + Holdout
+    # (ehrliches OOS-Reporting) splitten. Zeit-Ordnung bleibt erhalten (Val vor
+    # Holdout -> kein Look-Ahead).
     best_threshold = 0.5
     best_f1 = 0.0
     threshold_scan = []
-    if len(model.classes_) == 2 and len(X_test) > 0:
+    if len(model.classes_) == 2 and len(X_test) >= 4:
+        val_size = max(1, len(X_test) // 2)
+        val_proba, hold_proba = test_proba[:val_size], test_proba[val_size:]
+        val_y, hold_y = y_test[:val_size], y_test[val_size:]
         for t in np.arange(0.10, 0.91, 0.05):
-            preds_t = (test_proba >= t).astype(int)
-            f1_t = f1_score(y_test, preds_t, zero_division=0)
+            preds_t = (val_proba >= t).astype(int)
+            f1_t = f1_score(val_y, preds_t, zero_division=0)
             threshold_scan.append((round(float(t), 2), round(float(f1_t), 4)))
             if f1_t > best_f1:
                 best_f1 = f1_t
                 best_threshold = float(t)
+    else:
+        # Zu wenig Test-Samples fuer einen Val-Split -> Default-Threshold, volles
+        # Test-Set als Holdout (kein Tuning -> keine Leakage).
+        hold_proba, hold_y = test_proba, y_test
 
-    # Metriken mit getuntem Threshold berechnen
-    test_pred_tuned = (test_proba >= best_threshold).astype(int)
-    test_acc = accuracy_score(y_test, test_pred_tuned)
-    test_prec = precision_score(y_test, test_pred_tuned, zero_division=0)
-    test_rec = recall_score(y_test, test_pred_tuned, zero_division=0)
-    test_f1 = f1_score(y_test, test_pred_tuned, zero_division=0)
+    # Metriken auf dem HOLDOUT (Threshold NICHT darauf getunt -> ehrliches OOS)
+    test_pred_tuned = (hold_proba >= best_threshold).astype(int)
+    test_acc = accuracy_score(hold_y, test_pred_tuned)
+    test_prec = precision_score(hold_y, test_pred_tuned, zero_division=0)
+    test_rec = recall_score(hold_y, test_pred_tuned, zero_division=0)
+    test_f1 = f1_score(hold_y, test_pred_tuned, zero_division=0)
 
-    # Default-Threshold-Metriken zum Vergleich
-    default_prec = precision_score(y_test, test_pred_default, zero_division=0)
-    default_rec = recall_score(y_test, test_pred_default, zero_division=0)
-    default_f1 = f1_score(y_test, test_pred_default, zero_division=0)
+    # Default-Threshold-Metriken zum Vergleich (ebenfalls auf dem Holdout)
+    hold_pred_default = (hold_proba >= 0.5).astype(int)
+    default_prec = precision_score(hold_y, hold_pred_default, zero_division=0)
+    default_rec = recall_score(hold_y, hold_pred_default, zero_division=0)
+    default_f1 = f1_score(hold_y, hold_pred_default, zero_division=0)
 
     # Feature importances
     importances = dict(zip(FEATURE_NAMES, model.feature_importances_.tolist()))
@@ -674,28 +687,37 @@ def train_from_trade_history(trade_history=None):
         else np.zeros(len(X_test))
     )
 
-    # Threshold-Tuning: F1-Optimum (Option B — Mittelweg Precision/Recall)
+    # R-B11/M4 (07.06.2026): Threshold-Selection-Leakage vermeiden (Trade-History-
+    # Model). Threshold auf Validation-Split tunen, auf Holdout ehrlich reporten
+    # (Zeit-Ordnung: Val vor Holdout). Frueher Tuning + Reporting auf demselben
+    # Test-Set -> optimistisch + live-gating-Threshold ueberfittet.
     best_threshold = 0.5
     best_f1 = 0.0
-    if len(model.classes_) == 2 and len(X_test) > 0:
+    if len(model.classes_) == 2 and len(X_test) >= 4:
+        val_size = max(1, len(X_test) // 2)
+        val_proba, hold_proba = test_proba[:val_size], test_proba[val_size:]
+        val_y, hold_y = y_test[:val_size], y_test[val_size:]
         for t in np.arange(0.10, 0.91, 0.05):
-            preds_t = (test_proba >= t).astype(int)
-            f1_t = f1_score(y_test, preds_t, zero_division=0)
+            preds_t = (val_proba >= t).astype(int)
+            f1_t = f1_score(val_y, preds_t, zero_division=0)
             if f1_t > best_f1:
                 best_f1 = f1_t
                 best_threshold = float(t)
+    else:
+        hold_proba, hold_y = test_proba, y_test
 
-    test_pred = (test_proba >= best_threshold).astype(int)
+    test_pred = (hold_proba >= best_threshold).astype(int)
+    hold_pred_default = (hold_proba >= 0.5).astype(int)
 
     train_acc = accuracy_score(y_train, train_pred)
-    test_acc = accuracy_score(y_test, test_pred)
-    test_prec = precision_score(y_test, test_pred, zero_division=0)
-    test_rec = recall_score(y_test, test_pred, zero_division=0)
-    test_f1 = f1_score(y_test, test_pred, zero_division=0)
+    test_acc = accuracy_score(hold_y, test_pred)
+    test_prec = precision_score(hold_y, test_pred, zero_division=0)
+    test_rec = recall_score(hold_y, test_pred, zero_division=0)
+    test_f1 = f1_score(hold_y, test_pred, zero_division=0)
 
-    default_prec = precision_score(y_test, test_pred_default, zero_division=0)
-    default_rec = recall_score(y_test, test_pred_default, zero_division=0)
-    default_f1 = f1_score(y_test, test_pred_default, zero_division=0)
+    default_prec = precision_score(hold_y, hold_pred_default, zero_division=0)
+    default_rec = recall_score(hold_y, hold_pred_default, zero_division=0)
+    default_f1 = f1_score(hold_y, hold_pred_default, zero_division=0)
 
     trade_feature_names = [
         "scanner_score", "rsi", "macd_hist", "volume_trend",

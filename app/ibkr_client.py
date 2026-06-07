@@ -266,6 +266,25 @@ def _pool_invalidate_all() -> None:
             _pool_invalidate(k)
 
 
+def _position_pnl_pct(qty, avg_cost, unrealized_pnl):
+    """R-B11/E1 — korrekt vorzeichenbehaftete PnL% (Short-sicher).
+
+    cost_basis = abs(qty) * avg_cost (Magnitude); das Vorzeichen kommt aus dem
+    unrealized_pnl, das IBKR fuer Long UND Short korrekt liefert. Frueher
+    qty*avg_cost -> bei einem Short (qty<0) wurde cost_basis negativ -> pnl_pct
+    invertiert -> ein VERLIERENDER Short sah profitabel aus -> der Stop-Loss
+    (check_stop_loss_take_profit: pnl_pct <= sl_pct) feuerte NIE. Genau das
+    Szenario der ungewollten BA/CPER-Shorts (04.05.).
+    """
+    try:
+        cost_basis = abs(float(qty)) * float(avg_cost)
+    except (TypeError, ValueError):
+        return 0.0
+    if unrealized_pnl is None or not cost_basis:
+        return 0.0
+    return float(unrealized_pnl) / cost_basis * 100
+
+
 class IbkrBroker(BrokerBase):
     """
     IBKR-Implementierung des BrokerBase-Interfaces.
@@ -727,8 +746,10 @@ class IbkrBroker(BrokerBase):
                 # PortfolioItem hat marketPrice, marketValue, unrealizedPNL
                 mkt_price = getattr(p, "marketPrice", None)
                 unreal = getattr(p, "unrealizedPNL", None)
-                cost_basis = qty * avg_cost
-                pnl_pct = (unreal / cost_basis * 100) if (unreal is not None and cost_basis) else 0
+                # E1: abs(qty) -> Short-sicheres Vorzeichen (Helper). amount =
+                # Magnitude des Kapitaleinsatzes; Richtung steckt in isBuy.
+                cost_basis = abs(qty) * avg_cost
+                pnl_pct = _position_pnl_pct(qty, avg_cost, unreal)
                 mapped_positions.append({
                     "instrumentID": getattr(contract, "conId", None),
                     "symbol": getattr(contract, "symbol", None),

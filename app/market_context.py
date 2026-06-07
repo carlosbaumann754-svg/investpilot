@@ -769,6 +769,18 @@ def check_regime_filter(config=None):
     regime_data["combined_score"] = combined_score
     regime_data["details"] = details
 
+    # R-B11/R1 (07.06.2026): Bei stale Market-Context (VIX/F&G-Quellen down,
+    # Daten aelter als MARKET_CONTEXT_STALE_HOURS) NICHT permissiv handeln.
+    # Frueher blieben None-Indikatoren einfach aus dem Score -> combined_score 0
+    # > threshold(-2) -> buy_allowed=True genau dann, wenn der Bot "blind" ist.
+    # Konservativ: stale -> hart blocken (analog Size-Multiplier-Reduktion).
+    if ctx.get("_stale"):
+        regime_data["stale"] = True
+        reason = ("Market-Context STALE (VIX/F&G nicht verfuegbar) -> "
+                  "konservativ kein Buy (R1)")
+        log.warning(f"  Regime-Filter BLOCK: {reason}")
+        return False, reason, regime_data
+
     buy_allowed = combined_score > score_threshold
     if buy_allowed:
         reason = f"Regime OK (Score={combined_score}, Threshold={score_threshold})"

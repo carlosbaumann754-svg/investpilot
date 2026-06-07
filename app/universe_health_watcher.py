@@ -198,14 +198,18 @@ def confirm_disable(symbol: str) -> dict:
     """User bestaetigt Auto-Disable-Vorschlag. Symbol wandert in
     config.disabled_symbols. Counters werden zurueckgesetzt damit
     spaeteres Re-Enable korrekt zaehlt."""
-    from app.config_manager import load_config, save_config
-    cfg = load_config() or {}
-    disabled = list(cfg.get("disabled_symbols") or [])
-    if symbol in disabled:
-        return {"status": "noop", "message": f"{symbol} ist bereits disabled"}
-    disabled.append(symbol)
-    cfg["disabled_symbols"] = disabled
-    save_config(cfg)
+    from app.config_manager import load_config, save_config, _get_file_lock
+    # R-B11/S5: load->modify->save atomar unter dem (reentranten) per-File-Lock —
+    # sonst kann ein paralleler WFO-Enforce/Optimizer-Reload das frisch ergaenzte
+    # disabled_symbols ueberschreiben (Lost Update, intra-process).
+    with _get_file_lock("config.json"):
+        cfg = load_config() or {}
+        disabled = list(cfg.get("disabled_symbols") or [])
+        if symbol in disabled:
+            return {"status": "noop", "message": f"{symbol} ist bereits disabled"}
+        disabled.append(symbol)
+        cfg["disabled_symbols"] = disabled
+        save_config(cfg)
     # Counter resetten
     counters = _load(COUNTERS_FILE)
     if symbol in counters:
@@ -218,14 +222,16 @@ def confirm_disable(symbol: str) -> dict:
 
 def confirm_enable(symbol: str) -> dict:
     """User bestaetigt Re-Enable-Vorschlag. Symbol raus aus disabled_symbols."""
-    from app.config_manager import load_config, save_config
-    cfg = load_config() or {}
-    disabled = list(cfg.get("disabled_symbols") or [])
-    if symbol not in disabled:
-        return {"status": "noop", "message": f"{symbol} ist nicht in disabled_symbols"}
-    disabled.remove(symbol)
-    cfg["disabled_symbols"] = disabled
-    save_config(cfg)
+    from app.config_manager import load_config, save_config, _get_file_lock
+    # R-B11/S5: load->modify->save atomar unter dem (reentranten) per-File-Lock.
+    with _get_file_lock("config.json"):
+        cfg = load_config() or {}
+        disabled = list(cfg.get("disabled_symbols") or [])
+        if symbol not in disabled:
+            return {"status": "noop", "message": f"{symbol} ist nicht in disabled_symbols"}
+        disabled.remove(symbol)
+        cfg["disabled_symbols"] = disabled
+        save_config(cfg)
     counters = _load(COUNTERS_FILE)
     if symbol in counters:
         counters[symbol]["consecutive_not_ok"] = 0

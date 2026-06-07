@@ -461,18 +461,19 @@ class OrderStatusTracker:
             "enthaelt diese Order nicht mehr — final-Status nicht verifizierbar."
         )
 
-        # trade_history.json updaten
+        # trade_history.json updaten (S2: unter geteiltem per-File-RLock)
         try:
-            from app.config_manager import load_json, save_json
-            history = load_json("trade_history.json") or []
-            order_id_str = key
-            for t in reversed(history):
-                if str(t.get("order_id")) == order_id_str:
-                    t["status"] = "stale"
-                    t["ibkr_status_raw"] = "STALE_NO_IBKR_HISTORY"
-                    t["_e27_stale_marker"] = now_iso
-                    save_json("trade_history.json", history)
-                    break
+            from app.config_manager import load_json, save_json, _get_file_lock
+            with _get_file_lock("trade_history.json"):
+                history = load_json("trade_history.json") or []
+                order_id_str = key
+                for t in reversed(history):
+                    if str(t.get("order_id")) == order_id_str:
+                        t["status"] = "stale"
+                        t["ibkr_status_raw"] = "STALE_NO_IBKR_HISTORY"
+                        t["_e27_stale_marker"] = now_iso
+                        save_json("trade_history.json", history)
+                        break
         except Exception as e:
             log.warning("E27 _mark_stale: trade_history update failed: %s", e)
 
@@ -574,50 +575,53 @@ class OrderStatusTracker:
                               filled_qty: float, avg_fill_price: float) -> None:
         """Update den entsprechenden trade_history.json-Eintrag."""
         try:
-            from app.config_manager import load_json, save_json
+            from app.config_manager import load_json, save_json, _get_file_lock
         except Exception:
             log.warning("E27 _update_trade_history: config_manager nicht verfuegbar")
             return
 
-        history = load_json("trade_history.json") or []
-        if not history:
-            return
+        # R-B11/S2: gesamte load->modify->save-Sequenz unter dem GETEILTEN
+        # per-File-RLock — derselbe Lock, den trader.save_trade haelt. Verhindert
+        # Lost Update zwischen diesem orderStatusEvent-Thread und dem Bot-Main-Loop.
+        with _get_file_lock("trade_history.json"):
+            history = load_json("trade_history.json") or []
+            if not history:
+                return
 
-        # Find entry: erst via index, dann via order_id
-        idx = entry.get("trade_history_index")
-        target = None
-        if idx is not None and 0 <= idx < len(history):
-            cand = history[idx]
-            if str(cand.get("order_id")) == str(entry.get("order_id", "")) or \
-               cand.get("symbol") == entry.get("symbol"):
-                target = cand
+            # Find entry: erst via index, dann via order_id
+            idx = entry.get("trade_history_index")
+            target = None
+            if idx is not None and 0 <= idx < len(history):
+                cand = history[idx]
+                if str(cand.get("order_id")) == str(entry.get("order_id", "")) or \
+                   cand.get("symbol") == entry.get("symbol"):
+                    target = cand
 
-        if target is None:
-            # Fallback: search by order_id
-            order_id_str = None
-            snap = entry.get("trade_entry_snapshot", {})
-            order_id_str = snap.get("order_id")
-            if order_id_str:
-                for t in reversed(history):  # neuestes zuerst
-                    if str(t.get("order_id")) == str(order_id_str):
-                        target = t
-                        break
+            if target is None:
+                # Fallback: search by order_id
+                snap = entry.get("trade_entry_snapshot", {})
+                order_id_str = snap.get("order_id")
+                if order_id_str:
+                    for t in reversed(history):  # neuestes zuerst
+                        if str(t.get("order_id")) == str(order_id_str):
+                            target = t
+                            break
 
-        if target is None:
-            log.debug("E27 _update_trade_history: kein matching trade_history-Eintrag gefunden")
-            return
+            if target is None:
+                log.debug("E27 _update_trade_history: kein matching trade_history-Eintrag gefunden")
+                return
 
-        # Update Fields
-        bot_status = self._map_status(new_ibkr_status)
-        target["status"] = bot_status
-        target["ibkr_status_raw"] = new_ibkr_status
-        target["_e27_last_update"] = datetime.now(timezone.utc).isoformat()
-        if filled_qty > 0:
-            target["filled_qty"] = filled_qty
-        if avg_fill_price > 0:
-            target["avg_fill_price"] = avg_fill_price
+            # Update Fields
+            bot_status = self._map_status(new_ibkr_status)
+            target["status"] = bot_status
+            target["ibkr_status_raw"] = new_ibkr_status
+            target["_e27_last_update"] = datetime.now(timezone.utc).isoformat()
+            if filled_qty > 0:
+                target["filled_qty"] = filled_qty
+            if avg_fill_price > 0:
+                target["avg_fill_price"] = avg_fill_price
 
-        save_json("trade_history.json", history)
+            save_json("trade_history.json", history)
         log.info("E27 trade_history updated: symbol=%s status=%s", target.get("symbol"), bot_status)
 
     def _load_state(self) -> None:
