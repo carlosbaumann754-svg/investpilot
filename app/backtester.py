@@ -1630,6 +1630,65 @@ def _compute_signal_ic(trades):
             "verdict": verdict}
 
 
+def _compute_feature_ics(trades, histories):
+    """R-B14 (07.06.2026) Phase 0 — Per-Feature-Signal-Diagnose.
+
+    Fuer jedes Einzel-Feature (Score-Komponente bzw. Roh-Feature) der Spearman-IC
+    vs pnl_net_pct. Die Entry-Features werden aus den histories RE-BERECHNET
+    (_features_at_bar am Entry-Datum) -> KEIN Eingriff in die komplexe Simulation.
+
+    Beantwortet die Phase-0-Frage: hat IRGENDEIN vorhandenes Feature Signal, oder
+    sind alle tot (dann braucht es neue Datenquellen)? |IC|<0.03 = tot.
+    """
+    feat_names = ["score", "rsi", "momentum_5d", "momentum_20d",
+                  "volatility", "mr_strength"]
+    cache = {}  # sym -> (closes, volumes, {date_str: idx})  oder None
+    pairs = {fn: [] for fn in feat_names}  # fn -> [(feature_value, pnl), ...]
+    for t in trades:
+        sym = t.get("symbol")
+        ed = t.get("entry_date")
+        pnl = t.get("pnl_net_pct")
+        if sym is None or ed is None or pnl is None:
+            continue
+        if sym not in cache:
+            hist = (histories or {}).get(sym)
+            try:
+                closes = hist["Close"].values.tolist()
+                volumes = hist["Volume"].values.tolist()
+                date_idx = {str(d)[:10]: i for i, d in enumerate(hist.index)}
+                cache[sym] = (closes, volumes, date_idx)
+            except Exception:
+                cache[sym] = None
+        c = cache[sym]
+        if c is None:
+            continue
+        closes, volumes, date_idx = c
+        idx = date_idx.get(str(ed)[:10])
+        if idx is None:
+            continue
+        feats = _features_at_bar(closes, volumes, idx)
+        if not feats:
+            continue
+        for fn in feat_names:
+            v = feats.get(fn)
+            if v is not None:
+                pairs[fn].append((v, pnl))
+    out = {}
+    for fn in feat_names:
+        ps = pairs[fn]
+        if len(ps) < 20:
+            out[fn] = {"n": len(ps), "ic_spearman": None}
+            continue
+        xs = [p[0] for p in ps]
+        ys = [p[1] for p in ps]
+        ic = _pearson(_ranks(xs), _ranks(ys))
+        out[fn] = {"n": len(ps), "ic_spearman": round(ic, 4),
+                   "verdict": ("KEIN Edge" if abs(ic) < 0.03
+                               else "sehr schwach" if abs(ic) < 0.05
+                               else "schwach-aber-real")}
+    return out
+
+
 def calculate_metrics(trades, position_sizing=None):
     """Calculate performance metrics from a list of trades.
 
@@ -2219,6 +2278,8 @@ def run_full_backtest(config=None, symbols=None, years=5,
         "timestamp": datetime.now().isoformat(),
         # R-B13: Signal-Qualitaet (IC) — sagt der entry_score die Rendite voraus?
         "signal_quality": _compute_signal_ic(all_trades),
+        # R-B14 Phase 0: Per-Feature-IC — welches Einzel-Feature hat ueberhaupt Signal?
+        "feature_ics": _compute_feature_ics(all_trades, histories),
         "config_used": {
             "strategy": config.get("demo_trading", {}).get("strategy", "unknown"),
             "stop_loss_pct": config.get("demo_trading", {}).get("stop_loss_pct", -5),
