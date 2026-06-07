@@ -2863,6 +2863,15 @@ def run_trading_cycle():
     # 6. Stop-Loss / Take-Profit
     check_stop_loss_take_profit(client, config)
 
+    # R-B11/E6: Broker-seitige Catastrophic-Stops aufraeumen (Orphans nach Closes
+    # canceln, nach Partial-Close verkleinern). Dark-ship: no-op solange
+    # config.risk_management.catastrophic_stop.enabled=false.
+    if hasattr(client, "reconcile_protective_stops"):
+        try:
+            client.reconcile_protective_stops()
+        except Exception as e:
+            log.debug(f"E6 reconcile_protective_stops (non-fatal): {e}")
+
     # 6b. Trailing SL State bereinigen (geschlossene Positionen entfernen)
     lm = _import_leverage_manager()
     if lm:

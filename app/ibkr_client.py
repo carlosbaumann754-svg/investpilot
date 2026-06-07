@@ -285,6 +285,55 @@ def _position_pnl_pct(qty, avg_cost, unrealized_pnl):
     return float(unrealized_pnl) / cost_basis * 100
 
 
+# ============================================================
+# R-B11/E6 (07.06.2026): Broker-seitiger Catastrophic-Stop (Backstop)
+# ============================================================
+# Aktuell existieren SL/TP nur als Software-Loop (check_stop_loss_take_profit,
+# ~5-Min-Cycle). Steht der Bot still (Crash, IBKR-Drop, Daily-Restart 05:15 UTC),
+# sind offene Positionen UNGESCHUETZT — kein serverseitiger Stop faengt einen Gap.
+# E6 legt einen WEITEN GTC-StopOrder bei IBKR auf die TATSAECHLICHE Fill-Qty:
+#   - greift nur, wenn der Bot down ist (im Normalbetrieb feuert der enge
+#     Software-SL zuerst -> Reconcile cancelt den weiten Stop) -> kein Double-Fire,
+#   - auf die Ist-Fill-Qty -> kein Oversell,
+#   - GTC -> ueberlebt Restart (genau dann schuetzt er),
+#   - getaggt orderRef='E6_CATASTROPHIC' -> Orphan-Reconcile (Source-of-Truth =
+#     IBKR-Positions+OpenOrders, keine fragile Extra-Datei).
+# Dark-ship: per Default AUS (config.risk_management.catastrophic_stop.enabled).
+_CATASTROPHIC_ORDER_REF = "E6_CATASTROPHIC"
+
+
+def _catastrophic_stop_price(ref_price, pct):
+    """E6: Stop-Preis = ref * (1 - pct/100), 2-Dezimal gerundet.
+
+    pct positiv (z.B. 20 = 20% unter Fill). None bei ungueltigem Input.
+    """
+    try:
+        price = round(float(ref_price) * (1 - float(pct) / 100.0), 2)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def _protective_stop_action(stop_qty, position_qty):
+    """E6: Reconcile-Entscheidung fuer einen getaggten Catastrophic-Stop.
+
+    - 'cancel': keine Position mehr -> Stop MUSS weg (sonst Oversell -> Short
+      falls er je triggert).
+    - 'resize': Stop-Qty > Position-Qty (nach Partial-Close) -> verkleinern.
+    - 'keep':  passt.
+    """
+    try:
+        pq = int(position_qty)
+        sq = int(stop_qty)
+    except (TypeError, ValueError):
+        return "keep"
+    if pq <= 0:
+        return "cancel"
+    if sq > pq:
+        return "resize"
+    return "keep"
+
+
 class IbkrBroker(BrokerBase):
     """
     IBKR-Implementierung des BrokerBase-Interfaces.
@@ -353,6 +402,13 @@ class IbkrBroker(BrokerBase):
         self._e27_enabled = bool(
             (config or {}).get("realtime_status_tracker", {}).get("enabled", False)
         )
+        # R-B11/E6 (07.06.2026): Broker-seitiger Catastrophic-Stop. Dark-ship:
+        # default AUS. config.risk_management.catastrophic_stop = {enabled, pct}.
+        # Pro Cycle frisch konstruiert -> Config-Aktivierung greift naechsten Cycle.
+        _cat_cfg = ((config or {}).get("risk_management", {})
+                    .get("catastrophic_stop", {}) or {})
+        self._cat_stop_enabled = bool(_cat_cfg.get("enabled", False))
+        self._cat_stop_pct = float(_cat_cfg.get("pct", 20.0))
         # v37h Task 1 (09.05.2026): Asset-Class-Order-Settings.
         # Stress-Test-Befund 08.05.: Commodity-ETFs (CPER, SLV) failen in
         # Pre-Market wegen duenner Liquiditaet. Per-Asset-Class Slippage +
@@ -1286,6 +1342,30 @@ class IbkrBroker(BrokerBase):
             log.info("Order %s status=%s filled=%d avgPrice=%.4f",
                      trade.order.orderId, status, fill_qty, avg_fill_price)
 
+            # R-B11/E6: Broker-seitiger Catastrophic-Stop NACH dem Fill (auf die
+            # TATSAECHLICHE fill_qty -> kein Oversell; GTC -> ueberlebt Bot-Restart;
+            # weit unter dem Software-SL -> greift nur wenn der Bot down ist).
+            # Non-fatal: ein Fehlschlag darf den Buy NICHT scheitern lassen.
+            protective_stop_id = None
+            if (action == "BUY" and self._cat_stop_enabled
+                    and fill_qty and int(fill_qty) > 0
+                    and status in ("Filled", "PartiallyFilled")):
+                try:
+                    cat_price = _catastrophic_stop_price(
+                        avg_fill_price or price, self._cat_stop_pct)
+                    if cat_price:
+                        cat_order = StopOrder("SELL", int(fill_qty), cat_price)
+                        cat_order.tif = "GTC"
+                        cat_order.outsideRth = outside_rth
+                        cat_order.orderRef = _CATASTROPHIC_ORDER_REF
+                        cat_trade = ib.placeOrder(contract, cat_order)
+                        protective_stop_id = str(cat_trade.order.orderId)
+                        log.info("E6 Catastrophic-Stop: %s SELL %d @ %.2f (-%.0f%%) "
+                                 "GTC id=%s", contract.symbol, int(fill_qty), cat_price,
+                                 self._cat_stop_pct, protective_stop_id)
+                except Exception as e:
+                    log.error("E6 Catastrophic-Stop placement failed (non-fatal): %s", e)
+
             # v37h Task 2 (10.05.2026): Eager Brain-Snapshot direkt nach Fill —
             # schliesst Timing-Gap zwischen Fill und naechstem Trader-Cycle.
             # Reconcile-Cron sieht damit immer aktuelles Cash + Positions.
@@ -1310,6 +1390,7 @@ class IbkrBroker(BrokerBase):
                     "secType": contract.secType,
                 },
                 "_amount_usd_target": amount_usd,
+                "_protective_stop_order_id": protective_stop_id,  # E6
                 "_amount_usd_actual": float((fill_qty or qty) * (avg_fill_price or price)),
                 "_child_orders": [
                     {"orderId": ct.order.orderId, "status": ct.orderStatus.status}
@@ -1357,6 +1438,58 @@ class IbkrBroker(BrokerBase):
         )
         if result is not None and isinstance(result, dict):
             result["leverage_actual"] = 1  # v37dc: Reality-Marker
+        return result
+
+    def reconcile_protective_stops(self):
+        """R-B11/E6: orphan/oversize Catastrophic-Stops aufraeumen.
+
+        Source-of-Truth ist IBKR selbst (keine Extra-Datei): fuer jeden offenen,
+        via orderRef='E6_CATASTROPHIC' getaggten StopOrder wird gegen die aktuelle
+        Position entschieden:
+          - keine Position mehr  -> CANCEL (sonst Oversell -> Short bei Trigger),
+          - Stop-Qty > Pos-Qty   -> RESIZE (cancel + neuer Stop auf Pos-Qty),
+          - sonst                -> behalten.
+        Idempotent + non-fatal (Fehler darf den Cycle nie killen).
+        """
+        result = {"cancelled": 0, "resized": 0, "kept": 0}
+        if not self._cat_stop_enabled:
+            return result
+        try:
+            ib = self._get_ib()
+            pos_qty = {}
+            for p in (ib.positions() or []):
+                cid = getattr(p.contract, "conId", None)
+                if cid is not None:
+                    pos_qty[cid] = abs(int(p.position))
+            for t in list(ib.openTrades() or []):
+                order = getattr(t, "order", None)
+                if order is None or getattr(order, "orderRef", "") != _CATASTROPHIC_ORDER_REF:
+                    continue
+                cid = getattr(getattr(t, "contract", None), "conId", None)
+                have = pos_qty.get(cid, 0)
+                stop_qty = int(getattr(order, "totalQuantity", 0) or 0)
+                decision = _protective_stop_action(stop_qty, have)
+                if decision == "cancel":
+                    ib.cancelOrder(order)
+                    result["cancelled"] += 1
+                    log.info("E6 reconcile: orphan Catastrophic-Stop gecancelt "
+                             "(conId=%s, keine Position)", cid)
+                elif decision == "resize":
+                    aux = getattr(order, "auxPrice", None)
+                    ib.cancelOrder(order)
+                    if aux:
+                        from ib_insync import StopOrder  # nur hier noetig
+                        new_o = StopOrder("SELL", have, aux)
+                        new_o.tif = "GTC"
+                        new_o.orderRef = _CATASTROPHIC_ORDER_REF
+                        ib.placeOrder(t.contract, new_o)
+                    result["resized"] += 1
+                    log.info("E6 reconcile: Catastrophic-Stop verkleinert "
+                             "(conId=%s, %d -> %d)", cid, stop_qty, have)
+                else:
+                    result["kept"] += 1
+        except Exception as e:
+            log.warning("E6 reconcile_protective_stops failed (non-fatal): %s", e)
         return result
 
     def sell(self, instrument_id, amount_usd, leverage=1):
