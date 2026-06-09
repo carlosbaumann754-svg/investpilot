@@ -57,3 +57,33 @@ def test_run_shadow_scan_injected():
 def test_run_shadow_scan_empty_universe():
     res = r.run_shadow_scan([], asof="2024-06-30", facts={}, prices={})
     assert res["scored"] == 0
+
+
+# --- _write_universe_health (sp600-Universe-Health aus Shadow-Resultaten) ----
+def test_write_universe_health_marks_priced_ok(monkeypatch):
+    """Symbol mit frischem Preis -> 'ok', ohne -> 'no_price'. Behebt den alten
+    Backtester-Report, der sp600 als 'not in ASSET_UNIVERSE' fuehrte."""
+    import app.config_manager as cm
+    captured = {}
+    monkeypatch.setattr(cm, "save_json", lambda fn, data: captured.__setitem__(fn, data))
+
+    r._write_universe_health(["AAA", "BBB", "CCC"], {"AAA": (20, 24), "CCC": (10, 9)})
+
+    uh = captured["universe_health.json"]
+    assert uh["source"] == "signal_stack_shadow"
+    assert uh["total_requested"] == 3
+    assert uh["ok_count"] == 2
+    assert uh["error_count"] == 1
+    assert uh["report"]["AAA"]["status"] == "ok"
+    assert uh["report"]["CCC"]["status"] == "ok"
+    assert uh["report"]["BBB"]["status"] == "no_price"
+
+
+def test_write_universe_health_all_unpriced(monkeypatch):
+    import app.config_manager as cm
+    captured = {}
+    monkeypatch.setattr(cm, "save_json", lambda fn, data: captured.__setitem__(fn, data))
+    r._write_universe_health(["X", "Y"], {})
+    uh = captured["universe_health.json"]
+    assert uh["ok_count"] == 0 and uh["error_count"] == 2
+    assert all(v["status"] == "no_price" for v in uh["report"].values())

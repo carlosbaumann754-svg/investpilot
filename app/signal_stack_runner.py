@@ -87,8 +87,45 @@ def run_shadow_scan(symbols: list, asof: Optional[str] = None,
         save_json(_SHADOW_FILE, payload)
     except Exception as e:  # pragma: no cover - IO best effort
         log.warning("signal_stack_shadow.json schreiben fehlgeschlagen: %s", e)
+    _write_universe_health(symbols, prices)
     log.info("Shadow-Scan: %d gescort, %d mit Preis (asof %s)", len(scores), len(prices), asof)
     return {"scored": len(scores), "n_priced": len(prices), "asof": asof}
+
+
+def _write_universe_health(symbols: list, prices: dict) -> None:
+    """Schreibt universe_health.json aus den Shadow-Resultaten fuer das AKTIVE
+    (sp600-)Universum: ein Symbol ist 'ok', wenn es einen frischen Kurs hat
+    (handelbar + Daten vorhanden), sonst 'no_price'.
+
+    Hintergrund: Der alte Producer (backtester._download_histories) kennt nur das
+    ASSET_UNIVERSE und fuehrte alle sp600-Symbole als 'unknown / not in
+    ASSET_UNIVERSE' -> Dashboard-Card zeigte faelschlich '331 Probleme'. Da der
+    Shadow-Scan die sp600 ohnehin taeglich bepreist, ist er die korrekte Quelle
+    fuer die Universe-Health des neuen Motors. Trading-neutral (nur Report).
+    Best-effort.
+    """
+    try:
+        from app.config_manager import save_json
+        report = {}
+        for s in symbols:
+            if s in prices:
+                report[s] = {"status": "ok", "source": "signal_stack_shadow"}
+            else:
+                report[s] = {"status": "no_price",
+                             "reason": "kein frischer Kurs im Shadow-Scan",
+                             "source": "signal_stack_shadow"}
+        ok = sum(1 for r in report.values() if r["status"] == "ok")
+        save_json("universe_health.json", {
+            "generated_at": datetime.utcnow().isoformat(),
+            "total_requested": len(symbols),
+            "ok_count": ok,
+            "error_count": len(report) - ok,
+            "source": "signal_stack_shadow",
+            "report": report,
+        })
+        log.info("Universe-Health (Shadow): %d ok, %d ohne Preis", ok, len(report) - ok)
+    except Exception as e:  # pragma: no cover - IO best effort
+        log.warning("universe_health.json (Shadow) schreiben fehlgeschlagen: %s", e)
 
 
 def shadow_status() -> dict:
