@@ -115,14 +115,25 @@ def download_history(symbols=None, years=5, start_date=None, end_date=None):
     # Track which symbols failed for universe-health report
     health_report: dict[str, dict] = {}
 
+    # sp600-Universum (neuer Motor) einmalig laden, damit der Loader auch dessen
+    # Symbole aufloesen kann — sonst landen sie als 'unknown / not in ASSET_UNIVERSE'
+    # im universe_health.json (synthetische-ID-Symbole sind reine US-Ticker, yf==Symbol).
+    try:
+        from app import sp600_universe as _sp600
+        _sp600_set = frozenset(_sp600.get_symbols())
+    except Exception:
+        _sp600_set = frozenset()
+
     log.info(f"Downloading {len(symbols)} assets, period={period_str}...")
 
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
         for sym in batch:
             info = ASSET_UNIVERSE.get(sym)
+            if not info and sym in _sp600_set:
+                info = {"yf": sym, "class": "stocks"}  # sp600-Fallback (neuer Motor)
             if not info:
-                health_report[sym] = {"status": "unknown", "reason": "not in ASSET_UNIVERSE"}
+                health_report[sym] = {"status": "unknown", "reason": "not in ASSET_UNIVERSE/sp600"}
                 continue
             yf_sym = info["yf"]
             try:
