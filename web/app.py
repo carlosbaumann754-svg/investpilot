@@ -5112,8 +5112,12 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
     # 29.05.2026 Dashboard-Audit: verschoben von 01.06 auf 07.07 (Validierungs-
     # Soak-Entscheidung — Cutover-Woche-Audit fand 4 latente Bugs/Tag + WFO-
     # Baseline unrealistisch; ~5.5 Wochen Soak mit messbaren Exit-Kriterien).
-    # Historie: 28.05 -> 01.06 (v37h+2) -> 07.07 (Soak).
-    cutover_date = _date(2026, 7, 7)  # Di, nach Independence-Day-Weekend
+    # 09.06.2026: verschoben 07.07 -> 04.08 (Carlos-Entscheid). Der Signal-Stack-
+    # Switch am 09.06. aenderte das Trading-Verhalten -> Soak-Uhr resetet; der neue
+    # Motor (5-Signal-EDGAR-Stack) hat 0 Live-Trades und braucht ein eigenes
+    # sauberes Fenster (>=2 Wochen stabiler Code + >=50 Close-Trades).
+    # Historie: 28.05 -> 01.06 (v37h+2) -> 07.07 (Soak) -> 04.08 (Signal-Stack).
+    cutover_date = _date(2026, 8, 4)  # Di, volles Daten-Fenster fuer Signal-Stack
     today = _dt.now(_tz.utc).date()
     days_to_cutover = (cutover_date - today).days
 
