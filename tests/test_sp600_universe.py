@@ -35,3 +35,40 @@ def test_universe_entries_format():
     for sym, meta in entries.items():
         assert meta["yf"] == sym
         assert meta["class"] == "stocks"
+        assert "internal_id" in meta
+
+
+def test_synthetic_ids_unique_and_noncolliding():
+    ids = [m["internal_id"] for m in u.universe_entries().values()]
+    assert len(ids) == len(set(ids))            # eindeutig
+    assert all(i > 900000 for i in ids)         # kollisionsfrei zu ASSET_UNIVERSE (~1k-11k)
+
+
+def test_id_maps_roundtrip():
+    s2i = u.symbol_to_id()
+    i2s = u.id_to_symbol()
+    for sym in u.get_symbols():
+        assert i2s[s2i[sym]] == sym             # roundtrip symbol->id->symbol
+
+
+def test_ids_stable_across_calls():
+    assert u.symbol_to_id() == u.symbol_to_id()  # deterministisch
+
+
+def test_is_sp600_id():
+    a_id = u.symbol_to_id()["AAP"]
+    assert u.is_sp600_id(a_id) is True
+    assert u.is_sp600_id(6408) is False          # AAPL (ASSET_UNIVERSE) ist kein sp600
+    assert u.is_sp600_id(None) is False
+    assert u.is_sp600_id("xyz") is False
+
+
+def test_market_scanner_sp600_id_mapping_additive():
+    """Integration: market_scanner-ID-Mapping erkennt sp600 UND die 51 (additiv,
+    keine Regression fuer das bestehende Universum)."""
+    from app import market_scanner as ms
+    cid = ms.instrument_id_for_symbol("CALM")           # sp600
+    assert cid > 900000
+    assert ms.symbol_for_instrument_id(cid) == "CALM"   # roundtrip
+    assert ms.instrument_id_for_symbol("AAPL") == 6408  # 51-Universe unveraendert
+    assert ms.symbol_for_instrument_id(6408) == "AAPL"

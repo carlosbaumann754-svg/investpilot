@@ -105,6 +105,19 @@ def _lookup_etoro_id_in_universe(etoro_id: int) -> Optional[dict]:
 
     Lazy import um Circular-Dependencies zu vermeiden.
     """
+    # v38: sp600-Signal-Stack-Universum (additiv). Synthetische IDs >900000 sind
+    # disjunkt zu ASSET_UNIVERSE -> dormant solange use_signal_stack AUS. US-Stocks
+    # -> Stock(symbol) + qualifyContracts loest conId/Exchange (kein vorgemapptes
+    # conId noetig).
+    try:
+        from app import sp600_universe
+        if sp600_universe.is_sp600_id(etoro_id):
+            sym = sp600_universe.id_to_symbol().get(int(etoro_id))
+            if sym:
+                return {"symbol": sym, "class": "stocks", "name": sym, "sector": "smallcap"}
+    except Exception as e:
+        log.debug("sp600-Lookup uebersprungen: %s", e)
+
     try:
         from app.market_scanner import ASSET_UNIVERSE
     except Exception as e:

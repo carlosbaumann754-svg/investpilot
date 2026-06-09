@@ -228,6 +228,14 @@ def instrument_id_for_symbol(symbol: str):
     """
     meta = ASSET_UNIVERSE.get(symbol)
     if not meta:
+        # v38: sp600-Signal-Stack-Universum (additiv, dormant wenn use_signal_stack AUS)
+        try:
+            from app import sp600_universe
+            sid = sp600_universe.symbol_to_id().get(symbol)
+            if sid:
+                return sid
+        except Exception:
+            pass
         return NO_INSTRUMENT_ID
     return _meta_internal_id(meta)
 
@@ -248,6 +256,13 @@ def symbol_for_instrument_id(instrument_id):
         return None
     if iid == NO_INSTRUMENT_ID:
         return None
+    # v38: sp600 synthetische IDs (>900000) -> direkter Reverse-Lookup
+    try:
+        from app import sp600_universe
+        if sp600_universe.is_sp600_id(iid):
+            return sp600_universe.id_to_symbol().get(iid)
+    except Exception:
+        pass
     for sym, meta in ASSET_UNIVERSE.items():
         if _meta_internal_id(meta) == iid:
             return sym
@@ -826,6 +841,88 @@ def apply_regime_strategy_modifier(score, analysis, sector, config=None):
 # SCANNER HAUPTFUNKTION
 # ============================================================
 
+def _scan_via_signal_stack(max_per_class=None):
+    """v38: Asset-Selektion via Fundamental-Signal-Stack (flag-gated).
+
+    Liest die taeglich vom Cron berechneten + self-test-validierten Shadow-Scores
+    (signal_stack_shadow.json) und ersetzt damit den edgelosen TA-score_asset.
+    Mapping Stack-Score 0-100 -> Bot-Score -100..+100 via (s-50)*2 (reusing der
+    bestehenden Signal-Schwellen).
+
+    FAIL-SAFE: bei fehlenden/stale/fehlerhaften Scores -> [] (KEIN Buy). Der Bot
+    handelt NIE auf kaputten Scores. Bestehende Positionen managt die Exit-Logik
+    unabhaengig weiter. exc_info -> Sentry erfasst Tracebacks.
+    """
+    try:
+        from datetime import datetime, timezone
+        from app import sp600_universe
+        from app.config_manager import load_json
+        shadow = load_json("signal_stack_shadow.json")
+        if not isinstance(shadow, dict) or not shadow.get("scores"):
+            log.error("Signal-Stack: keine Shadow-Scores -> FAIL-SAFE (kein Buy)")
+            return []
+        gen = shadow.get("generated_at", "")
+        try:
+            g = datetime.fromisoformat(str(gen).replace("Z", ""))
+            if g.tzinfo is None:
+                g = g.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(timezone.utc) - g).total_seconds() / 3600
+            if age_h > 96:
+                log.error("Signal-Stack: Shadow-Scores %.0fh alt (>96h) -> FAIL-SAFE (kein Buy)", age_h)
+                return []
+        except Exception:
+            pass
+        scores = shadow["scores"]
+        entries = sp600_universe.universe_entries()
+        ranked = sorted(scores.items(), key=lambda kv: -(kv[1].get("score") or 0))
+        results = []
+        analyzed_buys = 0
+        max_analyze = max_per_class if (max_per_class and max_per_class > 0) else 40
+        for sym, d in ranked:
+            stack_score = d.get("score")
+            info = entries.get(sym)
+            if stack_score is None or not info:
+                continue
+            bot_score = round((float(stack_score) - 50.0) * 2.0, 1)  # 0-100 -> -100..+100
+            if bot_score >= 25:
+                signal = "STRONG_BUY"
+            elif bot_score >= 10:
+                signal = "BUY"
+            elif bot_score <= -25:
+                signal = "STRONG_SELL"
+            elif bot_score <= -10:
+                signal = "SELL"
+            else:
+                signal = "HOLD"
+            analysis = None
+            if signal in ("BUY", "STRONG_BUY"):
+                if analyzed_buys >= max_analyze:
+                    signal = "HOLD"  # ueber Analyse-Cap -> nicht als Buy ausgeben
+                else:
+                    analysis = analyze_single_asset(sym, info)
+                    if analysis is None:
+                        continue  # kein Preis/Analysis -> kein Buy ohne Sizing-Daten
+                    analyzed_buys += 1
+                    time.sleep(0.3)
+            results.append({
+                "symbol": sym,
+                "name": info["name"],
+                "class": info["class"],
+                "internal_id": info["internal_id"],
+                "etoro_id": info["internal_id"],
+                "score": bot_score,
+                "signal": signal,
+                "analysis": analysis,
+            })
+        n_buy = sum(1 for r in results if r["signal"] in ("BUY", "STRONG_BUY"))
+        log.info("Signal-Stack-Scan: %d gescort, %d Buy-Kandidaten (analysiert)",
+                 len(results), n_buy)
+        return results
+    except Exception as e:
+        log.error("Signal-Stack-Scan EXCEPTION -> FAIL-SAFE (kein Buy): %s", e, exc_info=True)
+        return []
+
+
 def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
     """
     Scannt alle Assets im Universum und gibt sortierte Opportunities zurueck.
@@ -841,6 +938,16 @@ def scan_all_assets(enabled_classes=None, max_per_class=None, use_ml=None):
     if yf is None:
         log.error("yfinance nicht installiert - Scanner deaktiviert")
         return []
+
+    # v38: Signal-Stack-Selektion (flag-gated, Default AUS). Bei Flag-Check-Fehler
+    # -> sicherer Fallback auf den bestehenden TA-Scan (alte Behaviour).
+    try:
+        from app.config_manager import load_config as _lc_ss
+        if bool(_lc_ss().get("use_signal_stack", False)):
+            log.info("MARKET SCANNER — Signal-Stack-Modus (use_signal_stack=ON)")
+            return _scan_via_signal_stack(max_per_class=max_per_class)
+    except Exception as _e:
+        log.error("use_signal_stack-Flag-Check fehlgeschlagen -> TA-Scan-Fallback: %s", _e)
 
     if enabled_classes is None:
         # v37cv (04.05.2026): Default auf IBKR-handelbar reduziert.

@@ -62,18 +62,43 @@ SP600_SYMBOLS = [
 ]
 
 
+# Synthetische internal_ids: 900001+ — kollisionsfrei zu ASSET_UNIVERSE (~1k-11k).
+# Deterministisch (sortierte Symbol-Liste -> stabile ID pro Symbol).
+_ID_BASE = 900000
+
+
 def get_symbols() -> list:
-    """Die Symbol-Liste (Kopie, dedupliziert, sortiert)."""
+    """Die Symbol-Liste (Kopie, dedupliziert, sortiert — stabile Reihenfolge)."""
     return sorted(set(SP600_SYMBOLS))
 
 
 def universe_entries() -> dict:
-    """{symbol: {yf, class, name, sector}} — Format kompatibel mit ASSET_UNIVERSE.
+    """{symbol: {internal_id, yf, class, name, sector}} — ASSET_UNIVERSE-kompatibel.
 
-    Fuer das Mergen ins Trading-Universum (Phase 4). yf == Symbol (US-Ticker),
-    class == 'stocks'. name/sector als Platzhalter (per EDGAR/IBKR anreicherbar).
+    yf == Symbol (US-Ticker), class == 'stocks'. internal_id synthetisch+eindeutig
+    (900001+) -> resolve_contract loest per qualifyContracts auf (kein vorgemapptes
+    conId noetig). name/sector Platzhalter (per EDGAR/IBKR anreicherbar).
     """
     return {
-        s: {"yf": s, "class": "stocks", "name": s, "sector": "smallcap"}
-        for s in get_symbols()
+        s: {"internal_id": _ID_BASE + i + 1, "yf": s, "class": "stocks",
+            "name": s, "sector": "smallcap"}
+        for i, s in enumerate(get_symbols())
     }
+
+
+def symbol_to_id() -> dict:
+    """{symbol: synthetische internal_id}."""
+    return {s: meta["internal_id"] for s, meta in universe_entries().items()}
+
+
+def id_to_symbol() -> dict:
+    """{synthetische internal_id: symbol} — Reverse-Lookup fuer den Resolver."""
+    return {meta["internal_id"]: s for s, meta in universe_entries().items()}
+
+
+def is_sp600_id(internal_id) -> bool:
+    """True wenn internal_id im synthetischen sp600-Bereich (>900000) liegt."""
+    try:
+        return int(internal_id) > _ID_BASE
+    except (TypeError, ValueError):
+        return False
