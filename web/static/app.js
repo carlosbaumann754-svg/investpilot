@@ -122,14 +122,20 @@ function renderBenchmark(benchData) {
         const bot = portfolioByKey[p.key];
         const botRow = `<div class="bench-cell-row" style="border-bottom:1px solid var(--border);padding-bottom:3px;margin-bottom:3px;"><span class="bench-label" style="font-weight:600;">Bot</span>${cellWithVal(bot)}</div>`;
 
+        // Bei 0 Positionen (100% Cash) ist die HEUTE/7T-Rendite reiner USD/CHF-Effekt
+        // auf ruhendem Cash -> alpha gegen Aktienindizes nicht aussagekraeftig -> N/A.
+        const flatShort = !!(_lastPnlPeriods && _lastPnlPeriods.currently_flat
+                             && (p.key === '1d' || p.key === '7d'));
         const benchRows = benches.map(b => {
             const v = p[`${b.key}_pct`];
             const a = (v != null && bot != null) ? (bot - v) : null;
-            const aCls = a == null ? '' : (a >= 0 ? 'positive' : 'negative');
-            const aTxt = a == null ? '--' : fmtPct(a);
+            let aCls = a == null ? '' : (a >= 0 ? 'positive' : 'negative');
+            let aTxt = a == null ? '--' : fmtPct(a);
+            if (flatShort) { aTxt = 'N/A'; aCls = ''; }
+            const aTitle = flatShort ? 'Bot ist aktuell 100% Cash — HEUTE/7T-Rendite = USD/CHF-Effekt auf Cash, kein Trading. Alpha gegen Aktienindex nicht aussagekraeftig.' : '';
             return `
                 <div class="bench-cell-row"><span class="bench-label">${b.label}</span>${cellWithVal(v)}</div>
-                <div class="bench-cell-row bench-alpha" style="opacity:0.85;"><span class="bench-label">&nbsp;α</span><span class="bench-value ${aCls}">${aTxt}</span></div>
+                <div class="bench-cell-row bench-alpha" style="opacity:0.85;" title="${aTitle}"><span class="bench-label">&nbsp;α</span><span class="bench-value ${aCls}">${aTxt}</span></div>
             `;
         }).join('');
 
@@ -145,7 +151,10 @@ function renderBenchmark(benchData) {
     if (meta) {
         const stale = benchData.latest_close_date ? `Stand: ${benchData.latest_close_date}` : '';
         const benchNames = benches.map(b => `${b.label}=${b.name}`).join(' | ');
-        meta.textContent = `${benchNames} | α = Bot − Benchmark | ${stale}`;
+        const flatNote = (_lastPnlPeriods && _lastPnlPeriods.currently_flat)
+            ? ' | ⚠ Aktuell 100% Cash: HEUTE/7T = USD/CHF-Effekt auf Cash (kein Trading) → α N/A'
+            : '';
+        meta.textContent = `${benchNames} | α = Bot − Benchmark | ${stale}${flatNote}`;
     }
 }
 
@@ -352,7 +361,10 @@ function renderPnlPeriods(data) {
     }).join('');
 
     if (meta) {
-        meta.textContent = `* = inkl. laufende Positionen | ${data.total_closes_counted || 0} abgeschlossene Trades insgesamt`;
+        const flatNote = data.currently_flat
+            ? ' | aktuell 100% Cash: HEUTE/7T = Equity-Δ in CHF (inkl. USD/CHF auf Cash), ≥ 30T = realisierte Trades'
+            : '';
+        meta.textContent = `* = inkl. laufende Positionen | ${data.total_closes_counted || 0} abgeschlossene Trades insgesamt${flatNote}`;
     }
 }
 

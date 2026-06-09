@@ -1440,6 +1440,7 @@ async def api_pnl_periods(user=Depends(require_auth)):
         # (current_value war 0 weil IBKR-Live-Call aus FastAPI failed).
         current_value = 0.0
         current_unrealized = 0.0
+        num_positions = 0
         try:
             config = load_config()
             broker_name = (config.get("broker") or "etoro").lower()
@@ -1450,6 +1451,7 @@ async def api_pnl_periods(user=Depends(require_auth)):
                     current_unrealized = float(p_cache.get("unrealizedPnL") or 0)
                     parsed = [EtoroClient.parse_position(pos)
                               for pos in (p_cache.get("positions") or [])]
+                    num_positions = len(parsed)
                     total_invested = sum(p["invested"] for p in parsed)
                     current_value = (p_cache.get("_total_value")
                                      or (credit + total_invested + current_unrealized))
@@ -1461,6 +1463,7 @@ async def api_pnl_periods(user=Depends(require_auth)):
                     positions = portfolio.get("positions", []) or []
                     current_unrealized = portfolio.get("unrealizedPnL", 0) or 0
                     parsed = [EtoroClient.parse_position(p) for p in positions]
+                    num_positions = len(parsed)
                     total_invested = sum(p["invested"] for p in parsed)
                     current_value = credit + total_invested + current_unrealized
         except Exception as e:
@@ -1593,6 +1596,8 @@ async def api_pnl_periods(user=Depends(require_auth)):
             "current_total_value": round(current_value, 2),
             "current_unrealized": round(current_unrealized, 2),
             "total_closes_counted": closes,
+            "num_positions": num_positions,
+            "currently_flat": bool(num_positions == 0 and current_value > 1000),
         }
     except Exception as e:
         log.error(f"PnL-Periods Error: {e}")
