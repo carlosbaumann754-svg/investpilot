@@ -710,6 +710,71 @@ def tc_audit_coverage_complete() -> TestResult:
             duration_ms=int((time.time() - t0) * 1000))
 
 
+def tc_edgar_cache_fresh() -> TestResult:
+    """v38: EDGAR-Fundamentaldaten-Cache fuer den Signal-Stack frisch + befuellt.
+
+    Faengt EDGAR-Cache-Ausfaelle (leer/stale -> Stack scort auf alten Daten).
+    Shadow-Phase -> 'warning' (noch nicht trading-relevant). Bei Phase-4-Live-
+    Switch auf 'critical' hochstufen.
+    """
+    try:
+        from app import edgar_client
+        st = edgar_client.edgar_cache_status()
+        if not st.get("ok"):
+            return TestResult("edgar_cache_fresh", False, f"EDGAR-Cache nicht ok: {st}",
+                              severity="warning", category="signal_stack")
+        n = st.get("symbols", 0)
+        age = st.get("age_days")
+        if n < 50:
+            return TestResult("edgar_cache_fresh", False, f"nur {n} Symbole im EDGAR-Cache",
+                              severity="warning", category="signal_stack")
+        if age is not None and age > 35:
+            return TestResult("edgar_cache_fresh", False,
+                              f"EDGAR-Cache {age}d alt (>35d, woechentl. Refresh fehlt?)",
+                              severity="warning", category="signal_stack")
+        return TestResult("edgar_cache_fresh", True, f"{n} Symbole, {age}d alt",
+                          severity="info", category="signal_stack")
+    except Exception as e:
+        return TestResult("edgar_cache_fresh", False, f"exception: {e!r}",
+                          severity="warning", category="signal_stack")
+
+
+def tc_signal_stack_fresh() -> TestResult:
+    """v38: Shadow-Scan des Signal-Stacks lief zuletzt + ist frisch.
+
+    Faengt STILLE Shadow-Ausfaelle (Cron-Fehler -> keine neuen Scores). Genau die
+    Sichtbarkeit, die ein Live-Switch braucht. Shadow -> 'warning'.
+    """
+    try:
+        from app import signal_stack_runner
+        st = signal_stack_runner.shadow_status()
+        if not st.get("ok"):
+            return TestResult("signal_stack_fresh", False, f"kein Shadow-Lauf: {st}",
+                              severity="warning", category="signal_stack")
+        n = st.get("n_scored", 0)
+        if n < 50:
+            return TestResult("signal_stack_fresh", False, f"nur {n} Symbole gescort",
+                              severity="warning", category="signal_stack")
+        age_h = None
+        try:
+            g = datetime.fromisoformat(st.get("generated_at", "").replace("Z", ""))
+            if g.tzinfo is None:
+                g = g.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(timezone.utc) - g).total_seconds() / 3600
+        except Exception:
+            pass
+        if age_h is not None and age_h > 96:
+            return TestResult("signal_stack_fresh", False,
+                              f"Shadow-Scan {age_h:.0f}h alt (>96h, Cron-Ausfall?)",
+                              severity="warning", category="signal_stack")
+        msg = f"{n} gescort" + (f", {age_h:.0f}h alt" if age_h is not None else "")
+        return TestResult("signal_stack_fresh", True, msg,
+                          severity="info", category="signal_stack")
+    except Exception as e:
+        return TestResult("signal_stack_fresh", False, f"exception: {e!r}",
+                          severity="warning", category="signal_stack")
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -727,6 +792,8 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_cash_reserve_sane,   # v37h+1: Cash-Reserve-Config + Hybrid-Logik
     tc_symbol_concentration_sane,  # R-A10 Sprint-Tag-9 (19.05.2026)
     tc_audit_coverage_complete,    # R-A12 Sprint-Tag-9 (19.05.2026)
+    tc_edgar_cache_fresh,          # v38: EDGAR-Cache-Freshness (Signal-Stack-Shadow)
+    tc_signal_stack_fresh,         # v38: Shadow-Scan-Freshness (Signal-Stack)
 ]
 
 
