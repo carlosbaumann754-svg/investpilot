@@ -1066,6 +1066,13 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     return {
         "position_id": position.get("position_id"),
         "instrument_id": position.get("instrument_id"),
+        # v37dk (10.06.2026): symbol/name durchreichen — sonst zeigt das Dashboard
+        # nur die rohe conId (#269747) statt des Tickers. Die geparste Position
+        # HAT das Symbol (parse_position v36e-Passthrough); enrich_with_asset_meta
+        # kann die neuen sp600-conIds NICHT aufloesen (nicht in _asset_meta_dict +
+        # kein conId->etoro_id-Mapping). Portfolio/Trades reichen symbol genauso durch.
+        "symbol": position.get("symbol"),
+        "name": position.get("name"),
         "pnl_pct": pnl_pct,
         "invested": position.get("invested"),
         "age_days": round(age_days, 2) if age_days is not None else None,
