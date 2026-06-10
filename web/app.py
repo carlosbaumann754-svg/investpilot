@@ -1167,7 +1167,10 @@ def _fetch_ticker_closes(symbol: str, years: int = 5):
         closes = {}
         for date_idx, row in hist.iterrows():
             d = date_idx.to_pydatetime().replace(tzinfo=None).date()
-            closes[d] = float(row["Close"])
+            c = float(row["Close"])
+            if not math.isfinite(c):  # yfinance liefert gelegentlich NaN-Closes (Daten-Luecken)
+                continue
+            closes[d] = c
         _BENCHMARK_CACHE[symbol] = {"data": closes, "ts": now_ts}
         log.info(f"{symbol}-Cache aktualisiert: {len(closes)} Tage")
         return closes
@@ -1216,9 +1219,12 @@ def _ticker_return_pct(closes: dict, start_dt, end_dt) -> float | None:
 
     start_price = closes[start_key]
     end_price = closes[end_key]
-    if start_price <= 0:
+    # NaN/Inf-Guard: NaN <= 0 ist False, wuerde sonst durchrutschen und als
+    # 'Out of range float values are not JSON compliant' den Endpoint 500en.
+    if not math.isfinite(start_price) or not math.isfinite(end_price) or start_price <= 0:
         return None
-    return ((end_price - start_price) / start_price) * 100
+    pct = ((end_price - start_price) / start_price) * 100
+    return pct if math.isfinite(pct) else None
 
 
 # Backwards-compat Alias — equity_snapshot.py & alte Calls erwarten _spy_return_pct
