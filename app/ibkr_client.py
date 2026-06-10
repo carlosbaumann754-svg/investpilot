@@ -1544,6 +1544,31 @@ class IbkrBroker(BrokerBase):
             log.warning("E6 reconcile_protective_stops failed (non-fatal): %s", e)
         return result
 
+    def get_recent_daily_closes(self, symbol: str, lookback_days: int = 45) -> list:
+        """v37dm (10.06.2026): Taegliche Schluss-Kurse via IBKR reqHistoricalData.
+
+        Read-only (kein Order-Pfad). Dient dem Preis-Provider-Fallback fuer den
+        Scanner: wenn yfinance ein Symbol verfehlt, holt der Provider die Closes
+        hier aus IBKR nach (gleiche Quelle wie die Ausfuehrung = konsistent).
+        Liefert Closes aufsteigend (aeltester zuerst), [] bei jedem Fehler
+        (non-fatal — ein Symbol-Fail darf den Scan nie kippen).
+        """
+        try:
+            from ib_insync import Stock
+            ib = self._get_ib()
+            qc = ib.qualifyContracts(Stock(symbol, "SMART", "USD"))
+            if not qc:
+                log.warning("get_recent_daily_closes: %s nicht qualifizierbar", symbol)
+                return []
+            bars = ib.reqHistoricalData(
+                qc[0], endDateTime="", durationStr=f"{int(lookback_days)} D",
+                barSizeSetting="1 day", whatToShow="TRADES",
+                useRTH=True, formatDate=1)
+            return [float(b.close) for b in (bars or []) if b.close is not None]
+        except Exception as e:
+            log.warning("get_recent_daily_closes(%s) fehlgeschlagen: %s", symbol, e)
+            return []
+
     def sell(self, instrument_id, amount_usd, leverage=1):
         """Market-SELL by Amount USD (Short-Open)."""
         if leverage != 1:

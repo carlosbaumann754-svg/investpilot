@@ -42,26 +42,16 @@ def _extract_now_ref(closes: list, ref_offset: int = _REF_OFFSET) -> tuple:
 
 
 def fetch_recent_prices(symbols: list, lookback_days: int = 45) -> dict:
-    """{symbol: (price_now, price_ref_21d)} via yfinance. {} wenn yfinance fehlt."""
-    try:
-        import yfinance as yf
-    except ImportError:
-        log.warning("yfinance nicht verfuegbar — Shadow-Preise leer")
-        return {}
-    data = yf.download(symbols, period="%dd" % lookback_days, interval="1d",
-                       group_by="ticker", auto_adjust=True, threads=True, progress=False)
-    out = {}
-    multi = len(symbols) > 1
-    for s in symbols:
-        try:
-            df = data[s] if multi else data
-            closes = df["Close"].dropna().values.tolist()
-        except Exception:
-            continue
-        pn, pr = _extract_now_ref(closes)
-        if pn is not None and pr is not None:
-            out[s] = (pn, pr)
-    return out
+    """{symbol: (price_now, price_ref_21d)} via Preis-Provider (v37dm).
+
+    Delegiert an app.price_provider.fetch_recent_prices — yfinance primaer +
+    IBKR-Fallback fuer verfehlte Symbole. Bleibt als stabiler Import-Pfad fuer
+    den Shadow-Scan-Crontab + Tests erhalten (Backward-Compat-Wrapper). Die
+    eigentliche Preis-Anbindung lebt jetzt zentral im Provider (eine Quelle der
+    Wahrheit), nicht mehr verstreut hier.
+    """
+    from app.price_provider import fetch_recent_prices as _provider_fetch
+    return _provider_fetch(symbols, lookback_days=lookback_days)
 
 
 def run_shadow_scan(symbols: list, asof: Optional[str] = None,

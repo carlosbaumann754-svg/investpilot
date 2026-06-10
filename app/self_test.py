@@ -820,6 +820,37 @@ def tc_partial_fill_status() -> TestResult:
                           duration_ms=int((time.time() - t0) * 1000))
 
 
+def tc_price_provider() -> TestResult:
+    """v37dm (10.06.2026): Preis-Provider _extract_now_ref + Importierbarkeit
+    (netzwerkfrei). Sichert die Reversal-Preis-Logik (letzter Close + 21-Handels-
+    tag-Referenz) + dass die yfinance->IBKR-Quellen-Kette sauber importiert.
+    """
+    t0 = time.time()
+    try:
+        from app.price_provider import _extract_now_ref, fetch_recent_prices  # noqa: F401
+        closes = list(range(100, 125))   # 25 Closes: [100..124]
+        now, ref = _extract_now_ref(closes)
+        ok_now = (now == 124 and ref == 103)          # closes[-1], closes[-22]
+        n2, r2 = _extract_now_ref(list(range(10)))    # 10 < 22 -> zu kurz
+        ok_short = (n2 is None and r2 is None)
+        n3, r3 = _extract_now_ref([])
+        ok_empty = (n3 is None and r3 is None)
+        if ok_now and ok_short and ok_empty:
+            return TestResult("price_provider", True,
+                              "extract_now_ref korrekt (now + 21d-Ref + zu-kurz/leer-Guard), "
+                              "Provider importierbar",
+                              severity="info", category="signal_stack",
+                              duration_ms=int((time.time() - t0) * 1000))
+        return TestResult("price_provider", False,
+                          f"ok_now={ok_now} ok_short={ok_short} ok_empty={ok_empty}",
+                          severity="warning", category="signal_stack",
+                          duration_ms=int((time.time() - t0) * 1000))
+    except Exception as e:
+        return TestResult("price_provider", False, f"exception: {e!r}",
+                          severity="warning", category="signal_stack",
+                          duration_ms=int((time.time() - t0) * 1000))
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -840,6 +871,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_edgar_cache_fresh,          # v38: EDGAR-Cache-Freshness (Signal-Stack-Shadow)
     tc_signal_stack_fresh,         # v38: Shadow-Scan-Freshness (Signal-Stack)
     tc_partial_fill_status,        # v37dj (10.06.2026): Teilfill->'partial' Regressionsschutz
+    tc_price_provider,             # v37dm (10.06.2026): Preis-Provider extract_now_ref + Import
 ]
 
 
