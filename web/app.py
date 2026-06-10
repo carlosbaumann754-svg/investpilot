@@ -361,6 +361,23 @@ def _ibkr_conid_to_etoro_id() -> dict:
         return {}
 
 
+def _ibkr_conid_to_symbol() -> dict:
+    """v37dl (10.06.2026): Reverse-Lookup IBKR conId -> Ticker-Symbol DIREKT aus
+    dem Contract-Cache. Schliesst die Luecke fuer die neuen sp600-Symbole, die
+    in _asset_meta_dict (alte Asset-Liste) fehlen, aber beim qualifyContracts
+    mit Symbol gecacht wurden (key=synthetische id, value enthaelt conId+symbol).
+    Bsp: {4727574: 'CALM', 459873599: 'CERT', 269747: 'GIII'}.
+    """
+    try:
+        from app.config_manager import load_json
+        cache = load_json("ibkr_contract_cache.json") or {}
+        return {int(entry["conId"]): entry["symbol"]
+                for entry in cache.values()
+                if isinstance(entry, dict) and entry.get("conId") and entry.get("symbol")}
+    except Exception:
+        return {}
+
+
 def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
     """Reichert eine Liste von Dicts um symbol/name/asset_class/sector an.
 
@@ -372,11 +389,15 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
     Returns:
         Die gleiche Liste (modifiziert in-place).
     """
-    mapping = _asset_meta_dict()
-    if not mapping:
-        return items
+    mapping = _asset_meta_dict() or {}
     # v36e: zusaetzlicher conId -> etoro_id Lookup fuer IBKR-Positionen
     conid_to_etoro = _ibkr_conid_to_etoro_id()
+    # v37dl: conId -> Symbol direkt aus Contract-Cache (sp600-Fallback, da diese
+    # Symbole nicht in _asset_meta_dict stehen). NICHT early-returnen wenn mapping
+    # leer ist — der Cache-Fallback soll trotzdem greifen.
+    conid_to_symbol = _ibkr_conid_to_symbol()
+    if not mapping and not conid_to_symbol:
+        return items
     for t in items or []:
         if not isinstance(t, dict):
             continue
@@ -398,6 +419,13 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
             t.setdefault("name", meta["name"])
             t.setdefault("asset_class", meta["asset_class"])
             t.setdefault("sector", meta["sector"])
+        elif conid_to_symbol and str(iid).isdigit():
+            # v37dl: sp600-Fallback — Ticker direkt aus dem Contract-Cache
+            # (steht nicht in _asset_meta_dict). name=symbol als Default.
+            sym = conid_to_symbol.get(int(iid))
+            if sym:
+                t.setdefault("symbol", sym)
+                t.setdefault("name", sym)
     return items
 
 
