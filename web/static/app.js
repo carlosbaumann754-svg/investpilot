@@ -2038,73 +2038,63 @@ function _wfoNextAutoRun() {
 }
 
 
+// Display-Prinzip (10.06.2026): nur der NEUE Motor. Diese Funktion fuellt die
+// (umgebaute) Karte mit der Stack-Robustheit aus /api/stack-validation —
+// der alte TA-WFO (-0.92 OOS-Sharpe) ist aus dem Display entfernt.
 async function loadWfoStatus() {
     try {
-        const r = await apiFetch('/api/wfo/status');
+        const r = await apiFetch('/api/stack-validation');
         if (!r.ok) return;
         const d = await r.json();
-        const summary = document.getElementById('wfo-state-summary');
-        const idle = document.getElementById('wfo-idle-block');
-        const running = document.getElementById('wfo-running-block');
-        const done = document.getElementById('wfo-done-block');
-        const errBlock = document.getElementById('wfo-error-block');
-        const runBtn = document.getElementById('wfo-run-btn');
-        idle.style.display = running.style.display = done.style.display = errBlock.style.display = 'none';
-        // Run-Button nur deaktivieren waehrend running
-        if (runBtn) runBtn.disabled = (d.state === 'running');
-
-        if (d.state === 'idle' || !d.state) {
-            summary.innerHTML = 'Status: <strong>idle</strong> &middot; bereit fuer ersten Run';
-            idle.style.display = 'block';
-            const cfg = d.config || {};
-            document.getElementById('wfo-next-run').textContent = d.next_run_planned || '--';
-            document.getElementById('wfo-approach').textContent = cfg.approach || '--';
-            document.getElementById('wfo-param-count').textContent = cfg.param_combinations || '--';
-            document.getElementById('wfo-window-count').textContent = cfg.windows_planned || '--';
-        } else if (d.state === 'running') {
-            const phase = d.phase || 'running';
-            summary.innerHTML = 'Status: <strong style="color:#fbbf24;">RUNNING</strong> &middot; Phase: ' + phase;
-            running.style.display = 'block';
-            document.getElementById('wfo-current-window').textContent =
-                (d.current_window != null ? d.current_window : '0');
-            document.getElementById('wfo-total-windows').textContent =
-                (d.windows_total || (d.windows || []).length || '?');
-        } else if (d.state === 'done') {
-            const agg = d.aggregate || {};
-            const meanOos = agg.mean_oos_sharpe;
-            const meanIs = agg.mean_is_sharpe;
-            const decay = (meanIs && meanOos) ? (meanOos / meanIs * 100) : null;
-            summary.innerHTML = 'Status: <strong style="color:#34d399;">DONE</strong> &middot; ' +
-                'Mean OOS-Sharpe <strong>' + (meanOos != null ? meanOos.toFixed(2) : '--') + '</strong>' +
-                (decay != null ? ' (Retention ' + decay.toFixed(0) + '% vs IS)' : '');
-            done.style.display = 'block';
-            const tbody = document.getElementById('wfo-windows-tbody');
-            tbody.innerHTML = '';
-            (d.windows || []).forEach(w => {
-                const isS = w.is_score, oos = w.oos_score;
-                const dec = (isS && oos) ? (oos / isS * 100).toFixed(0) + '%' : '--';
+        const summary = document.getElementById('stackval-summary');
+        if (!summary) return;
+        if (!d.available || !d.overall) {
+            summary.innerHTML = 'Noch keine Stack-Validierung verfuegbar.';
+            return;
+        }
+        const ov = d.overall, h1 = d.first_half || {}, h2 = d.second_half || {};
+        const years = d.years || [], py = d.per_year || {};
+        const posYears = years.filter(y => (py[y] || {}).excess_mo > 0).length;
+        const pf = (ov.pf == null) ? '∞' : ov.pf.toFixed(2);
+        const ic = (ov.ic == null) ? '--' : (ov.ic >= 0 ? '+' : '') + ov.ic.toFixed(3);
+        const sh = (ov.sharpe != null) ? ov.sharpe.toFixed(2) : '--';
+        const decay = (h2.ic != null && h1.ic != null && h2.ic < h1.ic);
+        summary.innerHTML =
+            'Aktiver Motor: <strong style="color:#34d399;">5-Signal-Stack</strong> &middot; ' +
+            'historisch <strong>' + posYears + '/' + years.length + '</strong> Jahre positiv &middot; ' +
+            'PF <strong>' + pf + '</strong> &middot; Excess-Sharpe <strong>' + sh + '</strong> &middot; IC ' + ic +
+            (decay ? ' &middot; <span style="color:#fbbf24;">&#9888; Recent-Decay</span>' : '') +
+            '<br><span style="font-size:11px;opacity:0.75;">Modest + zuletzt verblassend — Live-Validierung accruiert im Soak.</span>';
+        const fmt = (st) => 'PF ' + (st.pf != null ? st.pf.toFixed(2) : '--') +
+            ' / Sharpe ' + (st.sharpe != null ? st.sharpe.toFixed(2) : '--') +
+            ' / IC ' + (st.ic != null ? (st.ic >= 0 ? '+' : '') + st.ic.toFixed(3) : '--');
+        const aggEl = document.getElementById('stackval-aggregate');
+        if (aggEl) aggEl.innerHTML =
+            '<strong>Gesamt</strong> (' + d.n_months + ' Mo): ' + fmt(ov) +
+            '<br><strong>1. Haelfte:</strong> ' + fmt(h1) +
+            '<br><strong>2. Haelfte:</strong> ' + fmt(h2);
+        const tb = document.getElementById('stackval-years-tbody');
+        if (tb) {
+            tb.innerHTML = '';
+            years.forEach(y => {
+                const s = py[y] || {};
+                const exc = s.excess_mo;
+                const cls = (exc >= 0) ? '#34d399' : '#f87171';
                 const tr = document.createElement('tr');
                 tr.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
-                tr.innerHTML = '<td style="padding:6px 4px;">W' + w.idx + ' (' +
-                    (w.test_start || '').slice(0,7) + ')</td>' +
-                    '<td style="text-align:right;padding:6px 4px;">' + (isS != null ? isS.toFixed(2) : '--') + '</td>' +
-                    '<td style="text-align:right;padding:6px 4px;font-weight:600;">' + (oos != null ? oos.toFixed(2) : '--') + '</td>' +
-                    '<td style="text-align:right;padding:6px 4px;">' + dec + '</td>' +
-                    '<td style="text-align:right;padding:6px 4px;opacity:0.7;">' + (w.oos_trades || 0) + '</td>';
-                tbody.appendChild(tr);
+                tr.innerHTML = '<td style="padding:6px 4px;">' + y + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;color:' + cls + ';">' +
+                    (exc != null ? (exc >= 0 ? '+' : '') + (exc * 100).toFixed(2) + '%' : '--') + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;">' + (s.pf != null ? s.pf.toFixed(2) : '--') + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;">' + (s.sharpe != null ? (s.sharpe >= 0 ? '+' : '') + s.sharpe.toFixed(2) : '--') + '</td>' +
+                    '<td style="text-align:right;padding:6px 4px;opacity:0.85;">' + (s.ic != null ? (s.ic >= 0 ? '+' : '') + s.ic.toFixed(3) : '--') + '</td>';
+                tb.appendChild(tr);
             });
-            document.getElementById('wfo-aggregate-summary').innerHTML =
-                'Letzter Run: <strong>' + (d.last_run || '').slice(0, 16) + '</strong>';
-        } else if (d.state === 'error') {
-            summary.innerHTML = 'Status: <strong style="color:#f87171;">ERROR</strong>';
-            errBlock.style.display = 'block';
-            document.getElementById('wfo-error-msg').textContent = d.error || 'Unbekannter Fehler';
         }
-
-        // History laden + anzeigen wenn >= 2 Runs
-        loadWfoHistory();
+        const cav = document.getElementById('stackval-caveat');
+        if (cav) cav.textContent = 'Historisch, monatlich, ohne Kosten; ' + (d.caveat || '');
     } catch (e) {
-        console.warn('WFO status load failed:', e);
+        console.warn('Stack-Validierung load failed:', e);
     }
 }
 

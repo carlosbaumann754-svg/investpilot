@@ -412,108 +412,29 @@
             </details>
         </div>
 
-        <!-- WALK-FORWARD-OPTIMIZATION (E1, vorgezogen) -->
+        <!-- STACK-VALIDIERUNG (Display-Prinzip 10.06.: nur der neue Motor; alter TA-WFO entfernt) -->
         <div class="card" id="wfo-card">
-            <div class="card-title">Walk-Forward-Validation<span class="tip" data-tip="Ehrlichkeits-Test der Bot-Strategie: Statt einmal auf der gesamten Historie zu optimieren (das fuehrt zu 'Auswendig-Lernen' und schlechten Live-Ergebnissen), wird die Vergangenheit in mehrere Zeit-Fenster geschnitten. Der Bot lernt jeweils auf einem Teil und wird dann ehrlich auf dem naechsten unbekannten Teil getestet. Wenn die Ergebnisse ueber alle Fenster aehnlich gut sind, hat die Strategie eine echte Kante. Zerfallen sie, war es nur Zufall.">?</span></div>
-            <div id="wfo-state-summary" class="card-sub" style="margin-bottom:6px;">Lade Status...</div>
-            <details id="wfo-card-details">
-            <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
-                Details (Windows-Tabelle + Empfohlene Parameter + Trend + Trigger) — klicken zum Ausklappen
-            </summary>
-
-            <!-- Status-spezifische Inhalte -->
-            <div id="wfo-idle-block" style="display:none;">
-                <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5;">
-                    <strong style="color:#818cf8;">Status: Noch nicht ausgefuehrt.</strong>
-                    Erster vollstaendiger Lauf geplant <strong id="wfo-next-run">--</strong>.
-                    Phase 1 (Framework + Window-Builder) ist live, Phase 2 (Pro-Window-Backtests + Aggregation) wird Mi-Fr gebaut.
-                </div>
-                <div style="font-size:13px;line-height:1.7;">
-                    <div><strong>Approach:</strong> <span id="wfo-approach">--</span></div>
-                    <div><strong>Param-Grid:</strong> <span id="wfo-param-count">--</span> Kombinationen</div>
-                    <div><strong>Windows:</strong> <span id="wfo-window-count">--</span> rolling (24Mo Train + 6Mo Test, 6Mo Step)</div>
-                </div>
-            </div>
-
-            <div id="wfo-running-block" style="display:none;">
-                <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:10px 12px;font-size:13px;">
-                    <strong style="color:#fbbf24;">RUNNING:</strong> Window <span id="wfo-current-window">--</span> von <span id="wfo-total-windows">--</span>
-                </div>
-            </div>
-
-            <div id="wfo-done-block" style="display:none;">
-                <div id="wfo-aggregate-summary" class="card-sub" style="margin-bottom:8px;"></div>
+            <div class="card-title">Stack-Validierung (Robustheit)<span class="tip" data-tip="Ehrlichkeits-Test des aktiven Auswahl-Motors (5-Signal-EDGAR-Stack): die Historie 2012-2026 wird in rollende Out-of-Sample-Fenster (Kalenderjahre) geschnitten. Haelt die Edge ueber die Jahre konsistent oder nur in einer Periode? Misst Excess (Top-20% vs Universum), Profit-Faktor, Excess-Sharpe und IC (Vorhersagekraft des Scores). Live-Validierung accruiert zusaetzlich im Soak.">?</span></div>
+            <div id="stackval-summary" class="card-sub" style="margin-bottom:6px;">Lade...</div>
+            <details id="stackval-details">
+                <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
+                    Details (Aggregat + Jahres-Tabelle + Caveats) — klicken zum Ausklappen
+                </summary>
+                <div id="stackval-aggregate" class="card-sub" style="margin-bottom:8px;"></div>
                 <table style="width:100%;font-size:13px;border-collapse:collapse;">
                     <thead>
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
-                            <th style="text-align:left;padding:6px 4px;">Window<span class="tip" data-tip="Zeit-Fenster im Backtest. Format: 'WX (Jahr-Monat)' = Test-Periode beginnt zu diesem Datum. Pro Window wurde der Bot 24 Monate vorher trainiert.">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">IS Sharpe<span class="tip" data-tip="In-Sample Sharpe = wie gut der Bot auf den Trainings-Daten lief. Hoeher = besser, aber wenn IS deutlich groesser OOS dann hat der Bot 'auswendig gelernt' (Overfitting).">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">OOS Sharpe<span class="tip" data-tip="Out-of-Sample Sharpe = wie gut der Bot auf NEUEN, NIE-GESEHENEN Daten lief. Das ist die EHRLICHE Performance-Schaetzung. Cutover-Hard-Gate verlangt > 2.0.">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">Decay<span class="tip" data-tip="OOS / IS Verhaeltnis in Prozent. 100%% = Strategie funktioniert genauso gut auf neuen Daten wie im Training. <50%% = starkes Overfitting, Strategie bricht im echten Leben ein.">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">OOS Trades<span class="tip" data-tip="Anzahl Trades im OOS-Fenster (6 Monate Test-Periode). <30 Trades = Stichprobe zu klein, Sharpe-Schaetzung unsicher. >100 = solide Statistik.">?</span></th>
+                            <th style="text-align:left;padding:6px 4px;">Jahr</th>
+                            <th style="text-align:right;padding:6px 4px;">Excess/Mo<span class="tip" data-tip="Mittlere Monats-Mehrrendite der Top-20%-Auswahl vs Gesamt-Universum. Positiv = Auswahl bringt Mehrwert.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">PF<span class="tip" data-tip="Profit-Faktor der Monats-Excess (Summe positiver / Summe negativer). Groesser 1 = profitabel, scale-invariant.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">Sharpe<span class="tip" data-tip="Annualisierter Sharpe der Excess-Renditen im Jahr.">?</span></th>
+                            <th style="text-align:right;padding:6px 4px;">IC<span class="tip" data-tip="Information Coefficient: Rang-Korrelation Stack-Score vs Folge-Rendite. Positiv = Score sagt richtig voraus. 0.02-0.05 normal fuer Fundamental-Faktoren.">?</span></th>
                         </tr>
                     </thead>
-                    <tbody id="wfo-windows-tbody"></tbody>
+                    <tbody id="stackval-years-tbody"></tbody>
                 </table>
-            </div>
-
-            <div id="wfo-error-block" style="display:none;">
-                <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px 12px;font-size:13px;">
-                    <strong style="color:#f87171;">FEHLER:</strong> <span id="wfo-error-msg">--</span>
-                </div>
-            </div>
-
-            <!-- v37cq (03.05.): Empfohlene Parameter mit Live-Vergleich -->
-            <div id="wfo-recommendations-block" style="display:none;margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <div style="font-size:13px;opacity:0.85;margin-bottom:8px;">
-                    <strong>Empfohlene Parameter</strong> (vom letzten WFO-Run)<span class="tip" data-tip="Welche Parameter der WFO-Lauf als optimal ermittelt hat — basierend auf Konsens ueber alle 5 Test-Fenster. 'Live-Wert' zeigt was der Bot aktuell tatsaechlich nutzt. Match-Status (gruen/rot) zeigt ob beides uebereinstimmt. Bei Drift: Auto-Restore via WFO-Lock (v37r) korrigiert beim Bot-Start.">?</span>
-                </div>
-                <table style="width:100%;font-size:12px;border-collapse:collapse;">
-                    <thead style="opacity:0.7;">
-                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
-                            <th style="text-align:left;padding:6px 4px;">Parameter<span class="tip" data-tip="Strategie-Parameter den WFO testet und empfehlen kann.">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">WFO-Empfehlung<span class="tip" data-tip="Bester Wert basierend auf Mehrheits-Konsens ueber alle Test-Fenster.">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">Konsens<span class="tip" data-tip="In wie vielen der Test-Fenster dieser Wert optimal war (z.B. 5/5 = einstimmig, 3/5 = Mehrheit). Hoeher = robuster.">?</span></th>
-                            <th style="text-align:right;padding:6px 4px;">Live-Wert<span class="tip" data-tip="Was der Bot aktuell wirklich nutzt (aus config.json).">?</span></th>
-                            <th style="text-align:center;padding:6px 4px;">Match<span class="tip" data-tip="Stimmt Live-Wert mit WFO-Empfehlung ueberein? Bei NEIN: WFO-Lock korrigiert beim naechsten Bot-Start automatisch.">?</span></th>
-                        </tr>
-                    </thead>
-                    <tbody id="wfo-recommendations-tbody"></tbody>
-                </table>
-                <div style="font-size:11px;opacity:0.7;margin-top:8px;">
-                    Letzter WFO-Run: <span id="wfo-last-run-ts">--</span>
-                </div>
-            </div>
-
-            <!-- HISTORY Time-Series Sparkline (v37ci: collapsible <details>) -->
-            <details id="wfo-history-block" style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <summary style="cursor:pointer;font-size:13px;opacity:0.85;margin-bottom:6px;">
-                    <strong>Trend</strong> &middot; <span id="wfo-hist-count">--</span> Runs &middot;
-                    naechster Auto-Run <span id="wfo-hist-next">--</span>
-                    <span style="font-size:11px;color:var(--muted);font-weight:400;">(klicken zum Ausklappen)</span>
-                </summary>
-                <table style="width:100%;font-size:12px;border-collapse:collapse;">
-                    <thead style="opacity:0.7;">
-                        <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
-                            <th style="text-align:left;padding:4px 4px;">Run<span class="tip" data-tip="Datum + Trigger des WFO-Laufs (manual = manuell, monthly-cron = automatisch jeden ersten Sonntag).">?</span></th>
-                            <th style="text-align:right;padding:4px 4px;">OOS-Sharpe<span class="tip" data-tip="Mean OOS-Sharpe ueber alle Fenster — die ehrliche Performance-Schaetzung. Aktuell 4.80 = sehr stark, deutlich ueber Cutover-Hard-Gate von 2.0.">?</span></th>
-                            <th style="text-align:right;padding:4px 4px;">Decay<span class="tip" data-tip="Mean OOS / IS Verhaeltnis ueber alle Fenster. 90%% = sehr gut. <50%% = Overfitting-Alarm.">?</span></th>
-                            <th style="text-align:right;padding:4px 4px;">Stability<span class="tip" data-tip="Stabilitaet des OOS-Sharpe ueber alle Fenster (= Mean / Std). Hoeher = Strategie funktioniert konsistent. <1.0 = stark schwankend, einzelne Fenster brechen ein. >2.0 = sehr stabil.">?</span></th>
-                            <th style="text-align:right;padding:4px 4px;">Trades<span class="tip" data-tip="Mittlere Anzahl Trades pro OOS-Fenster. Indikator fuer Strategie-Aktivitaet. Sehr niedrig = Bot tradet kaum, sehr hoch = ueber-aktiv.">?</span></th>
-                        </tr>
-                    </thead>
-                    <tbody id="wfo-hist-tbody"></tbody>
-                </table>
+                <div id="stackval-caveat" style="font-size:11px;opacity:0.7;margin-top:10px;"></div>
             </details>
-
-            <!-- Force-Run Button (manuell, fuer Test-Run vor Cutover) -->
-            <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;">
-                <button onclick="wfoRunNow()" id="wfo-run-btn" class="btn-secondary" style="font-size:0.9em;padding:8px 16px;cursor:pointer;"
-                        title="Startet einen vollstaendigen WFO-Lauf JETZT (Bestaetigung erforderlich). Auto-Lauf laeuft sonst 1. Sonntag jedes Monats 12:00 UTC. Runtime 10-15 Min, im Hintergrund auf GitHub Actions.">
-                    ▶ WFO jetzt starten (~10-15 Min)
-                </button>
-                <span id="wfo-run-msg" style="margin-left:10px;font-size:0.85em;opacity:0.8;"></span>
-            </div>
         </div>
 
         <!-- WFO-DRIFT-WATCHDOG (R-A17, Sprint-Tag-9 19.05.2026) -->

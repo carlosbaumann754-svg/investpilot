@@ -4816,6 +4816,24 @@ async def api_wfo_status():
         return {"state": "error", "error": str(e)}
 
 
+@app.get("/api/stack-validation")
+async def api_stack_validation():
+    """Historische Robustheit des AKTIVEN Motors (5-Signal-Stack), aus
+    data/stack_wfo_baseline.json (rollierende OOS-Validierung 2012-2026,
+    Top-20% vs Universum). Ersetzt die alte TA-WFO-Anzeige auf dem Dashboard
+    (Display-Prinzip: nur der neue Motor). Live-Validierung accruiert im Soak."""
+    try:
+        from app.config_manager import load_json
+        d = load_json("stack_wfo_baseline.json")
+        if not isinstance(d, dict) or not d.get("overall"):
+            return {"available": False}
+        d["available"] = True
+        return d
+    except Exception as e:
+        log.warning(f"Stack-Validation read failed: {e}")
+        return {"available": False, "error": str(e)}
+
+
 # ============================================================
 # WFO-DRIFT-WATCHDOG (R-A17, Sprint-Tag-9 19.05.2026)
 # ============================================================
