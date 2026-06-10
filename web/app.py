@@ -1153,6 +1153,7 @@ def _fetch_ticker_closes(symbol: str, years: int = 5):
     Returns:
         dict {date: close_price} oder None bei Fehler.
     """
+    import math
     import time as _time
     now_ts = _time.time()
     cached = _BENCHMARK_CACHE.get(symbol)
@@ -1190,6 +1191,7 @@ def _ticker_return_pct(closes: dict, start_dt, end_dt) -> float | None:
     Findet den naechstgelegenen Handelstag falls das exakte Datum
     kein Boersentag war (Wochenende, Feiertag).
     """
+    import math
     if not closes:
         return None
     sorted_dates = sorted(closes.keys())
