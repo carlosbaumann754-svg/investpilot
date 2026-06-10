@@ -176,7 +176,25 @@ def _trade_status_from_result(result) -> str:
     if not isinstance(result, dict):
         return "executed"
     order = result.get("orderForOpen") or {}
-    return _map_ibkr_status_to_bot_status(order.get("statusID"))
+    bot_status = _map_ibkr_status_to_bot_status(order.get("statusID"))
+    # v37dj (10.06.2026): IBKR sendet NIE den Literal-Status "PartiallyFilled" —
+    # ein teilgefuelltes Order, das (nach Fill-Timeout) storniert wird, endet
+    # API-seitig als "Cancelled" mit filledQuantity>0. Der "partial"-Branch in
+    # _map_ibkr_status_to_bot_status war damit toter Code. Robuste Erkennung
+    # hier ueber die TATSAECHLICHEN Fills: cancelled/rejected MIT Fills => echte
+    # Position => "partial", nicht "cancelled". Sonst: (a) Dashboard zeigt
+    # gehaltene Position als "failed trade", (b) Zyklus-Budget wird nicht
+    # dekrementiert (s.u. ~Z.2490), (c) Soak-Zaehler unterzaehlt echte Trades.
+    # Fund 10.06.: CALM (774/912 gefuellt) + GIII (590/1836) -> "Cancelled".
+    if bot_status in ("cancelled", "rejected"):
+        try:
+            filled = order.get("filledQuantity")
+            avg = order.get("avgFillPrice")
+            if (filled and float(filled) > 0) or (avg and float(avg) > 0):
+                return "partial"
+        except (TypeError, ValueError):
+            pass
+    return bot_status
 
 
 def _ibkr_status_raw_from_result(result) -> str:
@@ -726,7 +744,8 @@ def _find_position_open_time(position_id, api_open_time=None, symbol=None):
                 latest_buy = None
                 continue
             if (entry.get("action") in BUY_ACTIONS
-                    and entry.get("status") in (None, "executed", "filled")):
+                    and entry.get("status") in (None, "executed", "filled",
+                                                "partial")):  # v37dj: Teilfill = echte Position
                 ts = _parse(entry.get("timestamp"))
                 if ts is not None:
                     latest_buy = ts

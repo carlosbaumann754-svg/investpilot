@@ -775,6 +775,51 @@ def tc_signal_stack_fresh() -> TestResult:
                           severity="warning", category="signal_stack")
 
 
+def tc_partial_fill_status() -> TestResult:
+    """v37dj (10.06.2026): Teilgefuellte+stornierte Orders muessen 'partial'
+    sein, nicht 'cancelled'. Regressionsschutz fuer den Fund 10.06.: CALM
+    (774/912) + GIII (590/1836) gefuellt, IBKR-Endstatus 'Cancelled' ->
+    faelschlich 'cancelled' (Dashboard zeigt Position als 'failed', Budget
+    nicht dekrementiert, Soak-Zaehler unterzaehlt, KEIN E6-Stop). IBKR sendet
+    nie Literal 'PartiallyFilled' -> Erkennung muss ueber fill>0 laufen.
+    """
+    t0 = time.time()
+    try:
+        from app.trader import _trade_status_from_result as f
+        cases = [
+            ({"orderForOpen": {"statusID": "Cancelled", "filledQuantity": 774,
+                               "avgFillPrice": 78.64}}, "partial"),   # CALM
+            ({"orderForOpen": {"statusID": "Cancelled", "filledQuantity": 590,
+                               "avgFillPrice": 33.64}}, "partial"),   # GIII
+            ({"orderForOpen": {"statusID": "Cancelled", "filledQuantity": 0,
+                               "avgFillPrice": 0}}, "cancelled"),     # INSP/GDYN (nie gefuellt)
+            ({"orderForOpen": {"statusID": "Filled", "filledQuantity": 9523,
+                               "avgFillPrice": 5.18}}, "executed"),   # CERT (voll)
+            ({"orderForOpen": {"statusID": "Rejected", "filledQuantity": 0,
+                               "avgFillPrice": 0}}, "rejected"),
+            (None, "failed"),
+        ]
+        bad = []
+        for result, exp in cases:
+            got = f(result)
+            if got != exp:
+                bad.append(f"{result} -> {got} (erw. {exp})")
+        if bad:
+            return TestResult("partial_fill_status", False,
+                              "Fehlklassifikation: " + "; ".join(bad),
+                              severity="critical", category="execution",
+                              duration_ms=int((time.time() - t0) * 1000))
+        return TestResult("partial_fill_status", True,
+                          f"{len(cases)}/{len(cases)}: Teilfill->partial, Voll->executed, "
+                          "NoFill-Cancel->cancelled",
+                          severity="info", category="execution",
+                          duration_ms=int((time.time() - t0) * 1000))
+    except Exception as e:
+        return TestResult("partial_fill_status", False, f"exception: {e!r}",
+                          severity="critical", category="execution",
+                          duration_ms=int((time.time() - t0) * 1000))
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -794,6 +839,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_audit_coverage_complete,    # R-A12 Sprint-Tag-9 (19.05.2026)
     tc_edgar_cache_fresh,          # v38: EDGAR-Cache-Freshness (Signal-Stack-Shadow)
     tc_signal_stack_fresh,         # v38: Shadow-Scan-Freshness (Signal-Stack)
+    tc_partial_fill_status,        # v37dj (10.06.2026): Teilfill->'partial' Regressionsschutz
 ]
 
 

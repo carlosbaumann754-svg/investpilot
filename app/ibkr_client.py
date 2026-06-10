@@ -1347,9 +1347,18 @@ class IbkrBroker(BrokerBase):
             # weit unter dem Software-SL -> greift nur wenn der Bot down ist).
             # Non-fatal: ein Fehlschlag darf den Buy NICHT scheitern lassen.
             protective_stop_id = None
+            # v37dj (10.06.2026): E6-Stop bei JEDEM echten Fill platzieren, nicht
+            # nur bei status=="Filled". IBKR sendet NIE den Literal-Status
+            # "PartiallyFilled" — ein teilgefuelltes Order, das (nach Fill-Timeout)
+            # storniert wird, endet als "Cancelled" mit fill_qty>0. Der alte Filter
+            # ("Filled","PartiallyFilled") liess solche Teilfills OHNE broker-
+            # seitigen Not-Stop (Fund 10.06.: CALM 774/912 + GIII 590/1836 gefuellt,
+            # Endstatus "Cancelled" -> KEIN E6-Stop, nur CERT (voll Filled) bekam ihn).
+            # Jetzt: fill_qty>0 + terminaler Status -> Stop auf die TATSAECHLICHE Menge.
             if (action == "BUY" and self._cat_stop_enabled
                     and fill_qty and int(fill_qty) > 0
-                    and status in ("Filled", "PartiallyFilled")):
+                    and status in ("Filled", "PartiallyFilled",
+                                   "Cancelled", "ApiCancelled")):
                 try:
                     cat_price = _catastrophic_stop_price(
                         avg_fill_price or price, self._cat_stop_pct)
@@ -1441,26 +1450,38 @@ class IbkrBroker(BrokerBase):
         return result
 
     def reconcile_protective_stops(self):
-        """R-B11/E6: orphan/oversize Catastrophic-Stops aufraeumen.
+        """R-B11/E6: Catastrophic-Stops mit IBKR-Realitaet abgleichen.
 
-        Source-of-Truth ist IBKR selbst (keine Extra-Datei): fuer jeden offenen,
-        via orderRef='E6_CATASTROPHIC' getaggten StopOrder wird gegen die aktuelle
-        Position entschieden:
+        Source-of-Truth ist IBKR selbst (keine Extra-Datei). Zwei Phasen:
+
+        Phase 1 — bestehende E6-Stops (orderRef='E6_CATASTROPHIC') pruefen:
           - keine Position mehr  -> CANCEL (sonst Oversell -> Short bei Trigger),
           - Stop-Qty > Pos-Qty   -> RESIZE (cancel + neuer Stop auf Pos-Qty),
           - sonst                -> behalten.
-        Idempotent + non-fatal (Fehler darf den Cycle nie killen).
+
+        Phase 2 (v37dj 10.06.2026) — FEHLENDE Stops nachziehen: jede Long-
+        Position ohne E6-Stop bekommt einen. Schliesst die Teilfill-Luecke
+        (Status 'Cancelled' mit fill>0 -> buy() platzierte historisch keinen
+        Stop, Fund CALM/GIII 10.06.) UND macht E6 selbstheilend nach Bot-
+        Restart/Disconnect.
+
+        Idempotent (kein Doppel-Stop dank `covered`-Set) + non-fatal
+        (Fehler darf den Cycle nie killen). Long-only: position>0.
         """
-        result = {"cancelled": 0, "resized": 0, "kept": 0}
+        result = {"cancelled": 0, "resized": 0, "kept": 0, "added": 0}
         if not self._cat_stop_enabled:
             return result
         try:
             ib = self._get_ib()
             pos_qty = {}
+            pos_by_cid = {}
             for p in (ib.positions() or []):
                 cid = getattr(p.contract, "conId", None)
                 if cid is not None:
                     pos_qty[cid] = abs(int(p.position))
+                    pos_by_cid[cid] = p
+            covered = set()  # conIds mit gueltigem E6-Stop nach Phase 1
+            # --- Phase 1: bestehende Stops aufraeumen ---
             for t in list(ib.openTrades() or []):
                 order = getattr(t, "order", None)
                 if order is None or getattr(order, "orderRef", "") != _CATASTROPHIC_ORDER_REF:
@@ -1483,11 +1504,42 @@ class IbkrBroker(BrokerBase):
                         new_o.tif = "GTC"
                         new_o.orderRef = _CATASTROPHIC_ORDER_REF
                         ib.placeOrder(t.contract, new_o)
+                        covered.add(cid)
                     result["resized"] += 1
                     log.info("E6 reconcile: Catastrophic-Stop verkleinert "
                              "(conId=%s, %d -> %d)", cid, stop_qty, have)
                 else:
                     result["kept"] += 1
+                    covered.add(cid)
+            # --- Phase 2 (v37dj): fehlende Stops nachziehen ---
+            from ib_insync import StopOrder  # nur hier noetig
+            for cid, p in pos_by_cid.items():
+                if cid in covered:
+                    continue  # hat schon einen gueltigen E6-Stop
+                qty = pos_qty.get(cid, 0)
+                # Long-only: nur position>0 bekommt einen SELL-Stop
+                if qty <= 0 or int(getattr(p, "position", 0) or 0) <= 0:
+                    continue
+                avg_cost = float(getattr(p, "avgCost", 0) or 0)
+                cat_price = _catastrophic_stop_price(avg_cost, self._cat_stop_pct)
+                if not cat_price:
+                    log.warning("E6 reconcile: kein gueltiger Stop-Preis fuer "
+                                "conId=%s (avgCost=%.4f) — uebersprungen", cid, avg_cost)
+                    continue
+                try:
+                    new_o = StopOrder("SELL", qty, cat_price)
+                    new_o.tif = "GTC"
+                    new_o.outsideRth = True
+                    new_o.orderRef = _CATASTROPHIC_ORDER_REF
+                    ib.placeOrder(p.contract, new_o)
+                    result["added"] += 1
+                    sym = getattr(p.contract, "symbol", "?")
+                    log.info("E6 reconcile: fehlenden Catastrophic-Stop nachgezogen "
+                             "(%s conId=%s, SELL %d @ %.2f, -%.0f%% von avgCost %.2f)",
+                             sym, cid, qty, cat_price, self._cat_stop_pct, avg_cost)
+                except Exception as e:
+                    log.error("E6 reconcile: Nachziehen fehlgeschlagen "
+                              "(conId=%s, non-fatal): %s", cid, e)
         except Exception as e:
             log.warning("E6 reconcile_protective_stops failed (non-fatal): %s", e)
         return result
