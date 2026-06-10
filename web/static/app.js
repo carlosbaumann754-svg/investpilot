@@ -382,6 +382,58 @@ document.addEventListener('click', (e) => {
 });
 
 // === DASHBOARD ===
+async function loadSoakProgress() {
+    // v37dn: Soak-Fortschritt des neuen Motors (visualisiert vorhandene Daten)
+    try {
+        const res = await apiFetch('/api/soak-progress');
+        if (!res || res.error) return;
+        const closed = res.closed_trades || 0;
+        const target = res.go_nogo_target || 50;
+        const phase3 = res.phase3_target || 30;
+        const pct = res.progress_pct || 0;
+        const days = (res.days_running != null) ? res.days_running + 'd' : '?';
+
+        document.getElementById('soak-headline').innerHTML =
+            '<strong>' + closed + ' / ' + target + '</strong> geschlossene Trades — Soak laeuft seit '
+            + res.soak_start + ' (' + days + '). Cutover-Ziel ' + res.cutover_date + '.';
+
+        const badge = document.getElementById('soak-badge');
+        if (closed >= target) badge.textContent = 'Go/No-Go bereit';
+        else if (closed >= phase3) badge.textContent = 'Phase-3 frei';
+        else badge.textContent = closed + '/' + target;
+
+        document.getElementById('soak-bar').style.width = pct + '%';
+        document.getElementById('soak-bar-label').textContent =
+            pct + '% zum Go/No-Go  –  Phase-3-Feintuning ab ' + phase3 + ' Trades';
+
+        const winEl = document.getElementById('soak-winrate');
+        const avgEl = document.getElementById('soak-avgret');
+        const realEl = document.getElementById('soak-realized');
+        const openEl = document.getElementById('soak-open');
+        const m = res.metrics;
+        if (m) {
+            winEl.textContent = m.win_rate_pct + '% (' + m.wins + '/' + (m.wins + m.losses) + ')';
+            const ac = m.avg_return_pct >= 0 ? '#10b981' : '#ef4444';
+            avgEl.innerHTML = '<span style="color:' + ac + '">' + (m.avg_return_pct >= 0 ? '+' : '') + m.avg_return_pct + '%</span>';
+            if (m.total_realized_usd != null) {
+                const rc = m.total_realized_usd >= 0 ? '#10b981' : '#ef4444';
+                realEl.innerHTML = '<span style="color:' + rc + '">' + (m.total_realized_usd >= 0 ? '+' : '') + '$' + Math.round(m.total_realized_usd).toLocaleString() + '</span>';
+            } else realEl.textContent = '--';
+        } else {
+            winEl.textContent = 'wartet auf 1. Close';
+            avgEl.textContent = '--';
+            realEl.textContent = '--';
+        }
+
+        const unreal = res.unrealized_pnl || 0;
+        const uc = unreal >= 0 ? '#10b981' : '#ef4444';
+        openEl.innerHTML = (res.open_positions || 0) + ' Pos  –  <span style="color:' + uc + '">'
+            + (unreal >= 0 ? '+' : '') + '$' + Math.round(unreal).toLocaleString() + '</span>';
+
+        document.getElementById('soak-caveat').textContent = 'Hinweis: ' + (res.caveat || '');
+    } catch (e) { console.error('soak-progress load:', e); }
+}
+
 async function loadDashboard() {
     try {
         const [portfolioRes, brainRes, statusRes, regimeRes, trailRes, sectorRes, pnlPeriodsRes, benchmarkRes] = await Promise.all([
@@ -1852,6 +1904,7 @@ async function loadV15Sizing() {
     loadCutoverReadiness();
     loadSelfTest();  // v37cx
     loadEarningsWatchlist();
+    loadSoakProgress();  // v37dn: Soak-Fortschritt (neuer Motor)
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1865,6 +1918,7 @@ async function loadV15Sizing() {
     setInterval(loadSurvivorship, 300000); // Survivorship alle 5 Min (selten geaendert)
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
     setInterval(loadCutoverReadiness, 300000); // Cutover-Readiness alle 5 Min
+    setInterval(loadSoakProgress, 120000); // v37dn: Soak-Fortschritt alle 2 Min
     setInterval(loadEarningsWatchlist, 900000); // Earnings-Watchlist alle 15 Min (calendar-Daten aendern sich kaum)
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {

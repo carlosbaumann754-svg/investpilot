@@ -124,6 +124,43 @@
         </div>
 
 
+        <!-- v37dn: Soak-Fortschritt (neuer Motor) -->
+        <div class="card" id="soak-progress-card" style="border-left:4px solid #f59e0b;">
+            <div class="card-title">
+                Soak-Fortschritt (neuer Motor)
+                <span class="tip" data-tip="Wie weit ist der Live-Test des neuen 5-Signal-Stack-Motors? Seit dem Motor-Switch (09.06.2026) sammelt der Bot echte, ABGESCHLOSSENE Trades. Ab 30 geschlossenen Trades schalten wir die Phase-3-Feintuning-Schritte frei; ab 50 faellt die Go/No-Go-Entscheidung fuer echtes Geld (Ziel 04.08.2026). WICHTIG: der Test misst 'neuer Kopf + alte Beine' — die Ausstiegs-Regeln (Stop-Loss/Time-Stop) sind noch alt eingestellt, darum wird die echte Staerke hier eher UNTERSCHAETZT.">?</span>
+                <span id="soak-badge" style="float:right;font-size:13px;padding:4px 10px;border-radius:12px;background:rgba(245,158,11,0.15);color:#fcd34d;">--</span>
+            </div>
+            <div id="soak-headline" class="card-sub" style="margin-bottom:8px;font-size:14px;">Lade Status...</div>
+
+            <div style="background:rgba(255,255,255,0.06);border-radius:8px;height:14px;overflow:hidden;margin-bottom:4px;">
+                <div id="soak-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#f59e0b,#10b981);transition:width .4s;"></div>
+            </div>
+            <div id="soak-bar-label" style="font-size:11px;opacity:0.7;margin-bottom:12px;">--</div>
+
+            <div class="grid-2" style="gap:8px;font-size:12px;">
+                <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                    <div style="opacity:0.7;font-size:11px;">WIN-RATE</div>
+                    <div id="soak-winrate" style="font-weight:600;margin-top:2px;">--</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                    <div style="opacity:0.7;font-size:11px;">RETURN / TRADE</div>
+                    <div id="soak-avgret" style="font-weight:600;margin-top:2px;">--</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                    <div style="opacity:0.7;font-size:11px;">REALISIERT (geschlossen)</div>
+                    <div id="soak-realized" style="font-weight:600;margin-top:2px;">--</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;">
+                    <div style="opacity:0.7;font-size:11px;">OFFEN (unrealized)</div>
+                    <div id="soak-open" style="font-weight:600;margin-top:2px;">--</div>
+                </div>
+            </div>
+
+            <div id="soak-caveat" style="margin-top:12px;font-size:11px;opacity:0.72;border-top:1px solid rgba(255,255,255,0.08);padding-top:10px;"></div>
+        </div>
+
+
         <!-- v37cx: Anti-Regression Self-Test Card -->
         <div class="card" id="selftest-card" style="border-left:4px solid #10b981;">
             <div class="card-title">

@@ -1647,6 +1647,89 @@ async def api_pnl_periods(user=Depends(require_auth)):
         return {"error": str(e)}
 
 
+@app.get("/api/soak-progress")
+async def api_soak_progress(user=Depends(require_auth)):
+    """v37dn (10.06.2026): Soak-Fortschritt des neuen Motors — Visibility-Karte.
+
+    Visualisiert VORHANDENE Daten (trade_history + brain-cache), kein neues
+    Tracking. Zaehlt geschlossene Neu-Motor-Round-Trips seit dem Motor-Switch
+    (09.06.2026, Phase 4) Richtung Go/No-Go (>=50) + Phase-3-Trigger (>=30),
+    plus Live-Edge (Win-Rate/O-Return/realisierter $-P/L) sobald Trades
+    schliessen, + offene Positionen mit unrealized P/L.
+
+    Annahme: der Bot war beim Switch flat (0 Positionen) -> ALLE Closes seit
+    Soak-Start sind Neu-Motor-Trades. Caveat 'neuer Kopf + alte Beine' im Output.
+    """
+    from datetime import date as _d
+    try:
+        SOAK_START = "2026-06-09"          # Motor-Switch (Phase 4)
+        GO_NOGO_TARGET = 50
+        PHASE3_TARGET = 30
+        CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")
+        hist = read_json_safe("trade_history.json") or []
+        closes = []
+        for t in hist:
+            if not isinstance(t, dict):
+                continue
+            if not any(k in str(t.get("action", "")).upper() for k in CLOSE_KEYS):
+                continue
+            if str(t.get("timestamp", "")) < SOAK_START:
+                continue
+            if t.get("pnl_pct") is None:
+                continue
+            closes.append(t)
+        pnls_pct = [float(t["pnl_pct"]) for t in closes]
+        pnls_usd = [float(t["pnl_usd"]) for t in closes if t.get("pnl_usd") is not None]
+        n_closed = len(closes)
+        wins = sum(1 for p in pnls_pct if p > 0)
+        # offene Positionen + unrealized aus brain-cache (loop-safe)
+        n_open, unrealized = 0, 0.0
+        try:
+            pf = _portfolio_from_brain_cache() or {}
+            n_open = len(pf.get("positions", []) or [])
+            unrealized = float(pf.get("_base_unrealized_pnl")
+                               or pf.get("unrealizedPnL") or 0)
+        except Exception:
+            pass
+        metrics = None
+        if n_closed > 0:
+            metrics = {
+                "win_rate_pct": round(wins / n_closed * 100, 1),
+                "avg_return_pct": round(sum(pnls_pct) / n_closed, 2),
+                "best_pct": round(max(pnls_pct), 2),
+                "worst_pct": round(min(pnls_pct), 2),
+                "wins": wins,
+                "losses": n_closed - wins,
+                "total_realized_usd": round(sum(pnls_usd), 2) if pnls_usd else None,
+            }
+        days_running = None
+        try:
+            y, m, d = (int(x) for x in SOAK_START.split("-"))
+            days_running = (_d.today() - _d(y, m, d)).days
+        except Exception:
+            pass
+        return {
+            "soak_start": SOAK_START,
+            "cutover_date": "2026-08-04",
+            "days_running": days_running,
+            "closed_trades": n_closed,
+            "go_nogo_target": GO_NOGO_TARGET,
+            "phase3_target": PHASE3_TARGET,
+            "progress_pct": round(min(100.0, n_closed / GO_NOGO_TARGET * 100), 1),
+            "open_positions": n_open,
+            "unrealized_pnl": round(unrealized, 2),
+            "metrics": metrics,
+            "caveat": ("Misst neuer Kopf + alte Beine: die Exit-/Sizing-Werte "
+                       "(Time-Stop/SL/Kelly) sind noch TA-getunt. Gute fundamentale "
+                       "Picks werden evtl. zu frueh ausgestoppt -> die echte Edge "
+                       "wird hier eher UNTERschaetzt. Re-Kalibrierung erst nach "
+                       ">=30 geschlossenen Trades."),
+        }
+    except Exception as e:
+        log.error(f"Soak-Progress Error: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/api/trades")
 async def api_trades(limit: int = 50, offset: int = 0, user=Depends(require_auth)):
     """Trade-Historie (paginiert). Angereichert mit Symbol-Namen."""
