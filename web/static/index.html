@@ -376,14 +376,7 @@
                         <span style="font-size:0.7em;opacity:0.7;">(Punkt: <span id="surv-corr-point">--</span>)</span>
                     </div>
                 </div>
-                <div id="surv-wfo-block" style="display:none;margin-top:10px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.25);border-radius:8px;padding:10px 12px;font-size:13px;">
-                    <div style="opacity:0.85;">WFO-Sharpe nach Bias-Korrektur:</div>
-                    <div style="font-size:1.5em;font-weight:600;color:#34d399;margin:4px 0;">
-                        <span id="surv-wfo-corrected">--</span>
-                        <span style="font-size:0.7em;opacity:0.7;">(Range <span id="surv-wfo-min">--</span> - <span id="surv-wfo-max">--</span>)</span>
-                    </div>
-                    <div style="opacity:0.7;font-size:0.9em;">vs. nicht-korrigierte WFO-Sharpe <span id="surv-wfo-raw">--</span></div>
-                </div>
+                <!-- TA-WFO-Bias-Korrektur-Block entfernt 10.06. (Alt-Motor; der neue Stack nutzt robuste relative Masse Excess/IC, die survivorship-robust sind) -->
                 <div style="margin-top:10px;font-size:12px;opacity:0.7;">
                     Letzter Audit: <span id="surv-generated">--</span> &middot;
                     naechster Auto-Run (Cron So 13:00 UTC): <span id="surv-next-run">--</span>
@@ -403,7 +396,7 @@
                             <th style="text-align:right;padding:4px 4px;">Alive<span class="tip" data-tip="Wie viele dieser Symbole heute noch handelbar sind (yfinance liefert Daten). Wenn eines stirbt -> Universe-Filter Auto-Disable.">?</span></th>
                             <th style="text-align:right;padding:4px 4px;">Dead<span class="tip" data-tip="Symbole die delisted/insolvent sind. Sollte ueblicherweise 0 sein im aktuellen Universum (alle aktiv handelbar). Wenn >0 -> Symbol manuell aus disabled_symbols entfernen.">?</span></th>
                             <th style="text-align:right;padding:4px 4px;">Bias<span class="tip" data-tip="Geschaetzte Sharpe-Reduktion durch Survivorship-Bias (Punktwert). 0.23 = WFO-Sharpe ist um ~0.23 zu optimistisch weil die historisch insolvenent Firmen in den Backtest-Daten fehlen. Niedriger = ehrlicher.">?</span></th>
-                            <th style="text-align:right;padding:4px 4px;">WFO-corr<span class="tip" data-tip="WFO-Sharpe NACH Bias-Korrektur — der ehrliche, realistisch erwartbare Wert wenn man fuer die fehlenden insolventen Firmen korrigiert. Aktuell 4.56 = immer noch deutlich ueber Cutover-Hard-Gate von 2.0.">?</span></th>
+                            <!-- WFO-corr-Spalte entfernt 10.06. (Alt-Motor) -->
                         </tr>
                     </thead>
                     <tbody id="surv-hist-tbody"></tbody>

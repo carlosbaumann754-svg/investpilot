@@ -1925,9 +1925,8 @@ async function loadSurvivorshipHistory() {
                 '<td style="text-align:right;padding:4px 4px;color:#34d399;">' + (r.alive ?? '--') + '</td>' +
                 '<td style="text-align:right;padding:4px 4px;color:' + deadColor + ';font-weight:' + (r.dead && r.dead > 0 ? '600' : 'normal') + ';">' + (r.dead ?? '--') + '</td>' +
                 '<td style="text-align:right;padding:4px 4px;color:' + biasColor + ';">' +
-                    (r.sharpe_reduction_point != null ? r.sharpe_reduction_point.toFixed(3) : '--') + '</td>' +
-                '<td style="text-align:right;padding:4px 4px;font-weight:600;">' +
-                    (r.wfo_corrected_point != null ? r.wfo_corrected_point.toFixed(2) : '--') + '</td>';
+                    (r.sharpe_reduction_point != null ? r.sharpe_reduction_point.toFixed(3) : '--') + '</td>';
+                // WFO-corr-Spalte entfernt 10.06. (Alt-Motor)
             tbody.appendChild(tr);
         });
     } catch (e) {
@@ -1975,17 +1974,7 @@ async function loadSurvivorship() {
         // History-Tabelle nachladen
         loadSurvivorshipHistory();
 
-        if (d.wfo_correction) {
-            document.getElementById('surv-wfo-block').style.display = 'block';
-            document.getElementById('surv-wfo-raw').textContent =
-                d.wfo_correction.wfo_mean_oos_sharpe;
-            document.getElementById('surv-wfo-corrected').textContent =
-                d.wfo_correction.corrected_point_estimate;
-            document.getElementById('surv-wfo-min').textContent =
-                d.wfo_correction.corrected_min;
-            document.getElementById('surv-wfo-max').textContent =
-                d.wfo_correction.corrected_max;
-        }
+        // TA-WFO-Bias-Korrektur-Anzeige entfernt 10.06. (Alt-Motor; Stack nutzt robuste relative Masse)
     } catch (e) {
         console.warn('Survivorship load failed:', e);
     }
