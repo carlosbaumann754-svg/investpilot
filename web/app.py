@@ -1662,7 +1662,11 @@ async def api_soak_progress(user=Depends(require_auth)):
     """
     from datetime import date as _d
     try:
-        SOAK_START = "2026-06-09"          # Motor-Switch (Phase 4)
+        # v37do (11.06.2026): Soak-Uhr-Reset. 09.06.-11.06. war NICHT valide — der
+        # Bot war durch die Asset-Klassen-Caps (max 40% stocks, %-von-investiert) bei
+        # 3 Positionen festgenagelt UND die Exits (Trailing/Tranchen/SL) wurden vom
+        # E6-Anti-Loop-Bug blockiert. Echter Soak (deploy + exits funktionieren) ab heute.
+        SOAK_START = "2026-06-11"          # valider Soak-Start (Caps geoeffnet + E6-Exit-Fix)
         GO_NOGO_TARGET = 50
         PHASE3_TARGET = 30
         CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")

@@ -502,9 +502,21 @@ def _check_close_idempotent(client, instrument_id, is_partial=False) -> tuple[bo
     try:
         if hasattr(client, "_get_ib"):
             ib = client._get_ib()
+            # v37do (11.06.2026): E6-Katastrophen-Stop AUSSCHLIESSEN — er ist eine
+            # dauerhaft ruhende GTC-Schutzorder (Status PreSubmitted), KEIN laufender
+            # Close. Ohne diesen Skip blockiert er den Anti-Loop und damit Trailing-SL
+            # / Partial-Close / Stop-Loss fuer JEDE Position mit E6-Stop. Regression
+            # nach dem E6-Backfill 10.06.: CERT-Trailing-SL + GIII-Tranche feuerten,
+            # wurden aber alle als 'Anti-Loop: bereits PreSubmitted' uebersprungen.
+            try:
+                from app.ibkr_client import _CATASTROPHIC_ORDER_REF as _E6_REF
+            except Exception:
+                _E6_REF = "E6_CATASTROPHIC"
             for t in (ib.openTrades() or []):
                 if not (t.contract and t.order and t.orderStatus):
                     continue
+                if getattr(t.order, "orderRef", "") == _E6_REF:
+                    continue  # Schutz-Stop, kein pending Close -> nicht mitzaehlen
                 con_id = getattr(t.contract, "conId", None)
                 if con_id and str(con_id) == str(instrument_id):
                     status = t.orderStatus.status or ""
