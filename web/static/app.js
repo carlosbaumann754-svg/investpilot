@@ -745,13 +745,23 @@ function renderTrades() {
 
     filtered.forEach(t => {
         const tr = document.createElement('tr');
-        const actionClass = t.action === 'BUY' || t.action === 'SCANNER_BUY' ? 'badge-green' :
+        // v37dp (12.06.2026): Badge STATUS-bewusst — vorher rein action-basiert, daher
+        // erschien ein stornierter SCANNER_BUY (0 Fill, keine Position) trotzdem GRUEN
+        // wie ein erfolgreicher Kauf (verwirrend: 'cancelled' im Failed-Tab + gruen hier).
+        const _st = String(t.status || '').toLowerCase();
+        const _failed = ['cancelled', 'rejected', 'stale', 'close_failed'].includes(_st)
+                        || (t.action || '').includes('FAILED');
+        const actionClass = _failed ? 'badge-red' :
+                            t.action === 'BUY' || t.action === 'SCANNER_BUY' ? 'badge-green' :
                             t.action.includes('STOP_LOSS') ? 'badge-red' :
                             t.action.includes('TAKE_PROFIT') ? 'badge-purple' :
                             t.action.includes('FAILED') ? 'badge-red' :
                             t.action === 'MANUAL_SELL' ? 'badge-orange' :
                             t.action === 'EARNINGS_BLACKOUT_CLOSE' ? 'badge-orange' :
                             'badge-blue';
+        // Status sichtbar anhaengen: storniert/rejected = rot + Label, Teilfill = gruen + Hinweis
+        const _statusLabel = _failed ? ` · ${_st || 'failed'}`
+                           : (_st === 'partial' ? ' · teilfill' : '');
         const ticker = t.symbol || ('#' + (t.instrument_id || '?'));
         const fullName = t.name && t.name !== t.symbol ? t.name : '';
         const assetCell = fullName
@@ -760,7 +770,7 @@ function renderTrades() {
             : `<div style="font-weight:600;">${ticker}</div>`;
         tr.innerHTML = `
             <td>${fmtTime(t.timestamp)}</td>
-            <td><span class="badge ${actionClass}">${t.action}</span></td>
+            <td><span class="badge ${actionClass}">${t.action}${_statusLabel}</span></td>
             <td>${assetCell}</td>
             <td>${t.amount_usd ? fmtUsd(t.amount_usd) : (t.pnl_usd ? fmtUsd(t.pnl_usd) : '--')}</td>
             <td>${t.leverage || 1}x</td>
