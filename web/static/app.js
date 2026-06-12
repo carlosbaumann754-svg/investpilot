@@ -385,7 +385,12 @@ document.addEventListener('click', (e) => {
 async function loadSoakProgress() {
     // v37dn: Soak-Fortschritt des neuen Motors (visualisiert vorhandene Daten)
     try {
-        const res = await apiFetch('/api/soak-progress');
+        // v37dq (12.06.2026): apiFetch liefert das Response-OBJEKT, nicht JSON ->
+        // .json() noetig (Bug seit v37dn: alle Felder waren undefined -> 0/50 +
+        // 'undefined' + 0 Pos trotz vorhandener Daten). Erst parsen, dann nutzen.
+        const resp = await apiFetch('/api/soak-progress');
+        if (!resp) return;
+        const res = await resp.json();
         if (!res || res.error) return;
         const closed = res.closed_trades || 0;
         const target = res.go_nogo_target || 50;
