@@ -634,8 +634,16 @@ def _check_health_function(module_name: str, fn_name: str) -> HealthCheckResult:
                 message=f"declared health_check '{fn_name}' not callable on app.{module_name}",
             )
         result = fn()
-        healthy = bool(result.get("healthy", False)) if isinstance(result, dict) else False
-        detail = result.get("detail", "") if isinstance(result, dict) else str(result)
+        # v37dr (13.06.2026): Health-Check-Contract robust — akzeptiere 'healthy'
+        # ODER 'ok' (edgar_cache_status/shadow_status liefern {'ok': ...}, genau wie
+        # die Self-Tests es lesen). Detail-Fallback auf detail/message/Zusammenfassung.
+        if isinstance(result, dict):
+            healthy = bool(result.get("healthy", result.get("ok", False)))
+            detail = (result.get("detail") or result.get("message")
+                      or ("ok" if healthy else "not ok"))
+        else:
+            healthy = bool(result)
+            detail = str(result)
         return HealthCheckResult(
             name=f"module_{module_name}_health_check",
             category="module_coverage", passed=healthy,
@@ -753,13 +761,19 @@ def check_module_coverage() -> list[HealthCheckResult]:
 
         # Scheduler-Hook-Linkage (Variable-Name muss in scheduler.py erscheinen)
         for hook in meta.get("scheduler_hooks", []) or []:
-            present = hook in scheduler_src
+            # v37dr (13.06.2026): extern via Host-Crontab geplante Hooks stehen NICHT
+            # in scheduler.py -> als 'crontab'/'cron' getaggte Hooks von der scheduler.py-
+            # Pruefung ausnehmen (sind extern verifiziert geplant, z.B. run_shadow_scan
+            # 30 21 * * 1-5, refresh_edgar_facts 0 5 * * 0). Verhindert Cry-Wolf.
+            is_cron = "cron" in hook.lower()
+            present = is_cron or (hook in scheduler_src)
             out.append(HealthCheckResult(
                 name=f"module_{mod_name}_scheduler_{hook}",
                 category="module_coverage", passed=present,
                 severity="warning" if not present else "info",
                 message=(f"{mod_name}: scheduler hook {hook} "
-                         f"{'defined' if present else 'NOT FOUND in scheduler.py'}"),
+                         + ("(Host-Crontab, extern) OK" if is_cron
+                            else ("defined" if present else "NOT FOUND in scheduler.py"))),
             ))
 
         # Custom health_check

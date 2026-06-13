@@ -28,10 +28,10 @@ from typing import Optional
 
 AUDIT_METADATA = {
     "purpose": "EDGAR-Client (E5b): SEC XBRL company-facts Fundamental-Fetch+Cache + Point-in-Time-Accessoren fuer den Fundamental-Signal-Stack (ersetzt edgelosen TA-Score)",
-    "config_section": "edgar",
+    "config_section": None,  # v37dr: keine 'edgar'-Config-Section (config-los)
     "state_files": ["edgar_facts.json", "edgar_cik_map.json"],
     "self_tests": ["tc_edgar_cache_fresh"],
-    "scheduler_hooks": ["refresh_edgar_facts (woechentlich)"],
+    "scheduler_hooks": ["refresh_edgar_facts (Host-Crontab woechentlich, 0 5 * * 0)"],
     "health_check": "edgar_cache_status",
     "added_in": "v38 (Fundamental-Signal-Stack — ersetzt edgelosen TA-Score)",
 }

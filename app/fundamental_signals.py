@@ -26,7 +26,7 @@ from app import edgar_client as ec
 
 AUDIT_METADATA = {
     "purpose": "Fundamental-Signal-Stack: 5 validierte Signale (Value/Quality/Reversal/Lev/EarnGrowth) point-in-time aus EDGAR + Preis (ersetzt edgelosen TA-Score)",
-    "config_section": "signal_stack",
+    "config_section": None,  # v37dr: equal-weighted, config-los (kein 'signal_stack'-Section)
     "state_files": [],
     "self_tests": [],
     "scheduler_hooks": [],

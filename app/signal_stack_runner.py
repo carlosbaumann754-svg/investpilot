@@ -22,10 +22,10 @@ log = logging.getLogger(__name__)
 
 AUDIT_METADATA = {
     "purpose": "Shadow-Mode-Runner: berechnet+loggt Signal-Stack-Scores parallel zur alten Selektion (trading-neutral, validiert vor dem Umschalten in Phase 4)",
-    "config_section": "signal_stack",
+    "config_section": None,  # v37dr: config-los (Schalter = top-level use_signal_stack)
     "state_files": ["signal_stack_shadow.json"],
     "self_tests": [],
-    "scheduler_hooks": ["run_shadow_scan (taeglich)"],
+    "scheduler_hooks": ["run_shadow_scan (Host-Crontab taeglich, 30 21 * * 1-5)"],
     "health_check": "shadow_status",
     "added_in": "v38 (Fundamental-Signal-Stack — Phase 2 Shadow)",
 }

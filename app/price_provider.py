@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 AUDIT_METADATA = {
     "purpose": "Einheitlicher Preis-Provider mit Quellen-Kette (yfinance primaer + IBKR-Fallback) — entkoppelt den Scanner von einer einzelnen Preisquelle, damit ein yfinance-Ausfall den Live-Handel nicht blockiert",
-    "config_section": "signal_stack",
+    "config_section": None,  # v37dr: config-los (kein 'signal_stack'-Section)
     "state_files": [],
     "self_tests": ["tc_price_provider"],
     "scheduler_hooks": [],

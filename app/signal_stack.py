@@ -22,8 +22,8 @@ from app.fundamental_signals import SIGNAL_NAMES
 
 AUDIT_METADATA = {
     "purpose": "Signal-Stack: kombiniert die 5 Fundamental-Signale cross-sektional zu einem Perzentil-Composite-Auswahl-Score (ersetzt market_scanner.score_asset)",
-    "config_section": "signal_stack",
-    "state_files": ["signal_stack_scores.json"],
+    "config_section": None,  # v37dr: equal-weighted, config-los
+    "state_files": [],  # v37dr: reine Scoring-Logik, schreibt nichts (Runner schreibt signal_stack_shadow.json)
     "self_tests": [],
     "scheduler_hooks": [],
     "health_check": None,

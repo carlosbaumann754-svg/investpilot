@@ -17,7 +17,7 @@ from __future__ import annotations
 
 AUDIT_METADATA = {
     "purpose": "S&P-600-Small-Cap-Universum (validierte ~330-Teilmenge) fuer den Fundamental-Signal-Stack — ersetzt das 51-ETF/Mega-Cap-Universum in der Auswahl",
-    "config_section": "signal_stack",
+    "config_section": None,  # v37dr: statische Symbol-Liste, config-los
     "state_files": [],
     "self_tests": [],
     "scheduler_hooks": [],
