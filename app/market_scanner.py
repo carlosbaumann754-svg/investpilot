@@ -870,8 +870,13 @@ def _scan_via_signal_stack(max_per_class=None):
             if age_h > 96:
                 log.error("Signal-Stack: Shadow-Scores %.0fh alt (>96h) -> FAIL-SAFE (kein Buy)", age_h)
                 return []
-        except Exception:
-            pass
+        except Exception as _ts_e:
+            # v37dt Audit#6: unparsebares/fehlendes generated_at -> Alter UNBEKANNT.
+            # Vorher `pass` (fail-OPEN) -> Bot handelte auf Scores unbekannten Alters
+            # trotz dokumentiertem FAIL-SAFE-Vertrag. Jetzt fail-safe: kein Buy.
+            log.error("Signal-Stack: generated_at unlesbar (%r): %s -> FAIL-SAFE (kein Buy)",
+                      gen, _ts_e)
+            return []
         scores = shadow["scores"]
         entries = sp600_universe.universe_entries()
         ranked = sorted(scores.items(), key=lambda kv: -(kv[1].get("score") or 0))
@@ -882,6 +887,10 @@ def _scan_via_signal_stack(max_per_class=None):
             stack_score = d.get("score")
             info = entries.get(sym)
             if stack_score is None or not info:
+                continue
+            # v37dt Audit#4: zu wenig Roh-Signal-Coverage -> nicht kaufbar (sonst
+            # BUY auf 1 Signal + 4x neutral-0.5). Altdaten ohne Feld: wie bisher.
+            if not d.get("eligible", True):
                 continue
             bot_score = round((float(stack_score) - 50.0) * 2.0, 1)  # 0-100 -> -100..+100
             if bot_score >= 25:

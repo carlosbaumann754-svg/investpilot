@@ -1310,6 +1310,14 @@ def check_stop_loss_take_profit(client, config):
                         # Berechne neue kumulierte Summe (noch nicht persistiert!)
                         prev_total = partial_state.get(pid_key, {}).get("total_closed_pct", 0)
                         new_total = prev_total + close_pct
+                        # v37dt Audit#2: close_pct ist %-vom-ORIGINAL, partial_close rechnet
+                        # aber %-vom-REST -> auf Rest-Prozent umrechnen, damit real close_pct%
+                        # der ORIGINAL-Position geschlossen wird (sonst schrumpfen die
+                        # Zwischen-Tranchen geometrisch -> zu wenig Profit-Locking + falsche
+                        # Betraege in trade_history). Finale Tranche geht eh ueber new_total>=100
+                        # in close_position (kompletter Rest).
+                        _remaining_frac = max(1e-6, (100.0 - prev_total) / 100.0)
+                        effective_pct = min(100.0, close_pct / _remaining_frac)
 
                         # v37h Tab-Audit-Day-2 (12.05.2026): bei IBKR jetzt
                         # ECHTER partial_close statt nur Log-Signal! eToro-
@@ -1335,7 +1343,7 @@ def check_stop_loss_take_profit(client, config):
                             # verhindert doppelte Tranchen-Close-Orders.
                             try:
                                 result = _partial_close_safe(
-                                    client, p["position_id"], close_pct,
+                                    client, p["position_id"], effective_pct,
                                     p["instrument_id"], "PARTIAL_CLOSE",
                                 )
                             except Exception as e:
@@ -2445,7 +2453,10 @@ def execute_scanner_trades(client, config, scan_results):
                     ac_params = get_asset_class_params(config)
                     if asset_class in ac_params:
                         ac = ac_params[asset_class]
-                        stop_loss_pct = ac.get("sl_pct", stop_loss_pct)
+                        # v37dt Audit#9: stop_loss_pct hier NICHT mutieren — sonst leakt der
+                        # asset-klassen-SL in Sizing/Validate des NAECHSTEN Kandidaten
+                        # (tp_check ist bewusst per-Iteration lokal, stop_loss_pct war es nicht
+                        # -> order-abhaengige, inkonsistente Positionsgroessen ab Kandidat 2).
                         tp_check = ac.get("tp_pct", tp_check)
                     # Erwarteter Return = WinRate * TP - (1-WinRate) * |SL|
                     # Vereinfacht: TP muss > min_return sein

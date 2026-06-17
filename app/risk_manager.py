@@ -698,13 +698,18 @@ def calculate_kelly_position_size(portfolio_value, stop_loss_pct, signal_score,
             portfolio_value, stop_loss_pct, signal_score, config)
 
     fraction = 0.5 * f_star if half_kelly else f_star
-    fraction = min(fraction, max_fraction)  # Hard cap
 
     # Signal-Score Modulation: leichte Skalierung basierend auf Confidence
     ref_score = config.get("risk_management", {}).get("dynamic_sizing_reference_score", 30)
     if ref_score > 0:
         score_scale = max(0.5, min(1.25, signal_score / ref_score))
         fraction *= score_scale
+
+    # v37dt Audit#13: Hard-Cap NACH der Score-Modulation anwenden — vorher stand
+    # der min(.., max_fraction) VOR der *score_scale (bis 1.25x), wodurch die
+    # effektive Kelly-Fraktion den max_fraction-Cap um bis zu 25% ueberschreiten
+    # konnte (Cap war kein echter Hard-Cap).
+    fraction = min(fraction, max_fraction)
 
     position_size = portfolio_value * fraction
     # v15: Prozent-basierter Cap (skaliert automatisch mit Portfolio-Wert)
@@ -726,11 +731,15 @@ def calculate_leveraged_position_size(portfolio_value, stop_loss_pct, leverage, 
     if config is None:
         config = load_config()
 
+    # effective_sl multipliziert den Stop-Loss bereits mit dem Hebel -> der
+    # daraus berechnete base_size ist schon hebel-risiko-adjustiert (kleiner bei
+    # mehr Hebel). v37dt Audit#14: die zusaetzliche Division durch leverage war
+    # ein Doppelzaehler (Hebel zweimal abgezogen -> Position um Faktor `leverage`
+    # zu klein). LATENT: aktuell kein Hebel aktiv (leverage=1, ÷1 wirkungslos),
+    # aber falsch sobald Hebel je zugeschaltet wird.
     effective_sl = stop_loss_pct * leverage
     base_size = calculate_position_size(portfolio_value, effective_sl, config)
-
-    # Bei Hebel kleiner handeln (Risiko steigt mit Hebel)
-    return round(base_size / leverage, 2)
+    return round(base_size, 2)
 
 
 # ============================================================
@@ -1513,7 +1522,11 @@ def check_recovery_mode(config=None):
 
     recovery_threshold = risk_cfg.get("recovery_mode_threshold_pct", -3)
     weekly_limit = risk_cfg.get("weekly_drawdown_stop_pct", -10)
-    weekly_pnl = state.get("weekly_pnl_pct", 0)
+    # v37dt Audit#8: .get(.., 0) liefert None wenn der Key MIT Wert None existiert
+    # -> Vergleich `recovery_threshold < None` crasht (TypeError) und der f-String
+    # `{weekly_pnl:.1f}` ebenso. `or 0` faengt None UND fehlenden Key ab; echte
+    # negative Werte (truthy) bleiben erhalten.
+    weekly_pnl = state.get("weekly_pnl_pct") or 0
 
     if recovery_threshold < weekly_pnl or weekly_pnl <= weekly_limit:
         return False, {}

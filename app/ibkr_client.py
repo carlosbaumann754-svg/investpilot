@@ -1502,6 +1502,7 @@ class IbkrBroker(BrokerBase):
                         from ib_insync import StopOrder  # nur hier noetig
                         new_o = StopOrder("SELL", have, aux)
                         new_o.tif = "GTC"
+                        new_o.outsideRth = True  # v37dt Audit#7: sonst nach Tranchen-Close kein Off-Hours-Schutz
                         new_o.orderRef = _CATASTROPHIC_ORDER_REF
                         ib.placeOrder(t.contract, new_o)
                         covered.add(cid)
@@ -1564,7 +1565,9 @@ class IbkrBroker(BrokerBase):
                 qc[0], endDateTime="", durationStr=f"{int(lookback_days)} D",
                 barSizeSetting="1 day", whatToShow="TRADES",
                 useRTH=True, formatDate=1)
-            return [float(b.close) for b in (bars or []) if b.close is not None]
+            import math  # v37dt Audit#11: NaN/Inf filtern (sonst korrumpiert ein NaN-Close das cross-sektionale Ranking)
+            return [float(b.close) for b in (bars or [])
+                    if b.close is not None and math.isfinite(b.close)]
         except Exception as e:
             log.warning("get_recent_daily_closes(%s) fehlgeschlagen: %s", symbol, e)
             return []
@@ -1836,24 +1839,23 @@ class IbkrBroker(BrokerBase):
                     getattr(p.contract, "conId", None) == iid for p in ib.positions()
                 ):
                     target_con_id = iid
-                elif iid is not None and iid >= 10000000:
-                    # >=8 Stellen sieht nach IBKR-conId aus, aber nicht offen
-                    # -> bereits geschlossen
-                    log.warning(
-                        "close_position: conId=%s nicht (mehr) in ib.positions() "
-                        "-> Position bereits geschlossen. Skip ohne Error.",
-                        iid,
-                    )
-                    return {"_already_closed": True, "_conId": iid}
                 else:
-                    # Fallback: als eToro-ID via ASSET_UNIVERSE aufloesen
+                    # v37dt Audit#12: KEINE Magnitude-Heuristik (conIds sind NICHT
+                    # garantiert >=8-stellig — 6-7-stellige existieren). iid nicht in
+                    # Positionen -> erst als eToro-ID aufloesen; schlaegt das fehl UND
+                    # iid war ein int, war es eine conId einer bereits geschlossenen
+                    # Position -> _already_closed-Sentinel (statt faelschlich None/FAILED).
                     try:
                         from app.ibkr_contract_resolver import resolve_contract
                         target_con_id = resolve_contract(ib, instrument_id).conId
                     except Exception as e:
+                        if iid is not None:
+                            log.warning(
+                                "close_position: id=%s weder offene Position noch "
+                                "aufloesbar -> Position bereits geschlossen. Skip.", iid)
+                            return {"_already_closed": True, "_conId": iid}
                         log.error("close_position resolve_contract failed fuer "
-                                  "instrument_id=%s (weder offene conId noch eToro-ID): %s",
-                                  instrument_id, e)
+                                  "instrument_id=%s: %s", instrument_id, e)
                         return None
             else:
                 try:
@@ -1937,18 +1939,17 @@ class IbkrBroker(BrokerBase):
                     getattr(p.contract, "conId", None) == iid for p in ib.positions()
                 ):
                     target_con_id = iid
-                elif iid is not None and iid >= 10000000:
-                    log.warning(
-                        "partial_close: conId=%s nicht (mehr) in ib.positions() "
-                        "-> Position bereits geschlossen. Skip ohne Error.",
-                        iid,
-                    )
-                    return {"_already_closed": True, "_conId": iid}
                 else:
+                    # v37dt Audit#12: keine Magnitude-Heuristik (analog close_position).
                     try:
                         from app.ibkr_contract_resolver import resolve_contract
                         target_con_id = resolve_contract(ib, instrument_id).conId
                     except Exception as e:
+                        if iid is not None:
+                            log.warning(
+                                "partial_close: id=%s weder offene Position noch "
+                                "aufloesbar -> Position bereits geschlossen. Skip.", iid)
+                            return {"_already_closed": True, "_conId": iid}
                         log.error("partial_close resolve_contract failed: %s", e)
                         return None
             else:

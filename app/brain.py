@@ -229,7 +229,10 @@ def _collect_realized_pnls_from_history() -> dict:
     try:
         history = load_json("trade_history.json") or []
     except Exception:
-        return {}
+        # v37dt Audit#15: Caller entpackt ein 2-Tupel (realized, iid_map) —
+        # ein einzelnes {} hier crasht mit ValueError (not enough values to
+        # unpack) und tötet die gesamte Performance-Analyse.
+        return {}, {}
 
     # ASSET_UNIVERSE Reverse-Lookup: etoro_id → symbol
     try:
@@ -820,6 +823,13 @@ def _generate_performance_report_locked():
                 if not isinstance(t, dict):
                     continue
                 action = str(t.get("action", "")).upper()
+                status = str(t.get("status", "")).lower()
+                # v37dt Audit#16: "*_CLOSE_FAILED" enthaelt "CLOSE" und rutschte
+                # in die Win-Rate (17 Live-Eintraege verfaelschten den Wert). Nur
+                # tatsaechlich geschlossene Round-Trips zaehlen.
+                if "FAILED" in action or status in (
+                        "close_failed", "skipped", "submitted", "failed"):
+                    continue
                 if not any(s in action for s in ("CLOSE", "STOP_LOSS",
                                                    "TAKE_PROFIT", "TIME_STOP",
                                                    "TRAILING")):

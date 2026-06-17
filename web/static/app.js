@@ -431,9 +431,15 @@ async function loadSoakProgress() {
         }
 
         const unreal = res.unrealized_pnl || 0;
+        // v37dt Audit#21: unrealized ist in Account-Basis-Waehrung (z.B. CHF),
+        // nicht hart USD -> Waehrung aus dem Backend statt fixem '$'.
+        const uccy = res.unrealized_currency || 'USD';
         const uc = unreal >= 0 ? '#10b981' : '#ef4444';
+        const usign = unreal >= 0 ? '+' : '';
+        const uval = Math.round(unreal).toLocaleString();
+        const utxt = uccy === 'USD' ? (usign + '$' + uval) : (usign + uval + ' ' + uccy);
         openEl.innerHTML = (res.open_positions || 0) + ' Pos  –  <span style="color:' + uc + '">'
-            + (unreal >= 0 ? '+' : '') + '$' + Math.round(unreal).toLocaleString() + '</span>';
+            + utxt + '</span>';
 
         document.getElementById('soak-caveat').textContent = 'Hinweis: ' + (res.caveat || '');
     } catch (e) { console.error('soak-progress load:', e); }

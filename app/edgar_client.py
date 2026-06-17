@@ -197,20 +197,25 @@ def annual_latest(points: list, asof: str) -> Optional[float]:
         d0, d1 = _parse(s), _parse(e)
         if not d0 or not d1:
             continue
-        if 350 <= (d1 - d0).days <= 380 and (best is None or e > best[0]):
-            best = (e, v)
-    return best[1] if best else None
+        # v37dt Audit#5: bei gleichem End-Datum (Restatement) den ZULETZT
+        # eingereichten Wert nehmen (filed-Tiebreak), nicht den erstgesehenen.
+        if 350 <= (d1 - d0).days <= 380 and (best is None or (e, f) > (best[0], best[1])):
+            best = (e, f, v)
+    return best[2] if best else None
 
 
 def latest_stock(points: list, asof: str) -> Optional[float]:
     """Letzter BESTANDS-Wert (Bilanz, instantan) mit filed <= asof."""
     series = [
-        (p["e"], p["v"])
+        (p["e"], p["f"], p["v"])
         for p in points
         if p.get("e") and p.get("f") and p.get("v") is not None and p["f"] <= asof
     ]
-    series.sort()
-    return series[-1][1] if series else None
+    # v37dt Audit#5: Tiebreak nach (end, filed) statt (end, value) — vorher
+    # waehlte series.sort() bei gleichem End-Datum den GROESSEREN Wert statt den
+    # zuletzt eingereichten (Restatements wurden falschrum aufgeloest).
+    series.sort(key=lambda t: (t[0], t[1]))
+    return series[-1][2] if series else None
 
 
 def annual_two(points: list, asof: str) -> tuple:
@@ -226,16 +231,18 @@ def annual_two(points: list, asof: str) -> tuple:
             continue
         d0, d1 = _parse(s), _parse(e)
         if d0 and d1 and 350 <= (d1 - d0).days <= 380:
-            annuals.append((e, v))
-    annuals.sort()
+            annuals.append((e, f, v))
+    # v37dt Audit#5: filed-Tiebreak (s.o.) — bei gleichem End-Datum zuletzt
+    # eingereichten Wert nehmen, nicht den groesseren.
+    annuals.sort(key=lambda t: (t[0], t[1]))
     if not annuals:
         return None, None
     if len(annuals) < 2:
-        return annuals[-1][1], None
-    e_now, v_now = annuals[-1]
+        return annuals[-1][2], None
+    e_now, _f_now, v_now = annuals[-1]
     target = _parse(e_now) - timedelta(days=365)
     best = None
-    for e, v in annuals[:-1]:
+    for e, _f, v in annuals[:-1]:
         diff = abs((_parse(e) - target).days)
         if best is None or diff < best[0]:
             best = (diff, v)

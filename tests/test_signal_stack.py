@@ -93,3 +93,23 @@ def test_ranked_symbols_order_and_top():
     scores = {"X": {"score": 10}, "Y": {"score": 90}, "Z": {"score": 50}}
     assert ss.ranked_symbols(scores) == ["Y", "Z", "X"]
     assert ss.ranked_symbols(scores, top_fraction=0.34) == ["Y"]
+
+
+# --- v37dt Audit#4: Min-Coverage-Gate (fail-open auf duennen Daten) ----------
+def test_coverage_gate_marks_thin_symbol_ineligible():
+    raw = {
+        # FULL: alle 5 Signale -> coverage 5 -> eligible
+        "FULL": {"value": 9, "quality": 9, "reversal": 9, "lev": 9, "earngrowth": 9},
+        # THIN: nur 1 (Top-)Signal vorhanden, 4x None -> coverage 1 -> NICHT kaufbar,
+        # obwohl der Composite durch die 0.5-Neutralisierung trotzdem hoch waere.
+        "THIN": {"value": 9, "quality": None, "reversal": None, "lev": None, "earngrowth": None},
+        # MID: 3 vorhanden -> coverage 3 == MIN -> gerade noch eligible
+        "MID":  {"value": 5, "quality": 5, "reversal": 5, "lev": None, "earngrowth": None},
+    }
+    out = ss.compute_composite_scores(raw)
+    assert out["FULL"]["coverage"] == 5 and out["FULL"]["eligible"] is True
+    assert out["THIN"]["coverage"] == 1 and out["THIN"]["eligible"] is False
+    assert out["MID"]["coverage"] == 3 and out["MID"]["eligible"] is True
+    # THIN hat zwar einen Score, taucht aber NICHT in der Kaufliste auf:
+    assert "THIN" not in ss.ranked_symbols(out)
+    assert "FULL" in ss.ranked_symbols(out)

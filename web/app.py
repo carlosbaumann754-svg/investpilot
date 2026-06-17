@@ -415,17 +415,26 @@ def enrich_with_asset_meta(items, id_key="instrument_id", only_missing=True):
             if etoro_id is not None:
                 meta = mapping.get(etoro_id)
         if meta:
-            t.setdefault("symbol", meta["symbol"])
-            t.setdefault("name", meta["name"])
-            t.setdefault("asset_class", meta["asset_class"])
-            t.setdefault("sector", meta["sector"])
+            # v37dt Audit#20: setdefault() no-opt, wenn der Key bereits mit Wert
+            # None existiert -> Symbol/Name blieben None statt angereichert zu
+            # werden. `if not t.get(..)` ueberschreibt None/"" korrekt.
+            if not t.get("symbol"):
+                t["symbol"] = meta["symbol"]
+            if not t.get("name"):
+                t["name"] = meta["name"]
+            if not t.get("asset_class"):
+                t["asset_class"] = meta["asset_class"]
+            if not t.get("sector"):
+                t["sector"] = meta["sector"]
         elif conid_to_symbol and str(iid).isdigit():
             # v37dl: sp600-Fallback — Ticker direkt aus dem Contract-Cache
             # (steht nicht in _asset_meta_dict). name=symbol als Default.
             sym = conid_to_symbol.get(int(iid))
             if sym:
-                t.setdefault("symbol", sym)
-                t.setdefault("name", sym)
+                if not t.get("symbol"):
+                    t["symbol"] = sym
+                if not t.get("name"):
+                    t["name"] = sym
     return items
 
 
@@ -771,11 +780,17 @@ def _portfolio_from_brain_cache():
     # v37cd: _equity-Konsistenz mit client.get_portfolio() (Audit F5).
     # _age_seconds fuer Frontend-Frische-Warnung (Audit F13).
     age_seconds = None
+    # v37dt Audit#19: Snapshot speichert den ISO-Timestamp unter "timestamp"
+    # (tz-aware UTC), NICHT "ts" -> age_seconds war immer None (Frische-Warnung
+    # tot). Zudem ist datetime.now() naiv -> Subtraktion mit tz-aware crasht;
+    # daher Referenz passend zur tzinfo waehlen.
+    _snap_ts = last.get("timestamp") or last.get("ts")
     try:
-        from datetime import datetime as _dt2
-        ts = last.get("ts")
-        if ts:
-            age_seconds = (_dt2.now() - _dt2.fromisoformat(ts)).total_seconds()
+        from datetime import datetime as _dt2, timezone as _tz2
+        if _snap_ts:
+            _parsed = _dt2.fromisoformat(_snap_ts)
+            _ref = _dt2.now(_tz2.utc) if _parsed.tzinfo else _dt2.now()
+            age_seconds = (_ref - _parsed).total_seconds()
     except Exception:
         pass
     return {
@@ -786,7 +801,7 @@ def _portfolio_from_brain_cache():
         "_equity": total,  # Konsistenz mit IbkrBroker.get_portfolio()
         "_invested": invested,
         "_age_seconds": age_seconds,
-        "_source": f"brain_cache (snapshot {last.get('ts','?')})",
+        "_source": f"brain_cache (snapshot {_snap_ts or '?'})",
         # v37h Multi-Currency-Layer (BASE = Account-Basis-Waehrung)
         "_base_currency": last.get("base_currency") or "USD",
         "_base_net_liquidation": last.get("base_net_liquidation"),
@@ -1675,7 +1690,15 @@ async def api_soak_progress(user=Depends(require_auth)):
         for t in hist:
             if not isinstance(t, dict):
                 continue
-            if not any(k in str(t.get("action", "")).upper() for k in CLOSE_KEYS):
+            _act = str(t.get("action", "")).upper()
+            _status = str(t.get("status", "")).lower()
+            # v37dt Audit#16-Knock-on: "*_CLOSE_FAILED" enthaelt "CLOSE" und
+            # wurde faelschlich als geschlossener Round-Trip in die Soak-Karte
+            # gezaehlt. Nur echte Schliessungen zaehlen.
+            if "FAILED" in _act or _status in (
+                    "close_failed", "skipped", "submitted", "failed"):
+                continue
+            if not any(k in _act for k in CLOSE_KEYS):
                 continue
             if str(t.get("timestamp", "")) < SOAK_START:
                 continue
@@ -1688,11 +1711,19 @@ async def api_soak_progress(user=Depends(require_auth)):
         wins = sum(1 for p in pnls_pct if p > 0)
         # offene Positionen + unrealized aus brain-cache (loop-safe)
         n_open, unrealized = 0, 0.0
+        # v37dt Audit#21: unrealized kommt aus _base_unrealized_pnl -> Basis-
+        # Waehrung des Accounts (bei Carlos CHF), NICHT USD. Waehrung mitsenden,
+        # damit das Frontend nicht hart '$' davorschreibt.
+        unrealized_ccy = "USD"
         try:
             pf = _portfolio_from_brain_cache() or {}
             n_open = len(pf.get("positions", []) or [])
-            unrealized = float(pf.get("_base_unrealized_pnl")
-                               or pf.get("unrealizedPnL") or 0)
+            _base_u = pf.get("_base_unrealized_pnl")
+            if _base_u is not None:
+                unrealized = float(_base_u)
+                unrealized_ccy = pf.get("_base_currency") or "USD"
+            else:
+                unrealized = float(pf.get("unrealizedPnL") or 0)
         except Exception:
             pass
         metrics = None
@@ -1722,6 +1753,7 @@ async def api_soak_progress(user=Depends(require_auth)):
             "progress_pct": round(min(100.0, n_closed / GO_NOGO_TARGET * 100), 1),
             "open_positions": n_open,
             "unrealized_pnl": round(unrealized, 2),
+            "unrealized_currency": unrealized_ccy,
             "metrics": metrics,
             "caveat": ("Misst neuer Kopf + alte Beine: die Exit-/Sizing-Werte "
                        "(Time-Stop/SL/Kelly) sind noch TA-getunt. Gute fundamentale "

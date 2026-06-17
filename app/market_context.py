@@ -139,12 +139,20 @@ def fetch_vix():
     if yf is None:
         return None
     try:
+        import math
         vix = yf.Ticker("^VIX")
         hist = vix.history(period="5d")
         if not hist.empty:
-            val = round(hist["Close"].iloc[-1], 2)
-            log.info(f"  VIX: {val}")
-            return val
+            # v37dt Audit#10: yfinance liefert zeitweise eine letzte Zeile mit
+            # NaN-Close -> round(NaN,2)=NaN wurde als gueltiger VIX gespeichert
+            # und vergiftete das Regime-Gating. dropna + isfinite-Guard.
+            s = hist["Close"].dropna()
+            if not s.empty:
+                raw = float(s.iloc[-1])
+                if math.isfinite(raw):
+                    val = round(raw, 2)
+                    log.info(f"  VIX: {val}")
+                    return val
     except Exception as e:
         log.debug(f"VIX Fehler: {e}")
     return None

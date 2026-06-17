@@ -158,11 +158,14 @@ def test_reconcile_ignores_untagged_orders(monkeypatch):
         _Trade(4, _Order("SOME_OTHER_ORDER", 100, aux=80.0))])
     b = _broker(monkeypatch, fake)
     res = b.reconcile_protective_stops()
-    assert res == {"cancelled": 0, "resized": 0, "kept": 0}
+    # v37dt: Result-Contract um "added" erweitert (E6 dark-ship legt fehlende
+    # Catastrophic-Stops an); Test war stale.
+    assert res == {"cancelled": 0, "resized": 0, "kept": 0, "added": 0}
     assert not fake.cancelled
 
 
 def test_reconcile_noop_when_disabled():
     # Disabled -> kein IB-Zugriff (kein _get_ib noetig)
     b = IbkrBroker(config={"ibkr": {}})
-    assert b.reconcile_protective_stops() == {"cancelled": 0, "resized": 0, "kept": 0}
+    assert b.reconcile_protective_stops() == {
+        "cancelled": 0, "resized": 0, "kept": 0, "added": 0}
