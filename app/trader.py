@@ -1982,6 +1982,12 @@ def execute_scanner_trades(client, config, scan_results):
     # mündete (broker bestätigt nicht). Fix für ROKU-Fixierungs-Loop am
     # 27.04. (133+ identische Buys).
     cooldown_cycles = dt_config.get("buy_cooldown_cycles", 12)  # 12 × 5min = 1h
+    # v37ds (17.06.2026): Post-Close-Cooldown gegen Re-Churn. Der Buy-Cooldown oben
+    # greift nur nach KAUFEN; ein gerade (trailing/SL/TP/time-stop) GESCHLOSSENES
+    # Symbol war danach sofort wieder kaufbar -> GIII-Churn 16.06. (Motor waehlt
+    # GIII -> Trailing schliesst -> sofort re-buy -> ...). Kostet Spread/Slippage +
+    # verfaelscht den Soak. Blockt Re-Buy fuer N Stunden nach einem Close (0 = aus).
+    post_close_cooldown_hours = dt_config.get("post_close_cooldown_hours", 6)
     cooldown_state = load_json("buy_cooldown.json") or {}
     now_iso = datetime.now().isoformat()
     # Stale-Eintraege bereinigen (>24h)
@@ -2023,6 +2029,36 @@ def execute_scanner_trades(client, config, scan_results):
             return True, f"cooldown {elapsed_cycles:.1f}/{cooldown_cycles} cycles, {rec.get('attempts',1)} prev attempts"
         return False, ""
 
+    # v37ds: Post-Close-Cooldown — True wenn das Symbol innerhalb der letzten
+    # post_close_cooldown_hours (trailing/SL/TP/time-stop/tranche) geschlossen
+    # wurde. Quelle = trade_history (hat ALLE Closes, kein Instrumentieren noetig).
+    _CLOSE_ACTION_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")
+    def _recently_closed(symbol) -> tuple[bool, str]:
+        if not symbol or post_close_cooldown_hours <= 0:
+            return False, ""
+        try:
+            hist = load_json("trade_history.json") or []
+            threshold_sec = post_close_cooldown_hours * 3600
+            canon = _canon_instrument_key(symbol)
+            for t in reversed(hist[-400:]):  # juengste zuerst
+                if not isinstance(t, dict):
+                    continue
+                if _canon_instrument_key(t.get("symbol") or "") != canon:
+                    continue
+                act = str(t.get("action", "")).upper()
+                if not any(k in act for k in _CLOSE_ACTION_KEYS):
+                    continue
+                dt = _parse_iso_safe(t.get("timestamp"))
+                if dt is None:
+                    return False, ""
+                age_sec = (datetime.now() - dt).total_seconds()
+                if age_sec < threshold_sec:
+                    return True, f"post-close cooldown {age_sec/3600:.1f}/{post_close_cooldown_hours}h"
+                return False, ""  # juengster Close ist aelter als das Fenster
+            return False, ""
+        except Exception:
+            return False, ""  # defensiv: nie den Cycle wegen Cooldown-Check killen
+
     buy_candidates = [r for r in scan_results
                       if r["signal"] in ("BUY", "STRONG_BUY")
                       and r["score"] >= min_score
@@ -2035,6 +2071,10 @@ def execute_scanner_trades(client, config, scan_results):
     for c in buy_candidates:
         # R-B1 Phase 3a: symbol-kanonisch (candidate["symbol"] bevorzugt)
         in_cd, reason = _in_cooldown(c.get("symbol") or c["etoro_id"])
+        if not in_cd:
+            # v37ds: zusaetzlich Post-Close-Cooldown (gerade geschlossen -> nicht
+            # sofort zurueck-churnen)
+            in_cd, reason = _recently_closed(c.get("symbol"))
         if in_cd:
             blocked_by_cooldown.append((c["symbol"], reason))
         else:
