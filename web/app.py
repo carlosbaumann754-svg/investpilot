@@ -1400,6 +1400,7 @@ def _aggregate_monthly(snapshots: list) -> list:
         spy = _pct(first, last, "spy_close")
         qqq = _pct(first, last, "qqq_close")
         agg = _pct(first, last, "agg_close")
+        iwm = _pct(first, last, "iwm_close")  # v37dv: Small-Cap-Benchmark (korrekt fuer sp600)
         mix = round(0.6 * spy + 0.4 * agg, 2) if (spy is not None and agg is not None) else None
 
         def _alpha(b, x):
@@ -1411,9 +1412,11 @@ def _aggregate_monthly(snapshots: list) -> list:
             "bot_pct": bot,
             "spy_pct": spy,
             "qqq_pct": qqq,
+            "iwm_pct": iwm,
             "mix6040_pct": mix,
             "alpha_spy": _alpha(bot, spy),
             "alpha_qqq": _alpha(bot, qqq),
+            "alpha_iwm": _alpha(bot, iwm),  # v37dv: Alpha ggü. der RICHTIGEN Benchmark
             "alpha_mix6040": _alpha(bot, mix),
             "first_date": first.get("date"),
             "last_date": last.get("date"),

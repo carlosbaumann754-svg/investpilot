@@ -219,7 +219,7 @@
 
         <!-- Bot vs. Markt (Multi-Benchmark) -->
         <div class="card">
-            <div class="card-title">Bot vs. Markt (Multi-Benchmark)<span class="tip" data-tip="Vergleicht deine Performance mit drei Benchmarks: SPY (S&amp;P 500 ETF) = der breite US-Markt; QQQ (Nasdaq-100 ETF) = fairer Tech-Vergleich, weil dein Bot viel Tech haelt; 60/40 (60% Aktien + 40% Anleihen) = das klassische Privat-Anleger-Portfolio. Alpha (α) = Bot − Benchmark. Positiv (gruen) = Bot schlaegt den Vergleichswert. Negativ (rot) = passive Strategie waere besser gewesen.">?</span></div>
+            <div class="card-title">Bot vs. Markt (Multi-Benchmark)<span class="tip" data-tip="Vergleicht deine Performance mit Benchmarks: IWM (Russell 2000 Small-Cap ETF) = die KORREKTE Benchmark, weil dein Bot Small-Caps handelt; SPY (S&amp;P 500) = breiter US-Markt (Large-Cap); QQQ (Nasdaq-100) = Tech; 60/40 (60% Aktien + 40% Anleihen) = klassisches Privat-Anleger-Portfolio. Alpha (α) = Bot − Benchmark. Positiv (gruen) = Bot schlaegt den Vergleichswert. Fuer diesen Bot ist α IWM die aussagekraeftigste Spalte.">?</span></div>
             <div class="pnl-periods-grid" id="benchmark-grid">
                 <div class="pnl-period-cell"><div class="pnl-label">--</div></div>
             </div>
@@ -241,7 +241,9 @@
                             <th>Monat<span class="tip" data-tip="Kalendermonat des Snapshots. Erst- und Letzt-Tag werden zur Berechnung der Monats-Rendite herangezogen.">?</span></th>
                             <th>Bot %<span class="tip" data-tip="Prozentuale Veraenderung des gesamten Portfolio-Werts (Cash + offene Positionen + realisierte P&amp;L) vom ersten zum letzten Snapshot des Monats.">?</span></th>
                             <th>SPY %<span class="tip" data-tip="Vergleichswert: Was haette eine reine S&amp;P-500-ETF-Position im selben Zeitraum gemacht?">?</span></th>
-                            <th>α SPY<span class="tip" data-tip="Bot-Performance minus SPY-Performance. Positiv = Bot war besser. Das ist die wichtigste Spalte.">?</span></th>
+                            <th>α SPY<span class="tip" data-tip="Bot-Performance minus SPY-Performance. Positiv = Bot war besser.">?</span></th>
+                            <th>IWM %<span class="tip" data-tip="Russell 2000 Small-Cap-ETF — die KORREKTE Benchmark fuer diesen Bot, der Small-Caps (sp600) handelt. SPY/QQQ sind Large-Cap und daher nur grobe Vergleiche.">?</span></th>
+                            <th>α IWM<span class="tip" data-tip="Bot minus IWM (Small-Caps). Fuer diesen Bot die AUSSAGEKRAEFTIGSTE Alpha-Spalte, weil IWM dasselbe Markt-Segment abbildet.">?</span></th>
                             <th>QQQ %<span class="tip" data-tip="Nasdaq-100 (Tech-lastig). Vergleich, falls dein Bot viele Tech-Werte haelt.">?</span></th>
                             <th>α QQQ<span class="tip" data-tip="Bot minus QQQ. Sagt dir, ob du gegen ein Tech-Portfolio outperformst.">?</span></th>
                             <th>60/40 %<span class="tip" data-tip="Mischportfolio aus 60% Aktien (SPY) + 40% Anleihen (AGG). Konservative Buy-and-Hold-Alternative.">?</span></th>

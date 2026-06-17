@@ -2,8 +2,9 @@
 InvestPilot - Daily Equity Snapshot
 
 Speichert taeglich nach US-Boersen-Close (>= 22:30 CET) einen Schnappschuss
-mit Portfolio-Wert + Benchmark-Schlusskursen (SPY, QQQ, AGG). Daraus baut das
-Frontend die Monatstabelle und spaeter die Equity-Curve.
+mit Portfolio-Wert + Benchmark-Schlusskursen (SPY, QQQ, AGG, IWM). Daraus baut
+das Frontend die Monatstabelle und spaeter die Equity-Curve. IWM (Russell 2000)
+ist die korrekte Small-Cap-Benchmark fuer den sp600-Motor (v37dv).
 
 Persistenz: data/equity_history.json (Liste von Snapshots).
 Wird ueber den bestehenden Gist-Backup mitgesichert.
@@ -16,6 +17,7 @@ Snapshot-Schema:
     "spy_close": 524.31,
     "qqq_close": 451.89,
     "agg_close": 102.14,
+    "iwm_close": 198.72,           # v37dv: Small-Cap-Benchmark (korrekt fuer sp600)
     "source": "scheduler-daily-2230"
 }
 
@@ -175,7 +177,11 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
         "portfolio_total_value": round(portfolio_value, 2),
         "source": triggered_by,
     }
-    for sym in ("SPY", "QQQ", "AGG"):
+    # v37dv: IWM (Russell 2000 Small-Cap) ergaenzt — die KORREKTE Benchmark fuer
+    # den sp600-Small-Cap-Motor (SPY/QQQ sind Large-Cap, beta-unpassend). IWM ist
+    # zwar in disabled_symbols (kein Trade), wird hier aber nur als Preis-Referenz
+    # via yfinance geholt -> kein Konflikt.
+    for sym in ("SPY", "QQQ", "AGG", "IWM"):
         c = _fetch_latest_close(sym)
         snap[f"{sym.lower()}_close"] = round(c, 4) if c is not None else None
 
@@ -183,7 +189,8 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
     _save_history(history)
     log.info(
         f"Equity-Snapshot {today_iso}: Portfolio=${snap['portfolio_total_value']:,.2f}, "
-        f"SPY={snap.get('spy_close')}, QQQ={snap.get('qqq_close')}, AGG={snap.get('agg_close')}"
+        f"SPY={snap.get('spy_close')}, QQQ={snap.get('qqq_close')}, "
+        f"AGG={snap.get('agg_close')}, IWM={snap.get('iwm_close')}"
     )
 
     # Guard fuer Scheduler-Skip (entlastet load_json bei jedem 5-Min-Tick)

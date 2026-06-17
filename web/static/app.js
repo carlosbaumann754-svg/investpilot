@@ -212,6 +212,8 @@ function renderEquityHistory(data) {
                 ${cellPct(r.bot_pct)}
                 ${cellPct(r.spy_pct)}
                 ${cellPct(r.alpha_spy)}
+                ${cellPct(r.iwm_pct)}
+                ${cellPct(r.alpha_iwm)}
                 ${cellPct(r.qqq_pct)}
                 ${cellPct(r.alpha_qqq)}
                 ${cellPct(r.mix6040_pct)}
