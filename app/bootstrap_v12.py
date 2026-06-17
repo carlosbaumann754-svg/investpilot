@@ -20,6 +20,14 @@ Design-Regeln:
      NIE anfassen — der Optimizer besitzt diese Werte.
   4. Idempotent: Mehrfach-Aufruf veraendert nichts, wenn bereits migriert.
   5. Atomic Write via save_json (thread-safe Lock).
+  6. v37du Boot-Invarianten (Seed-Drift-Schutz, siehe migrate() Schritt 4):
+     - use_signal_stack=True wird IMMER erzwungen (Motor-Identitaet; ohne den
+       Flag faellt der Scanner auf die alte TA-Strategie zurueck).
+     - optimizer.enabled=False + risk_management.{catastrophic_stop, caps}
+       werden nur INJIZIERT wenn fehlend (kein Override bewusster Live-Werte).
+     Diese Baseline ist die de-facto DR-Quelle der config, weil der Cloud-
+     Restore config.json nur bei lokal-leer zurueckspielt — und bootstrap_v12
+     davor immer eine nicht-leere config sicherstellt.
 
 Aufruf:
     python -m app.bootstrap_v12          # Apply
@@ -77,7 +85,7 @@ V12_DISABLED_SYMBOLS = [
 V12_SECTIONS: dict[str, dict[str, Any]] = {
     "time_stop": {
         "enabled": True,
-        "max_days_stale": 10,
+        "max_days_stale": 30,  # v37du: an Live (v37do interim-entschaerft) angeglichen
         "stale_pnl_threshold_pct": 0.5,
         "min_days_open": 2,
     },
@@ -122,13 +130,15 @@ V12_SECTIONS: dict[str, dict[str, Any]] = {
 # (nur wenn Parent-Section existiert, aber Sub-Key fehlt)
 V12_SUBKEY_INJECT: dict[str, dict[str, Any]] = {
     "leverage": {
+        # v37du: an Live angeglichen (v37do interim-Exit-Werte). Hebel ist beim
+        # Stock-only-Motor ohnehin dormant; relevant nur fuer Reconstruction-aus-Null.
         "trailing_sl_enabled": True,
-        "trailing_sl_activation_pct": 0.8,
-        "trailing_sl_pct": 1.8,
+        "trailing_sl_activation_pct": 6.0,
+        "trailing_sl_pct": 4.0,
         "tp_tranches": [
-            {"pct_of_position": 30, "profit_target_pct": 4},
             {"pct_of_position": 30, "profit_target_pct": 8},
-            {"pct_of_position": 40, "profit_target_pct": 15},
+            {"pct_of_position": 30, "profit_target_pct": 16},
+            {"pct_of_position": 40, "profit_target_pct": 30},
         ],
     },
 }
@@ -177,6 +187,50 @@ def migrate(config: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             if k not in parent:
                 parent[k] = copy.deepcopy(v)
                 changes.append(f"{parent_name}.{k}: injiziert")
+
+    # 4. v37du Boot-Invarianten (Seed-Drift-Schutz). Hintergrund: der
+    #    Cloud-Restore (persistence.restore_from_cloud) spielt config.json NUR
+    #    bei lokal-leer zurueck, und bootstrap_v12 stellt davor immer eine
+    #    nicht-leere config sicher -> der Gist-Stand der config wird NIE
+    #    auto-restored. Damit ist DIESE Baseline (nicht der Gist) die de-facto
+    #    DR-Quelle. Ohne die folgenden Invarianten wuerde ein Volume-Wipe /
+    #    Fresh-Clone den alten TA-Motor wiederbeleben (use_signal_stack default
+    #    False -> market_scanner TA-Fallback) + den Optimizer reaktivieren.
+
+    # 4a. use_signal_stack: HARTER Invariant (immer erzwingen, nicht nur
+    #     inject-if-missing). Der Bot IST der Fundamental-Signal-Stack-Motor;
+    #     fehlt/false der Flag, scannt er die alte edgelose TA-Strategie.
+    if new_cfg.get("use_signal_stack") is not True:
+        old = new_cfg.get("use_signal_stack")
+        new_cfg["use_signal_stack"] = True
+        changes.append(f"use_signal_stack: {old} -> True (erzwungen)")
+
+    # 4b. optimizer.enabled=False (Soak-Politik, REVERSIBEL): nur setzen wenn
+    #     fehlend — ein bewusstes Re-Enable (post-Soak) wird NICHT ueberschrieben.
+    opt = new_cfg.get("optimizer")
+    if not isinstance(opt, dict):
+        new_cfg["optimizer"] = {"enabled": False}
+        changes.append("optimizer: injiziert (enabled=False)")
+    elif "enabled" not in opt:
+        opt["enabled"] = False
+        changes.append("optimizer.enabled: injiziert (False)")
+
+    # 4c. risk_management Sicherheits-/Cap-Invarianten (inject-if-missing).
+    #     KEINE Optimizer-Werte (SL/TP/min_score bleiben in demo_trading
+    #     unangetastet). catastrophic_stop = E6 Broker-seitiger Hard-Stop.
+    rm = new_cfg.get("risk_management")
+    if not isinstance(rm, dict):
+        rm = {}
+        new_cfg["risk_management"] = rm
+    rm_invariants = {
+        "catastrophic_stop": {"enabled": True, "pct": 20},
+        "max_positions_per_class": 20,
+        "max_class_allocation_pct": 1000,
+    }
+    for k, v in rm_invariants.items():
+        if k not in rm:
+            rm[k] = copy.deepcopy(v)
+            changes.append(f"risk_management.{k}: injiziert")
 
     return new_cfg, changes
 
