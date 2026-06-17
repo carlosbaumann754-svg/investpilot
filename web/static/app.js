@@ -107,7 +107,7 @@ function renderBenchmark(benchData) {
         _lastPnlPeriods.periods.forEach(p => { portfolioByKey[p.key] = p.pnl_pct; });
     }
 
-    // Benchmarks-Liste aus Backend (kann SPY/QQQ/60-40 enthalten)
+    // Benchmarks-Liste aus Backend (IWM/SPY/60-40; QQQ ab v37dw entfernt)
     const benches = Array.isArray(benchData.benchmarks) && benchData.benchmarks.length
         ? benchData.benchmarks
         : [{ key: 'spy', label: 'SPY', name: 'S&P 500 ETF' }];
@@ -210,12 +210,10 @@ function renderEquityHistory(data) {
             <tr>
                 <td>${monthLabel}</td>
                 ${cellPct(r.bot_pct)}
-                ${cellPct(r.spy_pct)}
-                ${cellPct(r.alpha_spy)}
                 ${cellPct(r.iwm_pct)}
                 ${cellPct(r.alpha_iwm)}
-                ${cellPct(r.qqq_pct)}
-                ${cellPct(r.alpha_qqq)}
+                ${cellPct(r.spy_pct)}
+                ${cellPct(r.alpha_spy)}
                 ${cellPct(r.mix6040_pct)}
                 ${cellPct(r.alpha_mix6040)}
             </tr>
@@ -469,7 +467,7 @@ async function loadDashboard() {
             } catch(e) { console.error('pnl-periods render:', e); }
         }
 
-        // Benchmark Card (Bot vs. Multi-Benchmark: SPY/QQQ/60-40)
+        // Benchmark Card (Bot vs. Multi-Benchmark: IWM/SPY/60-40)
         if (benchmarkRes) {
             try {
                 const bench = await benchmarkRes.json();

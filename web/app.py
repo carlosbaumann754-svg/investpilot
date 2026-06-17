@@ -1194,7 +1194,10 @@ _BENCHMARK_CACHE: dict = {}  # {symbol: {"data": {date: close}, "ts": float}}
 # Symbole, die wir tracken. SPY = S&P 500 Tracker, QQQ = Nasdaq-100,
 # AGG = US Aggregate Bond Index. 60/40 wird im Endpoint berechnet
 # (0.6*SPY + 0.4*AGG) — klassisches Privat-Anleger-Portfolio.
-BENCHMARK_SYMBOLS = ["SPY", "QQQ", "AGG"]
+# v37dw: QQQ (Tech) entfernt — war Benchmark fuers ALTE Big-Tech-Universum, irrelevant
+# fuer den Small-Cap-Motor. IWM (Russell 2000) ist die korrekte Small-Cap-Benchmark.
+# AGG bleibt fuer die 60/40-Berechnung (wird selbst nicht als Zeile angezeigt).
+BENCHMARK_SYMBOLS = ["SPY", "AGG", "IWM"]
 
 
 def _fetch_ticker_closes(symbol: str, years: int = 5):
@@ -1285,7 +1288,7 @@ _spy_return_pct = _ticker_return_pct
 
 @app.get("/api/benchmark")
 async def api_benchmark(user=Depends(require_auth)):
-    """Liefert Multi-Benchmark-Returns (SPY/QQQ/AGG/60-40) ueber dieselben
+    """Liefert Multi-Benchmark-Returns (IWM/SPY/AGG/60-40) ueber dieselben
     Zeitfenster wie /api/pnl-periods.
 
     Das Frontend berechnet Alpha pro Benchmark (portfolio_pct - bench_pct)
@@ -1295,7 +1298,7 @@ async def api_benchmark(user=Depends(require_auth)):
     from datetime import datetime, timedelta
     try:
         closes_by_symbol = {sym: _fetch_ticker_closes(sym, years=5) for sym in BENCHMARK_SYMBOLS}
-        # Hauptbenchmark MUSS verfuegbar sein, AGG/QQQ duerfen fehlen
+        # Hauptbenchmark (SPY) MUSS verfuegbar sein, AGG/IWM duerfen fehlen
         if not closes_by_symbol.get("SPY"):
             return {"error": "SPY-Daten nicht verfuegbar", "benchmarks": [], "periods": []}
 
@@ -1339,8 +1342,9 @@ async def api_benchmark(user=Depends(require_auth)):
 
         return {
             "benchmarks": [
-                {"key": "spy",       "label": "SPY",   "name": "S&P 500 ETF"},
-                {"key": "qqq",       "label": "QQQ",   "name": "Nasdaq-100 ETF"},
+                # v37dw: IWM primaer (korrekte Small-Cap-Benchmark), QQQ entfernt.
+                {"key": "iwm",       "label": "IWM",   "name": "Russell 2000 Small-Cap (korrekte Benchmark)"},
+                {"key": "spy",       "label": "SPY",   "name": "S&P 500 ETF (breiter Markt)"},
                 {"key": "mix6040",   "label": "60/40", "name": "60% SPY + 40% AGG (klassisch)"},
             ],
             "periods": periods,
@@ -1398,7 +1402,6 @@ def _aggregate_monthly(snapshots: list) -> list:
         first, last = snaps[0], snaps[-1]
         bot = _pct(first, last, "portfolio_total_value")
         spy = _pct(first, last, "spy_close")
-        qqq = _pct(first, last, "qqq_close")
         agg = _pct(first, last, "agg_close")
         iwm = _pct(first, last, "iwm_close")  # v37dv: Small-Cap-Benchmark (korrekt fuer sp600)
         mix = round(0.6 * spy + 0.4 * agg, 2) if (spy is not None and agg is not None) else None
@@ -1406,17 +1409,16 @@ def _aggregate_monthly(snapshots: list) -> list:
         def _alpha(b, x):
             return round(b - x, 2) if (b is not None and x is not None) else None
 
+        # v37dw: QQQ (Tech) entfernt — irrelevant fuers Small-Cap-Universum. IWM primaer.
         rows.append({
             "month": ym,
             "days_in_month": len(snaps),
             "bot_pct": bot,
-            "spy_pct": spy,
-            "qqq_pct": qqq,
             "iwm_pct": iwm,
+            "spy_pct": spy,
             "mix6040_pct": mix,
+            "alpha_iwm": _alpha(bot, iwm),  # die aussagekraeftigste Spalte fuer diesen Bot
             "alpha_spy": _alpha(bot, spy),
-            "alpha_qqq": _alpha(bot, qqq),
-            "alpha_iwm": _alpha(bot, iwm),  # v37dv: Alpha ggü. der RICHTIGEN Benchmark
             "alpha_mix6040": _alpha(bot, mix),
             "first_date": first.get("date"),
             "last_date": last.get("date"),
