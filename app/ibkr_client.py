@@ -1593,6 +1593,49 @@ class IbkrBroker(BrokerBase):
             log.warning("get_recent_daily_closes(%s) fehlgeschlagen: %s", symbol, e)
             return []
 
+    def get_recent_daily_bars(self, symbol: str, lookback_days: int = 95) -> list:
+        """v37dz: Taegliche OHLCV-Bars via IBKR reqHistoricalData (read-only).
+
+        Fallback fuer den Sizing-Pfad (market_scanner.analyze_single_asset): wenn
+        yfinance ein Symbol verfehlt, lassen sich RSI/MACD/ATR/ADX/Momentum trotzdem
+        aus IBKR-Bars rechnen, statt den Kandidaten blind zu skippen. Analog
+        get_recent_daily_closes, aber mit OHLCV. Liefert Liste von dicts
+        {open,high,low,close,volume} aufsteigend (aeltester zuerst), [] bei jedem
+        Fehler (non-fatal — ein Symbol-Fail darf den Scan nie kippen).
+        """
+        try:
+            from ib_insync import Stock
+            import math
+            ib = self._get_ib()
+            qc = ib.qualifyContracts(Stock(symbol, "SMART", "USD"))
+            if not qc:
+                log.warning("get_recent_daily_bars: %s nicht qualifizierbar", symbol)
+                return []
+            bars = ib.reqHistoricalData(
+                qc[0], endDateTime="", durationStr=f"{int(lookback_days)} D",
+                barSizeSetting="1 day", whatToShow="TRADES",
+                useRTH=True, formatDate=1)
+            out = []
+            for b in (bars or []):
+                c = getattr(b, "close", None)
+                try:
+                    if c is None or not math.isfinite(float(c)):
+                        continue
+                    c = float(c)
+                    out.append({
+                        "open": float(getattr(b, "open", c) or c),
+                        "high": float(getattr(b, "high", c) or c),
+                        "low": float(getattr(b, "low", c) or c),
+                        "close": c,
+                        "volume": float(getattr(b, "volume", 0) or 0),
+                    })
+                except (TypeError, ValueError):
+                    continue
+            return out
+        except Exception as e:
+            log.warning("get_recent_daily_bars(%s) fehlgeschlagen: %s", symbol, e)
+            return []
+
     def sell(self, instrument_id, amount_usd, leverage=1):
         """Market-SELL by Amount USD (Short-Open)."""
         if leverage != 1:

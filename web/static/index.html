@@ -362,7 +362,7 @@
                     <span id="v12-tsl-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
                 <div class="regime-detail-item">
-                    <span class="card-sub">Min Scanner-Score<span class="tip" data-tip="Mindest-Score den ein Wertpapier beim Scanner haben muss damit der Bot ueberhaupt einen Kauf in Erwaegung zieht. Hoeherer Wert = strenger Filter = weniger aber qualitativ bessere Trades. Wird vom WFO-Optimizer ermittelt und woechentlich revalidiert. Aktueller Wert = WFO-empfohlen.">?</span></span>
+                    <span class="card-sub">Min Scanner-Score<span class="tip" data-tip="LEGACY / TA-Fallback: Mindest-Score-Schwelle des ALTEN TA-Scanners. Der aktive Fundamental-Signal-Stack-Motor nutzt diesen Wert NICHT — er kauft anhand seiner eigenen Composite-Score-Schwelle (Stack-Score -> Bot-Score, Kauf ab +10/+25). Frueher vom WFO-Optimizer ermittelt; der Optimizer ist im Soak pausiert, der Wert wird also nicht mehr revalidiert. Bleibt nur als TA-Fallback-Parameter erhalten.">?</span></span>
                     <span id="v12-minscore-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
             </div>
@@ -473,7 +473,8 @@
         <div class="card" id="wfo-drift-card">
             <div class="card-title">
                 WFO-Drift-Watchdog
-                <span class="tip" data-tip="Realitaets-Check: vergleicht die LIVE-Performance (echte Trades letzte 30 Tage) mit der WFO-BACKTEST-Erwartung. Beispiel: WFO sagt 'Strategie sollte Sharpe 5.0 erreichen', Live macht aktuell Sharpe 3.0 -> Drift = 40% (Strategie performt schlechter als der Backtest verspricht). Kleine Drifts (<15%) sind normales Markt-Rauschen. Mittlere Drifts (15-30%) heissen 'Wait-and-See'. Groessere Drifts (>30%) loesen einen Pushover-Alert aus — entweder ist die Strategie kaputt, der Markt hat sich gewendet, oder Bugs verzerren die Live-Trades. Aktuell -106% (Mai-Bug-Drag, sollte sich nach R-A10/R-A15-Fixes legen).">?</span>
+                <span class="badge" style="background:#7a5c00;color:#ffd966;font-size:10px;margin-left:6px;padding:2px 6px;border-radius:4px;vertical-align:middle;">ALT-MOTOR (TA) · im Soak pausiert</span>
+                <span class="tip" data-tip="HINWEIS: Diese Karte misst den ALTEN TA-Motor (Walk-Forward-Sharpe der frueheren ETF/Mega-Cap-Strategie) und ist waehrend des Validierungs-Soaks bewusst PAUSIERT (wfo_drift_watchdog.enabled=false) — die Baseline stammt nicht vom aktiven Fundamental-Signal-Stack-Motor und ist daher fuer den aktuellen Bot NICHT aussagekraeftig (Cry-Wolf-Schutz). Der echte Performance-Massstab des neuen Motors ist die Spalte alpha IWM (Karte 'Bot vs. Markt' / Equity-Verlauf). Re-Baseline auf den neuen Motor erfolgt nach >=30 Stack-Trades, dann wird der Watchdog wieder scharfgeschaltet. Mechanik (fuer spaeter): vergleicht Live-Sharpe der letzten 30d mit der WFO-Backtest-Erwartung; Drift >30% = Alert.">?</span>
             </div>
             <div id="wfo-drift-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
             <div id="wfo-drift-summary" class="card-sub" style="margin-bottom:8px;">Lade...</div>

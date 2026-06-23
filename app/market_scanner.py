@@ -499,124 +499,181 @@ def _instrument_type(ticker):
     return None
 
 
-def analyze_single_asset(symbol, asset_info):
-    """Technische Analyse fuer ein einzelnes Asset."""
-    if yf is None:
-        return None
+# v37dz: Sizing-Pfad-Resilienz (yfinance-Ausfall). analyze_single_asset holt die
+# 3-Monats-OHLCV primaer von yfinance; faellt yfinance aus, lieferte es bisher None
+# -> der Kandidat wurde blind geskippt (ein yfinance-Totalausfall konnte so den
+# GANZEN Buy-Scan lahmlegen). Jetzt: IBKR-OHLCV-Fallback ueber eine wiederverwendete
+# read-only Verbindung (eigene clientId), pro Scan budget-gedeckelt (Pacing-Schutz).
+# Der Success-Path (yfinance OK) bleibt byte-identisch -> soak-neutral.
+_SIZING_FALLBACK = {"broker": None, "budget": 0}
+_SIZING_FALLBACK_CLIENT_ID = 89   # Bot=1, Reconcile=99, Preis-Provider=88
+_SIZING_FALLBACK_CAP = 40         # max IBKR-OHLCV-Fallbacks pro Scan
 
+
+def reset_sizing_fallback_budget(cap: int = _SIZING_FALLBACK_CAP) -> None:
+    """Vom Scan-Entry aufgerufen: Fallback-Budget pro Scan zuruecksetzen, damit ein
+    yfinance-Totalausfall nicht ~309 IBKR-Calls in einem Scan ausloest."""
+    _SIZING_FALLBACK["budget"] = cap
+
+
+def _sizing_fallback_bars(symbol: str, lookback_days: int = 95) -> list:
+    """OHLCV-Bars via wiederverwendete read-only IBKR-Verbindung (yfinance-Fallback).
+    Budget-gedeckelt; [] wenn Budget erschoepft oder Fehler (non-fatal)."""
+    if _SIZING_FALLBACK["budget"] <= 0:
+        return []
+    try:
+        br = _SIZING_FALLBACK["broker"]
+        if br is None:
+            from app.ibkr_client import IbkrBroker
+            br = IbkrBroker({"ibkr": {"client_id": _SIZING_FALLBACK_CLIENT_ID,
+                                      "readonly": True, "timeout": 60}})
+            _SIZING_FALLBACK["broker"] = br
+        bars = br.get_recent_daily_bars(symbol, lookback_days)
+        if bars:
+            _SIZING_FALLBACK["budget"] -= 1
+        return bars
+    except Exception as e:
+        log.warning("Sizing-IBKR-Fallback(%s) fehlgeschlagen (non-fatal): %s", symbol, e)
+        return []
+
+
+def _ta_from_ohlcv(symbol, asset_info, closes, volumes, highs, lows):
+    """Berechnet die TA-Kennzahlen aus OHLCV-Listen — quellen-unabhaengig (yfinance
+    ODER IBKR-Fallback). Erwartet >=20 Bars. Gibt das Analyse-Dict zurueck."""
+    # Technische Indikatoren
+    rsi = calc_rsi(closes)
+    macd_val, signal_val, macd_hist = calc_macd(closes)
+    boll_pos = calc_bollinger_position(closes)
+
+    # Preis-Momentum
+    if len(closes) >= 5:
+        momentum_5d = (closes[-1] - closes[-5]) / closes[-5] * 100
+    else:
+        momentum_5d = 0
+
+    if len(closes) >= 20:
+        momentum_20d = (closes[-1] - closes[-20]) / closes[-20] * 100
+        sma_20 = sum(closes[-20:]) / 20
+    else:
+        momentum_20d = 0
+        sma_20 = closes[-1]
+
+    if len(closes) >= 50:
+        sma_50 = sum(closes[-50:]) / 50
+    else:
+        sma_50 = sma_20
+
+    # Volumen-Trend
+    if len(volumes) >= 10 and sum(volumes[-10:-5]) > 0:
+        vol_trend = sum(volumes[-5:]) / sum(volumes[-10:-5])
+    else:
+        vol_trend = 1.0
+
+    # Volatilitaet (20-Tage)
+    if len(closes) >= 20:
+        returns = [(closes[i] - closes[i-1]) / closes[i-1]
+                   for i in range(max(1, len(closes)-20), len(closes))]
+        volatility = (sum(r**2 for r in returns) / len(returns)) ** 0.5 * 100
+    else:
+        volatility = 5.0
+
+    current_price = closes[-1]
+    above_sma20 = current_price > sma_20
+    above_sma50 = current_price > sma_50
+    golden_cross = sma_20 > sma_50
+
+    # v5 Features: ATR, ADX, OBV, VWAP
+    from app.ml_scorer import _calc_atr, _calc_adx, _calc_obv_slope
+    atr_pct = _calc_atr(highs, lows, closes)
+    adx = _calc_adx(highs, lows, closes)
+    obv_slope = _calc_obv_slope(closes, volumes)
+
+    # VWAP deviation
+    vwap_deviation_pct = 0
+    if len(highs) >= 20 and sum(volumes[-20:]) > 0:
+        typical = [(h + l + c) / 3 for h, l, c in
+                   zip(highs[-20:], lows[-20:], closes[-20:])]
+        vols_20 = volumes[-20:]
+        vwap = sum(t * v for t, v in zip(typical, vols_20)) / sum(vols_20)
+        if vwap > 0:
+            vwap_deviation_pct = (current_price - vwap) / vwap * 100
+
+    return {
+        "symbol": symbol,
+        "name": asset_info["name"],
+        "class": asset_info["class"],
+        # R-B1 Phase 4c: internal_id (kanonisch) + etoro_id (Dual-Key,
+        # entfernt in 4d). Beide via Accessor -> robust gegen Literal-Rename.
+        "internal_id": _meta_internal_id(asset_info),
+        "etoro_id": _meta_internal_id(asset_info),
+        "price": round(current_price, 4),
+        "rsi": round(rsi, 1),
+        "macd": round(macd_val, 4),
+        "macd_signal": round(signal_val, 4),
+        "macd_histogram": round(macd_hist, 4),
+        "bollinger_pos": round(boll_pos, 3),
+        "momentum_5d": round(momentum_5d, 2),
+        "momentum_20d": round(momentum_20d, 2),
+        "volatility": round(volatility, 2),
+        "volume_trend": round(vol_trend, 2),
+        "above_sma20": above_sma20,
+        "above_sma50": above_sma50,
+        "golden_cross": golden_cross,
+        "atr_pct": round(atr_pct, 2),
+        "adx": round(adx, 1),
+        "obv_slope": round(obv_slope, 3),
+        "vwap_deviation_pct": round(vwap_deviation_pct, 2),
+    }
+
+
+def analyze_single_asset(symbol, asset_info):
+    """Technische Analyse fuer ein Asset (yfinance primaer, IBKR-OHLCV-Fallback).
+
+    v37dz: yfinance bleibt Primaerquelle (Success-Path byte-identisch -> soak-neutral);
+    faellt yfinance fuer dieses Symbol aus, werden die OHLCV-Bars per IBKR nachgeholt
+    (budget-gedeckelt) statt den Kandidaten blind zu skippen.
+    """
     yf_symbol = asset_info.get("yf", symbol)
 
+    # --- Primaerquelle: yfinance ---
+    if yf is not None:
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            hist = ticker.history(period="3mo", interval="1d")
+            if not hist.empty and len(hist) >= 20:
+                # R-B3: Nicht-handelbare Instrumente (Fonds/Index) ausfiltern.
+                # Mutual Funds bestehen den Tages-History-Check (NAV-Daten),
+                # scheitern aber im Live-Intraday-Scan -> hier abfangen. Nur im
+                # yfinance-Pfad: IBKR-qualifizierte Contracts sind handelbar.
+                itype = _instrument_type(ticker)
+                if itype in _NON_TRADEABLE_INSTRUMENT_TYPES:
+                    log.info(
+                        f"  {symbol} ({yf_symbol}): Instrument-Typ '{itype}' nicht "
+                        f"boersenhandelbar -> uebersprungen (R-B3 Fonds-Filter)"
+                    )
+                    return None
+                closes = hist["Close"].tolist()
+                volumes = hist["Volume"].tolist()
+                highs = hist["High"].tolist() if "High" in hist.columns else closes
+                lows = hist["Low"].tolist() if "Low" in hist.columns else closes
+                return _ta_from_ohlcv(symbol, asset_info, closes, volumes, highs, lows)
+        except Exception as e:
+            log.debug(f"  yfinance-Analyse {symbol} fehlgeschlagen: {e}")
+
+    # --- Fallback: IBKR-OHLCV (nur wenn yfinance leer/aus) ---
     try:
-        ticker = yf.Ticker(yf_symbol)
-        hist = ticker.history(period="3mo", interval="1d")
-
-        if hist.empty or len(hist) < 20:
-            return None
-
-        # R-B3: Nicht-handelbare Instrumente (Fonds/Index) ausfiltern.
-        # Mutual Funds bestehen den Tages-History-Check oben (NAV-Daten),
-        # scheitern aber im Live-Intraday-Scan -> hier sauber abfangen.
-        itype = _instrument_type(ticker)
-        if itype in _NON_TRADEABLE_INSTRUMENT_TYPES:
-            log.info(
-                f"  {symbol} ({yf_symbol}): Instrument-Typ '{itype}' nicht "
-                f"boersenhandelbar -> uebersprungen (R-B3 Fonds-Filter)"
-            )
-            return None
-
-        closes = hist["Close"].tolist()
-        volumes = hist["Volume"].tolist()
-
-        # Technische Indikatoren
-        rsi = calc_rsi(closes)
-        macd_val, signal_val, macd_hist = calc_macd(closes)
-        boll_pos = calc_bollinger_position(closes)
-
-        # Preis-Momentum
-        if len(closes) >= 5:
-            momentum_5d = (closes[-1] - closes[-5]) / closes[-5] * 100
-        else:
-            momentum_5d = 0
-
-        if len(closes) >= 20:
-            momentum_20d = (closes[-1] - closes[-20]) / closes[-20] * 100
-            sma_20 = sum(closes[-20:]) / 20
-        else:
-            momentum_20d = 0
-            sma_20 = closes[-1]
-
-        if len(closes) >= 50:
-            sma_50 = sum(closes[-50:]) / 50
-        else:
-            sma_50 = sma_20
-
-        # Volumen-Trend
-        if len(volumes) >= 10 and sum(volumes[-10:-5]) > 0:
-            vol_trend = sum(volumes[-5:]) / sum(volumes[-10:-5])
-        else:
-            vol_trend = 1.0
-
-        # Volatilitaet (20-Tage)
-        if len(closes) >= 20:
-            returns = [(closes[i] - closes[i-1]) / closes[i-1]
-                       for i in range(max(1, len(closes)-20), len(closes))]
-            volatility = (sum(r**2 for r in returns) / len(returns)) ** 0.5 * 100
-        else:
-            volatility = 5.0
-
-        current_price = closes[-1]
-        above_sma20 = current_price > sma_20
-        above_sma50 = current_price > sma_50
-        golden_cross = sma_20 > sma_50
-
-        # v5 Features: ATR, ADX, OBV, VWAP
-        highs = hist["High"].tolist() if "High" in hist.columns else closes
-        lows = hist["Low"].tolist() if "Low" in hist.columns else closes
-        from app.ml_scorer import _calc_atr, _calc_adx, _calc_obv_slope
-        atr_pct = _calc_atr(highs, lows, closes)
-        adx = _calc_adx(highs, lows, closes)
-        obv_slope = _calc_obv_slope(closes, volumes)
-
-        # VWAP deviation
-        vwap_deviation_pct = 0
-        if len(highs) >= 20 and sum(volumes[-20:]) > 0:
-            typical = [(h + l + c) / 3 for h, l, c in
-                       zip(highs[-20:], lows[-20:], closes[-20:])]
-            vols_20 = volumes[-20:]
-            vwap = sum(t * v for t, v in zip(typical, vols_20)) / sum(vols_20)
-            if vwap > 0:
-                vwap_deviation_pct = (current_price - vwap) / vwap * 100
-
-        return {
-            "symbol": symbol,
-            "name": asset_info["name"],
-            "class": asset_info["class"],
-            # R-B1 Phase 4c: internal_id (kanonisch) + etoro_id (Dual-Key,
-            # entfernt in 4d). Beide via Accessor -> robust gegen Literal-Rename.
-            "internal_id": _meta_internal_id(asset_info),
-            "etoro_id": _meta_internal_id(asset_info),
-            "price": round(current_price, 4),
-            "rsi": round(rsi, 1),
-            "macd": round(macd_val, 4),
-            "macd_signal": round(signal_val, 4),
-            "macd_histogram": round(macd_hist, 4),
-            "bollinger_pos": round(boll_pos, 3),
-            "momentum_5d": round(momentum_5d, 2),
-            "momentum_20d": round(momentum_20d, 2),
-            "volatility": round(volatility, 2),
-            "volume_trend": round(vol_trend, 2),
-            "above_sma20": above_sma20,
-            "above_sma50": above_sma50,
-            "golden_cross": golden_cross,
-            "atr_pct": round(atr_pct, 2),
-            "adx": round(adx, 1),
-            "obv_slope": round(obv_slope, 3),
-            "vwap_deviation_pct": round(vwap_deviation_pct, 2),
-        }
-
+        bars = _sizing_fallback_bars(yf_symbol)
+        if bars and len(bars) >= 20:
+            closes = [b["close"] for b in bars]
+            volumes = [b["volume"] for b in bars]
+            highs = [b["high"] for b in bars]
+            lows = [b["low"] for b in bars]
+            log.info("  %s: yfinance verfehlt -> IBKR-OHLCV-Fallback (%d Bars)",
+                     symbol, len(bars))
+            return _ta_from_ohlcv(symbol, asset_info, closes, volumes, highs, lows)
     except Exception as e:
-        log.debug(f"  Fehler bei {symbol}: {e}")
-        return None
+        log.debug(f"  IBKR-Fallback-Analyse {symbol} fehlgeschlagen: {e}")
+    return None
 
 
 # ============================================================
@@ -857,6 +914,9 @@ def _scan_via_signal_stack(max_per_class=None):
         from datetime import datetime, timezone
         from app import sp600_universe
         from app.config_manager import load_json
+        # v37dz: Sizing-Fallback-Budget pro Scan zuruecksetzen (Pacing-Schutz, falls
+        # yfinance in diesem Scan ausfaellt und analyze_single_asset IBKR nachholt).
+        reset_sizing_fallback_budget()
         shadow = load_json("signal_stack_shadow.json")
         if not isinstance(shadow, dict) or not shadow.get("scores"):
             log.error("Signal-Stack: keine Shadow-Scores -> FAIL-SAFE (kein Buy)")

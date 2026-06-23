@@ -25,6 +25,10 @@ TRADING_DEFAULTS = {
     "demo_trading": {
         "stop_loss_pct": -5,           # Match live-optimizer range
         "take_profit_pct": 18,          # Match live TP-final
+        # LEGACY / TA-Fallback (v37dz-Doku): Schwelle des ALTEN TA-Scanners. Der
+        # aktive Signal-Stack-Motor nutzt sie NICHT (kauft per eigener Composite-
+        # Score-Schwelle in _scan_via_signal_stack, Bot-Score >=+10/+25). Nur noch
+        # vom Optimizer/Backtester (Alt-Motor-Pfad) gelesen; Optimizer im Soak pausiert.
         "min_scanner_score": 15,
         "max_single_trade_usd": 5000,
         "default_leverage": 1,
