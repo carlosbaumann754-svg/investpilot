@@ -1,7 +1,8 @@
 """
 InvestPilot - Market Scanner
 Scannt alle verfuegbaren Asset-Klassen und bewertet Opportunities.
-Nutzt yfinance fuer technische Analyse, eToro API fuer Instrument Discovery.
+Technische Analyse (Sizing-Pfad): yfinance primaer + IBKR-OHLCV-Fallback (v37dz —
+ein yfinance-Ausfall legt den Buy-Scan nicht mehr lahm). Instrument-Discovery via API.
 """
 
 import logging
@@ -14,7 +15,7 @@ log = logging.getLogger("Scanner")
 
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
-    "purpose": "Market-Scanner: ASSET_UNIVERSE-Iteration, Score-Computation, Signal-Klassifikation, expand_symbol_for_match (Bot<->IBKR)",
+    "purpose": "Market-Scanner: ASSET_UNIVERSE-Iteration, Score-Computation, Signal-Klassifikation, expand_symbol_for_match (Bot<->IBKR); Sizing-TA via yfinance primaer + IBKR-OHLCV-Fallback (v37dz, Resilienz)",
     "config_section": "scanner",
     "state_files": ["scanner_state.json"],
     "self_tests": ["tc_yfinance_freshness"],
