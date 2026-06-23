@@ -834,6 +834,27 @@ class IbkrBroker(BrokerBase):
             realized = self._get_account_value("RealizedPnL") or 0.0
             gross_pos_value = self._get_account_value("GrossPositionValue") or 0.0
 
+            # v37dy (PYTHON-FASTAPI-13 Hardening): Fail-safe gegen Positions-Timeout.
+            # ib_insync loggt "positions request timed out" und liefert dann eine
+            # LEERE positions()/portfolio()-Liste OHNE Exception (v.a. nach Wochenend-/
+            # Reconnect-Cache-Clear). mapped_positions waere dann [] obwohl das Konto
+            # Positionen haelt -> die "if not portfolio"-Guards der Aufrufer greifen
+            # NICHT (Dict ist truthy) -> Bot koennte "ich halte nichts" denken und
+            # bereits offene Positionen blind DOPPELT kaufen. Die Account-Value-
+            # Subscription (GrossPositionValue) ist von reqPositions unabhaengig und
+            # bleibt gueltig: ist sie >0 bei leerer Positions-Liste, ist der Fetch
+            # unzuverlaessig -> None zurueckgeben, damit der Zyklus uebersprungen wird
+            # (fail-safe). Echt-flaches Konto (alles Cash) hat GrossPositionValue~0
+            # -> kein False-Positive.
+            if not mapped_positions and float(gross_pos_value or 0) > 1.0:
+                log.error(
+                    "get_portfolio: 0 Positionen ABER GrossPositionValue=%.2f -> "
+                    "Positions-Fetch unzuverlaessig (Timeout/Stale-Cache). Fail-safe: "
+                    "None zurueck (Trading-Zyklus wird uebersprungen, kein Blind-Doppelkauf).",
+                    gross_pos_value,
+                )
+                return None
+
             # v37h Tab-Audit-Day-2 (11.05.2026): Multi-Currency-Display.
             # Carlos's Konto: CHF=BASE, USD/GBP Cash-Loans + USD Aktien-Positionen.
             # NetLiquidation kommt nur in BASE (CHF). UnrealizedPnL kommt sowohl
