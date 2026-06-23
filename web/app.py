@@ -3480,12 +3480,29 @@ async def api_train_ml_status(user=Depends(require_auth)):
 # OPTIMIZER
 # ============================================================
 
+def _sanitize_json_floats(obj):
+    """Rekursiv NaN/Inf-Floats -> None. v37dx (PYTHON-FASTAPI-14): Starlette's
+    JSONResponse serialisiert mit allow_nan=False -> ein NaN/Inf irgendwo in der
+    Antwort wirft ValueError ('Out of range float values are not JSON compliant')
+    und der Endpoint liefert HTTP 500. NaN entsteht z.B. wenn der Optimizer eine
+    Kennzahl (Sharpe/Profit-Factor/Improvement) auf leeren/Null-Daten rechnete und
+    persistierte. Defensiv beim Ausliefern entschaerfen (None statt Crash)."""
+    import math
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_json_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json_floats(v) for v in obj]
+    return obj
+
+
 @app.get("/api/optimizer")
 async def api_optimizer(user=Depends(require_auth)):
     """Optimizer Status und History."""
     history = read_json_safe("optimization_history.json")
     if history:
-        return history
+        return _sanitize_json_floats(history)
     return {"runs": [], "last_run": None}
 
 
