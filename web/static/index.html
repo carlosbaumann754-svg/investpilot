@@ -933,6 +933,10 @@
 
     <!-- === BACKTEST TAB === -->
     <div id="tab-backtest" class="tab-content">
+        <!-- v37e: Alt-Motor-Verwechslungsschutz (Backtester laeuft auf TA-Strategie/Alt-Universum) -->
+        <div style="background:#7a5c00;color:#ffd966;padding:8px 12px;border-radius:6px;margin-bottom:14px;font-size:13px;line-height:1.5;">
+            <strong>ALT-MOTOR (TA)</strong> &mdash; Dieser Backtest laeuft auf der alten TA-Strategie / dem alten Universum, NICHT auf dem aktiven Fundamental-Signal-Stack-Motor. Die Kennzahlen hier (Sharpe, OOS, Profit-Factor) sind fuer den aktuellen Bot NICHT aussagekraeftig. Der neue Motor wird ueber die Karte &raquo;Stack-Validierung (Robustheit)&laquo; und die Spalte <strong>&alpha; IWM</strong> (Bot vs. Markt / Equity-Verlauf) gemessen.
+        </div>
         <!-- Actions -->
         <div class="grid-3">
             <div class="card" style="text-align:center">
