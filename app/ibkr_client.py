@@ -1577,6 +1577,14 @@ class IbkrBroker(BrokerBase):
         """
         try:
             from ib_insync import Stock
+            import re
+            # v37e (PYTHON-FASTAPI-15): kein IBKR-Qualify fuer Nicht-US-Ticker (z.B.
+            # chinesische A-Share-Codes wie '688008'). US-Stock-Ticker sind alpha
+            # (optional . -); rein-numerische/fremde Codes -> skip (sonst IBKR
+            # 'Error 200: No security definition' -> Sentry-Laerm + verschwendete Calls).
+            if not re.fullmatch(r"[A-Za-z][A-Za-z.\-]*", str(symbol)):
+                log.debug("get_recent_daily_closes: '%s' kein US-Ticker-Format -> kein IBKR-Qualify", symbol)
+                return []
             ib = self._get_ib()
             qc = ib.qualifyContracts(Stock(symbol, "SMART", "USD"))
             if not qc:
@@ -1605,7 +1613,13 @@ class IbkrBroker(BrokerBase):
         """
         try:
             from ib_insync import Stock
-            import math
+            import math, re
+            # v37e (PYTHON-FASTAPI-15): kein IBKR-Qualify fuer Nicht-US-Ticker (z.B.
+            # chinesische A-Share-Codes wie '688008') -> sonst IBKR 'Error 200: No
+            # security definition' -> Sentry-Laerm. US-Ticker sind alpha (optional . -).
+            if not re.fullmatch(r"[A-Za-z][A-Za-z.\-]*", str(symbol)):
+                log.debug("get_recent_daily_bars: '%s' kein US-Ticker-Format -> kein IBKR-Qualify", symbol)
+                return []
             ib = self._get_ib()
             qc = ib.qualifyContracts(Stock(symbol, "SMART", "USD"))
             if not qc:

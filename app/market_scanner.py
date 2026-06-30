@@ -636,6 +636,17 @@ def analyze_single_asset(symbol, asset_info):
     """
     yf_symbol = asset_info.get("yf", symbol)
 
+    # v37e (PYTHON-FASTAPI-15): Nicht-US-Ticker gar nicht erst analysieren. Fremde
+    # Codes (z.B. chinesische A-Shares '688008'/'3037' aus Discovery-Kandidaten)
+    # kennt yfinance nicht ('possibly delisted') und der IBKR-Fallback scheitert am
+    # Qualify ('Error 200' -> Sentry). US-Stock-Ticker sind alphabetisch (optional
+    # . -); rein-numerische/fremde -> sofort skip. sp600 (neuer Motor) ist rein
+    # alpha -> hier nie betroffen.
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z][A-Za-z.\-]*", str(yf_symbol or symbol)):
+        log.debug("analyze_single_asset: '%s' kein US-Ticker-Format -> uebersprungen", yf_symbol or symbol)
+        return None
+
     # --- Primaerquelle: yfinance ---
     if yf is not None:
         try:

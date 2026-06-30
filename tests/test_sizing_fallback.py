@@ -78,6 +78,28 @@ def test_sizing_fallback_budget_gate():
     assert ms._SIZING_FALLBACK["budget"] == 7
 
 
+def test_analyze_skips_non_us_ticker(monkeypatch):
+    # v37e: rein-numerische/fremde Codes (China-A-Shares) -> None, ohne yfinance/IBKR
+    fake_yf = MagicMock()
+    fake_yf.Ticker.side_effect = AssertionError("yf.Ticker darf bei Junk-Symbol nicht laufen")
+    monkeypatch.setattr(ms, "yf", fake_yf)
+
+    def _fb_must_not_run(*a, **k):
+        raise AssertionError("IBKR-Fallback darf bei Junk-Symbol nicht laufen")
+    monkeypatch.setattr(ms, "_sizing_fallback_bars", _fb_must_not_run)
+    for junk in ("688008", "3037", "300476", "002371", "12AB"):
+        assert ms.analyze_single_asset(junk, {"name": junk, "class": "stocks", "yf": junk}) is None
+
+
+def test_analyze_accepts_valid_us_ticker_format(monkeypatch):
+    # Gueltige US-Ticker (auch mit . und -) passieren den Guard
+    monkeypatch.setattr(ms, "yf", None)
+    monkeypatch.setattr(ms, "_sizing_fallback_bars", lambda sym, lookback_days=95: _synth_bars(60))
+    for ok in ("AAPL", "BRK.B", "BF-B"):
+        out = ms.analyze_single_asset(ok, {"name": ok, "class": "stocks", "yf": ok, "internal_id": 900999})
+        assert out is not None and out["symbol"] == ok
+
+
 def test_get_recent_daily_bars_parses_ohlcv(monkeypatch):
     import sys
     # ib_insync ist lokal nicht installiert -> Fake-Modul, damit `from ib_insync
