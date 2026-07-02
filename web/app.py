@@ -1686,7 +1686,13 @@ async def api_soak_progress(user=Depends(require_auth)):
         # Bot war durch die Asset-Klassen-Caps (max 40% stocks, %-von-investiert) bei
         # 3 Positionen festgenagelt UND die Exits (Trailing/Tranchen/SL) wurden vom
         # E6-Anti-Loop-Bug blockiert. Echter Soak (deploy + exits funktionieren) ab heute.
-        SOAK_START = "2026-06-11"          # valider Soak-Start (Caps geoeffnet + E6-Exit-Fix)
+        # v37e+ (02.07.2026): 2. Soak-Reset. Nach 30-Trade-Gate zeigte die Diagnose
+        # die Cash-Drag-Ursache: min_scanner_score=40 (Alt-Motor-WFO) war fuer den
+        # Fundamental-Motor fehl-skaliert -> Bot fror bei 11 Positionen ein (~55%
+        # investiert). Rekalibrierung Schritt B angewandt (SL -5->-8, min_scanner_score
+        # 40->25, max_positions 20->15). Der bisherige Soak mass eine strangulierte
+        # Config -> Uhr resetet auf die rekalibrierte Config.
+        SOAK_START = "2026-07-02T22:00:00"  # Reset auf rekalibrierte Config (Schritt B)
         GO_NOGO_TARGET = 50
         PHASE3_TARGET = 30
         CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")
@@ -1760,11 +1766,12 @@ async def api_soak_progress(user=Depends(require_auth)):
             "unrealized_pnl": round(unrealized, 2),
             "unrealized_currency": unrealized_ccy,
             "metrics": metrics,
-            "caveat": ("Misst neuer Kopf + alte Beine: die Exit-/Sizing-Werte "
-                       "(Time-Stop/SL/Kelly) sind noch TA-getunt. Gute fundamentale "
-                       "Picks werden evtl. zu frueh ausgestoppt -> die echte Edge "
-                       "wird hier eher UNTERschaetzt. Re-Kalibrierung erst nach "
-                       ">=30 geschlossenen Trades."),
+            "caveat": ("Rekalibrierte Config (ab 02.07.): SL -8%, min_scanner_score "
+                       "25, max_positions 15. Der Bot deployt jetzt breiter (~15 statt "
+                       "11 Positionen) statt bei einem Alt-Motor-Score-Gate einzufrieren. "
+                       "Frischer Soak misst diese Config -> die ersten Trades sind noch "
+                       "Uebergang (alt geoeffnet, neu geschlossen); belastbar ab ~10-15 "
+                       "geschlossenen Trades auf der neuen Config."),
         }
     except Exception as e:
         log.error(f"Soak-Progress Error: {e}")

@@ -297,3 +297,94 @@ def test_boot_drift_check_detects_and_restores(temp_data_dir, monkeypatch):
     persisted = load_config()
     assert persisted["demo_trading"]["stop_loss_pct"] == -3.0
     assert persisted["scanner"]["min_scanner_score"] == 40
+
+
+# ============================================================
+# MANUAL OVERRIDES (v37e+, 02.07.2026 — Post-Soak Schritt B)
+# ============================================================
+
+def _write_overrides(temp_data_dir, overrides):
+    from app.config_manager import save_json
+    save_json("manual_lock_overrides.json", overrides)
+
+
+def test_manual_overrides_win_over_window_mode(temp_data_dir):
+    """Bewusst gesetzte Overrides schlagen die (Alt-Motor-) WFO-Window-Mode."""
+    from app.wfo_lock import get_wfo_locked_params
+    _write_wfo_status(temp_data_dir, [
+        {"best_params": {"stop_loss_pct": -5.0, "min_scanner_score": 40}},
+    ] * 5)
+    _write_overrides(temp_data_dir, {
+        "stop_loss_pct": -8.0, "min_scanner_score": 25, "max_positions": 15,
+        "_meta": {"reason": "post-soak-recalibration"},
+    })
+    locked = get_wfo_locked_params()
+    assert locked["stop_loss_pct"] == -8.0     # Override schlaegt Window-Mode -5
+    assert locked["min_scanner_score"] == 25   # Override schlaegt Window-Mode 40
+    assert locked["max_positions"] == 15       # Override ohne Window-Daten
+    assert "_meta" not in locked               # _-Praefix (Doku) gefiltert
+
+
+def test_manual_overrides_apply_without_windows(temp_data_dir):
+    """Overrides greifen auch wenn wfo_status.json fehlt."""
+    from app.wfo_lock import get_wfo_locked_params
+    _write_overrides(temp_data_dir, {"stop_loss_pct": -8.0, "max_positions": 15})
+    assert get_wfo_locked_params() == {"stop_loss_pct": -8.0, "max_positions": 15}
+
+
+def test_max_positions_lock_enforced_via_override(temp_data_dir):
+    """max_positions wird (nur) via Override gelockt + auf die Config enforced."""
+    from app.wfo_lock import enforce_locks
+    _write_wfo_status(temp_data_dir, [
+        {"best_params": {"stop_loss_pct": -5.0, "min_scanner_score": 40}},
+    ] * 5)
+    _write_overrides(temp_data_dir, {
+        "stop_loss_pct": -8.0, "min_scanner_score": 25, "max_positions": 15,
+    })
+    config = {
+        "demo_trading": {"stop_loss_pct": -5.0, "min_scanner_score": 40, "max_positions": 20},
+        "scanner": {"min_scanner_score": 40},
+    }
+    changes = enforce_locks(config)
+    assert config["demo_trading"]["stop_loss_pct"] == -8.0
+    assert config["demo_trading"]["min_scanner_score"] == 25
+    assert config["scanner"]["min_scanner_score"] == 25       # 2. Pfad mit-synchron
+    assert config["demo_trading"]["max_positions"] == 15
+    assert {c["param"] for c in changes} == {
+        "stop_loss_pct", "min_scanner_score", "max_positions"}
+
+
+def test_no_overrides_file_backward_compat(temp_data_dir):
+    """Ohne Override-File: reines Window-Mode-Verhalten, max_positions NICHT gelockt."""
+    from app.wfo_lock import get_wfo_locked_params
+    _write_wfo_status(temp_data_dir, [
+        {"best_params": {"stop_loss_pct": -3.0, "min_scanner_score": 40}},
+    ] * 5)
+    locked = get_wfo_locked_params()
+    assert locked["stop_loss_pct"] == -3.0
+    assert locked["min_scanner_score"] == 40
+    assert "max_positions" not in locked
+
+
+def test_malformed_overrides_ignored(temp_data_dir):
+    """Nicht-Dict Override-File (kaputt) -> ignoriert, Window-Mode bleibt."""
+    from app.wfo_lock import get_wfo_locked_params
+    _write_wfo_status(temp_data_dir, [{"best_params": {"stop_loss_pct": -3.0}}] * 3)
+    _write_overrides(temp_data_dir, ["kaputt"])   # kein Dict
+    assert get_wfo_locked_params()["stop_loss_pct"] == -3.0
+
+
+def test_detect_drift_clean_when_config_matches_overrides(temp_data_dir):
+    """Config == Override-Werte -> kein Drift (kein Boot-Alert)."""
+    from app.wfo_lock import detect_drift
+    _write_wfo_status(temp_data_dir, [
+        {"best_params": {"stop_loss_pct": -5.0, "min_scanner_score": 40}},
+    ] * 5)
+    _write_overrides(temp_data_dir, {
+        "stop_loss_pct": -8.0, "min_scanner_score": 25, "max_positions": 15,
+    })
+    config = {
+        "demo_trading": {"stop_loss_pct": -8.0, "min_scanner_score": 25, "max_positions": 15},
+        "scanner": {"min_scanner_score": 25},
+    }
+    assert detect_drift(config) == {}

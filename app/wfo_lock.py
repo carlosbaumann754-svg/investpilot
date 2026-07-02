@@ -39,6 +39,18 @@ Locked Keys
 - demo_trading.stop_loss_pct  (im Backtester benannt 'stop_loss_pct')
 - demo_trading.take_profit_pct (NEU v37ct)
 - scanner.min_scanner_score   (in der Live-Config aliased)
+- demo_trading.max_positions  (NEU v37e+, nur via manual_overrides)
+
+Manuelle Overrides (v37e+, 02.07.2026 — Post-Soak-Rekalibrierung Schritt B)
+---------------------------------------------------------------------------
+``data/manual_lock_overrides.json`` uebersteuert die WFO-Mode fuer bewusst
+rekalibrierte Params. Anlass: die WFO-Locks stammen vom ALT-TA-Backtester und
+sind fuer den neuen Fundamental-Motor fehl-skaliert (min_scanner_score=40 =
+bot_score>=40 = stack>=70 -> nur ~11 Namen -> Bot friert bei 11 Positionen ein,
+$369k Cash brach). Overrides tragen die via signal_stack_backtester validierten
+Werte (SL -8, min_scanner_score 25, max_positions 15) und haben Vorrang, BIS
+eine echte Neu-Motor-WFO (Task #4) wfo_status.json neu baselined. Separates File,
+damit der monatliche WFO-Cron sie nicht ueberschreibt.
 
 v37ct (2026-05-03): take_profit_pct jetzt auch gelockt. Vorher BEWUSST
 ausgenommen mit Begruendung 'WFO-Range war 9-18, kein klarer Modus'.
@@ -70,7 +82,43 @@ LOCKED_KEYS = [
     # (liest scanner.min_scanner_score) konsistent gelockt sind. Vorher: 30 vs
     # 40 unsynchron -> Backtest-Live-Divergenz im WFO-Sharpe.
     ("min_scanner_score", "demo_trading.min_scanner_score", "max"),
+    # v37e+ (02.07.2026, Post-Soak-Rekalibrierung Schritt B): max_positions als
+    # Deployment-Control gelockt. Hat KEINE WFO-Window-Daten -> greift NUR via
+    # manual_overrides (data/manual_lock_overrides.json). Picker "min" = konservativ.
+    ("max_positions", "demo_trading.max_positions", "min"),
 ]
+
+
+# ============================================================
+# READ: Manuelle Overrides (Post-Soak-Rekalibrierung)
+# ============================================================
+
+def _load_manual_overrides() -> dict[str, Any]:
+    """Liest data/manual_lock_overrides.json — bewusst gesetzte, validierte
+    Strategie-Werte, die die (ggf. veraltete Alt-Motor-) WFO-Mode uebersteuern.
+
+    v37e+ (02.07.2026): Anlass = Post-Soak-Rekalibrierung. Die WFO-Locks stammten
+    vom Alt-TA-Backtester (min_scanner_score=40/50, SL=-5) und sind fuer den neuen
+    Fundamental-Signal-Stack-Motor fehl-skaliert (bot_score=(stack-50)*2 -> nur ~11
+    Namen ueber 40 -> Bot friert bei 11 Positionen ein). Diese Overrides tragen die
+    via signal_stack_backtester validierten Werte und haben Vorrang, BIS eine echte
+    Neu-Motor-WFO (Task #4) wfo_status.json neu baselined.
+
+    Separates File (nicht wfo_status.json) damit der monatliche WFO-Cron die
+    Overrides NICHT ueberschreibt. Keys mit '_'-Praefix (z.B. _meta) sind Doku.
+
+    Returns:
+        Dict {param_name: value}. Leer wenn File fehlt/unlesbar (Backward-Compat).
+    """
+    try:
+        from app.config_manager import load_json
+        ov = load_json("manual_lock_overrides.json") or {}
+    except Exception as e:
+        logger.debug(f"manual_lock_overrides.json nicht ladbar: {e}")
+        return {}
+    if not isinstance(ov, dict):
+        return {}
+    return {k: v for k, v in ov.items() if not str(k).startswith("_")}
 
 
 # ============================================================
@@ -78,25 +126,26 @@ LOCKED_KEYS = [
 # ============================================================
 
 def get_wfo_locked_params() -> dict[str, Any]:
-    """Liest die locked params aus dem letzten WFO-Run.
+    """Liest die locked params aus dem letzten WFO-Run, ueberlagert mit
+    manuellen Overrides (Post-Soak-Rekalibrierung, haben Vorrang).
 
     Returns:
-        Dict {param_name: value} mit den Mode-Werten ueber alle WFO-Windows.
-        Leeres Dict wenn wfo_status.json fehlt oder keine Windows hat.
+        Dict {param_name: value} mit den Mode-Werten ueber alle WFO-Windows,
+        danach _load_manual_overrides() drueber (manual gewinnt, kann auch Keys
+        OHNE Window-Daten hinzufuegen, z.B. max_positions).
+        Leeres Dict nur wenn weder Windows noch Overrides existieren.
     """
     try:
         from app.config_manager import load_json
         wfo = load_json("wfo_status.json") or {}
     except Exception as e:
         logger.warning(f"wfo_status.json nicht ladbar: {e}")
-        return {}
+        wfo = {}
 
     if not isinstance(wfo, dict):
-        return {}
+        wfo = {}
 
     windows = wfo.get("windows", []) if isinstance(wfo.get("windows"), list) else []
-    if not windows:
-        return {}
 
     locked: dict[str, Any] = {}
     for param_name, _, picker in LOCKED_KEYS:
@@ -124,6 +173,12 @@ def get_wfo_locked_params() -> dict[str, Any]:
             locked[param_name] = max(candidates)
         else:
             locked[param_name] = candidates[0]
+
+    # v37e+ (Post-Soak Schritt B): manuelle Overrides ueberlagern die WFO-Mode.
+    # Bewusst gesetzte, via signal_stack_backtester validierte Werte gewinnen —
+    # kann auch Params OHNE Window-Daten setzen (z.B. max_positions).
+    for k, v in _load_manual_overrides().items():
+        locked[k] = v
 
     return locked
 

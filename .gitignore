@@ -21,6 +21,9 @@ data/universe_health.json
 data/backtest_history.json
 data/backtest_results.json
 data/backtest_status.json
+# v37e+ (02.07.2026): manuelle WFO-Lock-Overrides = Live-Runtime-State (nur auf VPS,
+# darf NICHT committet werden — analog data/config.json Drift-Landmine).
+data/manual_lock_overrides.json
 # Stress-Test-Smoke-Inputs sind ephemer (echte Records liegen in
 # investpilot_weiterentwicklung/).
 stress_smoke_test.txt
