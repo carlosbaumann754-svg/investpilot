@@ -84,3 +84,24 @@ Validierungs-Hierarchie: **Live > WFO > Optimizer/Single-Run.** Kein Wert wird l
 ---
 
 **Kernaussage:** Der Soak zeigt mit Daten, dass die TA-getunten Exits (v.a. der −5 %-Stop-Loss) + die hohe Cash-Quote den fundamentalen Motor in der Rally ausbremsen. Das ist der erwartete „neuer Kopf, alte Beine"-Effekt. Nach ≥30 Trades: Counterfactual rechnen → 1 Hebel isoliert → WFO-validieren → live. Bis dahin: **beobachten, α IWM verfolgen, nicht eingreifen.**
+
+---
+
+# VALIDIERUNG — Schritt A abgeschlossen (02.07.2026, 30er-Gate erreicht)
+
+**Werkzeug:** `app/signal_stack_backtester.py` (neu, motor-korrekt, committet — ersetzt das nicht-reproduzierbare `stack_wfo_baseline`-Einmal-Skript; = zugleich WFO-Re-Baseline / Task #4).
+
+**Diagnose (read-only, 30 Live-Trades):**
+- **Counterfactual:** 60 % der Stop-Losses waren VERFRÜHT (Aktie kam über den Einstieg zurück). → SL zu eng.
+- **Cash-Drag-Zerlegung:** Ø 54 % investiert → ~2.4 % der −2.45 % α-Lücke ist reiner Cash-Drag; die investierte Quote lag ≈ IWM. → **Cash-Drag ist der PRIMÄRE Treiber der Underperformance, nicht die Exits.**
+
+**Backtest-Validierung (2019–2026, incl. Crash 2020 + Bär 2022, top_n=15, trailing 6/4):**
+- **SL-Sweep:** −5 % (aktuell) = zu eng; **~−10 % = risiko-adjustiertes Optimum** (Sharpe 1.27 vs 1.23, Return +331 % vs +240 %); −8 % konservativ/bär-sicher (bester im 2022-Bären); **„kein SL" katastrophal** (−31 % MaxDD). → Stop bleibt Pflicht, aber weiter.
+- **Deployment-Sweep:** **Sharpe KONSTANT (1.23) über alle Level** → Cash-Quote ist ein **reiner Risiko-Regler** (mehr Deploy = proportional mehr Return UND Drawdown, gleiche Effizienz). Bot ist effizient, nur konservativ.
+- **Motor-Edge bestätigt:** schlägt IWM risiko-adjustiert (Sharpe 1.2+ vs 0.57) über 8 Jahre inkl. Crashs. Starke Cutover-Confidence.
+- **Caveat:** Survivorship (sp600 = heutige Member) bläht ABSOLUTE Renditen; Sharpe + relative Rangfolge robust. Lean-MVP.
+
+**Validierter Vorschlag (→ Schritt B, live anwenden):**
+1. **SL: −5 % → ~−10 %** (−8 % konservativ). E6-Catastrophic-Stop (−20 %) bleibt Backstop.
+2. **Deployment: ~54 % → moderat höher (~70–80 %)** — Risiko-Appetit-Entscheid (gleicher Sharpe, mehr Return + Drawdown). Nicht 100 % (Dry-Powder/Margin-Puffer).
+3. **Reihenfolge B:** Deployment zuerst (größter Hebel), dann SL. Live-Anwendung = Soak-Uhr-Reset auf die verbesserte Config (Carlos-Entscheid).
