@@ -105,3 +105,47 @@ Validierungs-Hierarchie: **Live > WFO > Optimizer/Single-Run.** Kein Wert wird l
 1. **SL: −5 % → ~−10 %** (−8 % konservativ). E6-Catastrophic-Stop (−20 %) bleibt Backstop.
 2. **Deployment: ~54 % → moderat höher (~70–80 %)** — Risiko-Appetit-Entscheid (gleicher Sharpe, mehr Return + Drawdown). Nicht 100 % (Dry-Powder/Margin-Puffer).
 3. **Reihenfolge B:** Deployment zuerst (größter Hebel), dann SL. Live-Anwendung = Soak-Uhr-Reset auf die verbesserte Config (Carlos-Entscheid).
+
+---
+
+# SCHRITT B — LIVE ANGEWANDT (02.07.2026)
+
+**Carlos-Entscheid (AskUserQuestion):** SL −8 % · Deployment ~70 % · jetzt anwenden + Soak-Reset.
+
+## Die ECHTE Deployment-Ursache (Live-Diagnose, nicht was wir annahmen)
+
+Die geplante „Deployment über Positionsgröße (max_fraction)"-Idee hätte **nichts bewirkt.** Live-Diagnose der Kauf-Schleife ergab:
+
+- Der Bot fand **jeden Zyklus 85 kaufbare Kandidaten**, hatte 9 freie Slots + $369k Cash — und kaufte **0** (35 Zyklen/3 h, kein Versuch).
+- Ursache: **`min_scanner_score = 40`** filtert `bot_score ≥ 40` (= `stack_score ≥ 70`). Nur ~11 Namen im Universum erreichen das — **und die hielt der Bot bereits alle**. → Einfrieren bei 11 Positionen, $369k brach.
+- **Das 40 war ein Alt-TA-Motor-WFO-Wert** (v37r WFO-Lock, Run 07.06. auf dem alten `backtester.py`). `bot_score = (stack_score−50)×2` skaliert den neuen Fundamental-Score anders → die 40 ist fehl-skaliert. Reinste „neuer Kopf, alte Beine"-These, konkrete Schraube.
+- **Kelly lief ohnehin auf Fallback** (`negatives Edge f*=−0.047, winrate 35.9%` — kontaminiert durch Alt-Motor-Trades in der History), also war `max_fraction` nie der bindende Hebel. Der echte Hebel ist `min_scanner_score`.
+- **Das ist der Mechanismus hinter der −2.45 % α-Lücke:** kein „Sizing zu klein / Cash bewusst gehalten", sondern ein Score-Gate, das den Motor bei 11 Namen fesselte.
+
+## Angewandte Änderungen (live, auf der laufenden Config — NICHT git-committet)
+
+| Param | Alt | Neu | Mechanismus |
+|---|---|---|---|
+| `demo_trading.stop_loss_pct` | −5 | **−8** | WFO-Lock via `manual_lock_overrides.json` |
+| `scanner.min_scanner_score` + `demo_trading.min_scanner_score` | 40 | **25** | WFO-Lock via `manual_lock_overrides.json` (bot_score ≥ 25 = STRONG_BUY-Grad) |
+| `demo_trading.max_positions` | 20 | **15** | WFO-Lock (Backstop) |
+| `portfolio_sizing.max_positions_by_capital['999999']` | 20 | **15** | direkt in config.json — DER effektive Cap (`resolve_max_positions` nutzt die Tier-Map, nicht `demo_trading.max_positions`) |
+
+**Warum manual_overrides (v37e+ wfo_lock-Erweiterung):** Der v37r-WFO-Lock erzwang die Alt-Motor-Werte bei jedem `save_config` + Boot. Ein reiner config-Edit wäre revertiert worden. Statt den Schutz zu löschen, überlagert `data/manual_lock_overrides.json` die veraltete Alt-Motor-WFO-Mode mit den validierten Werten — der Schutz bleibt aktiv (schützt jetzt die NEUEN Werte), auditierbar, reversibel. Bis zur echten Neu-Motor-WFO-Re-Baseline (Task #4).
+
+## Erwarteter Effekt (verifiziert, Buy-Execution time-gated auf nächste Session)
+
+- Trichter offen: **28 freie Kandidaten** bei min_score 25 (FIZZ 39, ENOV 39, KW 35, GIII 34, …).
+- Cap 15, gehalten 11 → **available_slots 4** → Bot kauft 4 dazu → **15 Positionen ≈ 70 % investiert.**
+- `resolve_max_positions` verifiziert = 15. Config-Werte verifiziert. `detect_drift` leer (Locks erfüllt, TP 12 unangetastet).
+- Käufe laufen zur nächsten US-Session (Intraday-Timing-Filter blockt die letzten 30 Min).
+
+## Soak-Reset
+
+`SOAK_START` 2026-06-11 → **2026-07-02T22:00** (web/app.py). Der bisherige Soak mass eine strangulierte Config (11 Positionen, Score-Gate). Frische Uhr misst die rekalibrierte Config. Erste Trades sind Übergang (alt geöffnet/neu geschlossen); belastbar ab ~10–15 Closes auf der neuen Config. **Cutover-Datum (04.08.) muss neu bewertet werden** (0 Trades ab 02.07.).
+
+## Rest-Risiko / Offen
+
+- Die **Tier-Map ist NICHT WFO-gelockt** (nur direkt in config.json). Sie wird von keinem Auto-Tuner geschrieben → stabil, aber theoretisch cloud-restore-anfällig. Falls nötig später via manual_overrides locken (bräuchte LOCKED_KEYS-Eintrag + Rebuild).
+- **Verifikation der echten Buy-Execution + Deployment-Anstieg: 03.07. nach US-Open.**
+- Survivorship-Caveat des Backtests bleibt (absolute Renditen optimistisch; relative/Sharpe robust).
