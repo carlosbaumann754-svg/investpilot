@@ -69,6 +69,21 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+AUDIT_METADATA = {
+    "purpose": "WFO-Lock: schuetzt bewusst gesetzte Strategie-Params (stop_loss_pct, "
+               "take_profit_pct, min_scanner_score, max_positions) vor Auto-Apply-"
+               "Ueberschreibung durch Optimizer/ML/Backtest/Watchdog/Cloud-Restore. "
+               "enforce_locks() greift bei jedem save_config, boot_drift_check() beim "
+               "Bot-Start. data/manual_lock_overrides.json uebersteuert die (ggf. "
+               "veraltete Alt-Motor-) WFO-Window-Mode mit validierten Post-Soak-Werten.",
+    "config_section": None,
+    "state_files": ["wfo_status.json", "manual_lock_overrides.json"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": "detect_drift(config) == {} (Live-Config matcht die Locks)",
+    "added_in": "v37r (WFO-Lock), v37e+ (manual_overrides + max_positions-Lock)",
+}
+
 #: WFO-Lock-Definitionen. (param_key_in_wfo, config_path_dotted, conservative_picker)
 #: conservative_picker entscheidet bei Tie welcher Wert gewaehlt wird:
 #:   "min" = niedrigster Wert (strenger SL = naeher zu null = -3 schlaegt -5)
