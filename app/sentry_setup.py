@@ -271,6 +271,17 @@ _SENTRY_NOISE_PATTERNS = (
     "Error 1101, reqId",
     "Error 1102, reqId",
     "Connectivity between IBKR and Trader Workstation has been restored",
+    # v37e+ (03.07.2026): IBKR Error 200 = "No security definition has been found".
+    # Ausgeloest von sp600-Kandidaten mit gueltigem US-Ticker-FORMAT, die IBKR aber
+    # nicht kennt (delisted/umbenannt/illiquid, z.B. SUNMED) -> qualifyContracts
+    # findet nichts. Der v37e-Format-Guard (blockt nur numerische/fremde Codes wie
+    # China-A-Shares) faengt diese NICHT, weil sie wie normale Ticker aussehen.
+    # Der Bot ueberspringt das Symbol sauber (kein Buy ohne Contract) -> reiner
+    # Library-ERROR-Log-Laerm, kein Bot-Bug. Haeufiger seit min_scanner_score 40->25
+    # (breiterer Kandidaten-Trichter). PYTHON-FASTAPI-15 (China-Codes, Format-Guard)
+    # + PYTHON-FASTAPI-16 (SUNMED, dieser Filter) = gleiche IBKR-Error-200-Familie.
+    "Error 200, reqId",
+    "No security definition has been found",
     "Connectivity between IBKR",
     # yfinance-Noise: delisted/ungültige Symbole im Universe (z.B. MC.PA = LVMH
     # Paris-Börse). R-A15 External-Quote-Fallback probiert Polygon/Finnhub als

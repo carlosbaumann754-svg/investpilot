@@ -341,6 +341,18 @@ def test_noise_filter_drops_ibkr_error_300():
     assert _is_noise("Can't find EId with tickerId:42") is True
 
 
+def test_noise_filter_drops_ibkr_error_200_no_security_definition():
+    """v37e+ (PYTHON-FASTAPI-16): Error 200 (No security definition) fuer sp600-
+    Kandidaten die IBKR nicht kennt (gueltiges Ticker-Format, aber delisted/umbenannt,
+    z.B. SUNMED). Bot ueberspringt das Symbol sauber -> reiner Library-Noise."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise(
+        "Error 200, reqId 19: No security definition has been found for the request, "
+        "contract: Stock(symbol='SUNMED', exchange='SMART', currency='USD')"
+    ) is True
+    assert _is_noise("No security definition has been found for the request") is True
+
+
 def test_noise_filter_drops_stale_portfolio_filter():
     """v37ce Boot-Race-Detection ist erwuenscht, kein Bug."""
     from app.sentry_setup import _is_noise
