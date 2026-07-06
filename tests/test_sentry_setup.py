@@ -353,6 +353,17 @@ def test_noise_filter_drops_ibkr_error_200_no_security_definition():
     assert _is_noise("No security definition has been found for the request") is True
 
 
+def test_noise_filter_drops_unresolvable_contract_at_buy():
+    """v37e+ (PYTHON-FASTAPI-17): delistetes Symbol (KW) kommt bis zum client.buy();
+    _place_order faengt die Contract-Resolution-RuntimeError (Kauf sauber uebersprungen),
+    loggt sie aber via log.exception -> Sentry. Kein Bot-Bug -> Noise."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise(
+        "Order failed: IBKR konnte KW (STK auf SMART) nicht aufloesen "
+        "— evtl. Symbol falsch oder kein Marktzugang."
+    ) is True
+
+
 def test_noise_filter_drops_stale_portfolio_filter():
     """v37ce Boot-Race-Detection ist erwuenscht, kein Bug."""
     from app.sentry_setup import _is_noise

@@ -282,6 +282,15 @@ _SENTRY_NOISE_PATTERNS = (
     # + PYTHON-FASTAPI-16 (SUNMED, dieser Filter) = gleiche IBKR-Error-200-Familie.
     "Error 200, reqId",
     "No security definition has been found",
+    # v37e+ (06.07.2026, PYTHON-FASTAPI-17): Folge-Variante von Error 200. Wenn ein
+    # nicht-aufloesbares Symbol (delisted, z.B. KW) bis zum client.buy() durchkommt,
+    # scheitert _place_order an der Contract-Aufloesung und faengt die RuntimeError
+    # ab (return None -> Kauf sauber uebersprungen), loggt sie aber via log.exception
+    # auf ERROR-Level -> Sentry. Kein Crash, kein Bot-Bug (Symbol wird nicht gekauft).
+    # ROOT-CAUSE (separates Follow-up): delistete sp600-Namen scoren hoch auf
+    # veralteten EDGAR-Fakten -> gehoeren via Universe-Cleanup/Denylist raus.
+    "nicht aufloesen",
+    "Symbol falsch oder kein Marktzugang",
     "Connectivity between IBKR",
     # yfinance-Noise: delisted/ungültige Symbole im Universe (z.B. MC.PA = LVMH
     # Paris-Börse). R-A15 External-Quote-Fallback probiert Polygon/Finnhub als
