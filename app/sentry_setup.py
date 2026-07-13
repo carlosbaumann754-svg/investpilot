@@ -319,6 +319,13 @@ _SENTRY_NOISE_PATTERNS = (
     # → Restbestand-Logging hier filtern.
     "completed orders request timed out",
     "open orders request timed out",
+    # v37e+ (13.07.2026, PYTHON-FASTAPI-18): Geschwister der beiden obigen — gleiche
+    # IBKR-Reconnect-Familie, war schlicht uebersehen. Tritt beim ib-gateway-Restart
+    # (Wochenende/off-hours, silent-stale Pool -> fresh reconnect) auf; der Bot
+    # recovered selbst (Pool-Invalidation) + get_portfolio-Fail-Safe (v37dy) verhindert
+    # Fehl-Aktion. Der PERSISTENTE Broker-Down-Fall ist separat via Broker-Healthcheck
+    # + Watchdog-Self-Test #11 + Pushover abgedeckt (NICHT ueber diesen ib_insync-Log).
+    "positions request timed out",
     "Broker-Healthcheck fehlgeschlagen",
     "Broker-Healthcheck attempt",
 )

@@ -364,6 +364,17 @@ def test_noise_filter_drops_unresolvable_contract_at_buy():
     ) is True
 
 
+def test_noise_filter_drops_positions_request_timeout():
+    """v37e+ (PYTHON-FASTAPI-18): 'positions request timed out' — Geschwister von
+    completed/open-orders-timeout (IBKR-Reconnect-Familie, ib-gateway-Restart). Bot
+    recovered selbst (Pool-Invalidation) + get_portfolio-Fail-Safe -> kein Bot-Bug."""
+    from app.sentry_setup import _is_noise
+    assert _is_noise("positions request timed out") is True
+    # die schon vorhandenen Geschwister bleiben ebenfalls gefiltert
+    assert _is_noise("completed orders request timed out") is True
+    assert _is_noise("open orders request timed out") is True
+
+
 def test_noise_filter_drops_stale_portfolio_filter():
     """v37ce Boot-Race-Detection ist erwuenscht, kein Bug."""
     from app.sentry_setup import _is_noise
