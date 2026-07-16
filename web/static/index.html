@@ -388,7 +388,8 @@
         </div>
 
         <!-- SURVIVORSHIP-BIAS-AUDIT (E4, Q1 Foundation) -->
-        <div class="card" id="survivorship-card">
+        <!-- v37e+ (16.07.2026): ausgeblendet — mass die Survivorship-Verzerrung des ALT-TA-Backtests; der neue "Stack-Validierung"-Card deckt das ab. Code dormant. -->
+        <div class="card" id="survivorship-card" style="display:none">
             <div class="card-title">Ueberlebenden-Verzerrung-Check<span class="tip" data-tip="Pruefung ob unsere Backtest-Ergebnisse zu optimistisch sind. Hintergrund: Wenn man heute auf historische Kurse schaut, fehlen dort alle Firmen die in den letzten Jahren pleite gegangen oder von der Boerse genommen wurden — der Backtest sieht so kuenstlich gut aus weil nur die Gewinner ueberlebt haben. Dieser Check rechnet die Verzerrung heraus und liefert eine ehrlichere Rendite-Erwartung.">?</span></div>
             <div id="surv-state-summary" class="card-sub" style="margin-bottom:6px;">Lade...</div>
             <details id="surv-card-details">
@@ -829,7 +830,8 @@
              E11+E12+E13 sind im Q1-Backlog geplant. -->
 
         <!-- META-LABELER STATUS -->
-        <div class="card" id="meta-labeler-card">
+        <!-- v37e+ (16.07.2026): ausgeblendet — Meta-Labeler ist Shadow-Mode + das ML-Training ist deaktiviert (wird nie scharf). Totes Experiment; Code dormant. -->
+        <div class="card" id="meta-labeler-card" style="display:none">
             <div class="card-title">Meta-Labeler (Beobachtungs-Modus)<span class="tip" data-tip="Zweite KI die im Hintergrund mitlernt: Sie schaut sich jeden Trade des Haupt-Bots an und merkt sich Muster wie 'wenn die Marktlage so-und-so ist, geht dieser Trade meistens auf'. Greift erst live ein, wenn sie ueber Wochen bewiesen hat dass sie zuverlaessig richtig liegt.">?</span></div>
             <div id="meta-status-badge" class="badge badge-blue" style="margin-bottom:12px;">--</div>
             <div class="grid-3">
@@ -868,7 +870,8 @@
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="generateReport()">Report generieren</button>
                 <button class="btn btn-secondary" style="width:100%;margin-top:8px" onclick="downloadReportPdf()">PDF herunterladen</button>
             </div>
-            <div class="card">
+            <!-- v37e+ (16.07.2026): ausgeblendet — Universum ist fix (sp600); Discovery obsolet + zog Muell-Symbole. Feature bleibt manuell dispatchbar. -->
+            <div class="card" style="display:none">
                 <div class="card-title">Asset Discovery<span class="tip" data-tip="Der Bot sucht im US-Aktienmarkt + Crypto-Universe nach neuen interessanten Symbolen die er noch nicht kennt und bewertet ob sie zur Strategie passen. Universe-Filter (Strategy-A) sortiert anschliessend Schwache aus. Laeuft automatisch jeden Freitag 19:00 CEST via GitHub Action.">?</span></div>
                 <div class="card-sub">Universe nach neuen Assets durchsuchen</div>
                 <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="runDiscovery()">Discovery starten</button>
@@ -900,7 +903,8 @@
         </div>
 
         <!-- Discovery Results -->
-        <div class="card" id="discovery-results">
+        <!-- v37e+ (16.07.2026): ausgeblendet — Discovery-Ergebnisse (fixes sp600-Universum, obsolet). -->
+        <div class="card" id="discovery-results" style="display:none">
             <div class="card-title">Discovery Ergebnisse<span class="tip" data-tip="Ergebnisse der letzten automatischen Suche nach neuen handelbaren Wertpapieren. Der Bot durchsucht regelmaessig den Markt nach interessanten neuen Aktien/ETFs die er noch nicht kennt.">?</span></div>
             <div id="disc-freshness" class="card-sub" style="margin-bottom:10px;font-size:12px;color:var(--text-dim);">Lade...</div>
             <div class="grid-3">
