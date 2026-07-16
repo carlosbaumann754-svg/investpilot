@@ -388,3 +388,25 @@ def test_detect_drift_clean_when_config_matches_overrides(temp_data_dir):
         "scanner": {"min_scanner_score": 25},
     }
     assert detect_drift(config) == {}
+
+
+def test_manual_override_min_rr_and_tier_map(temp_data_dir):
+    """v37e+ (16.07.): min_risk_reward_ratio (Skalar) + max_positions_by_capital (Dict)
+    via manual_overrides gelockt — Cloud-Restore-Schutz der Rekalibrierungs-Werte."""
+    from app.wfo_lock import get_wfo_locked_params, enforce_locks, detect_drift
+    _write_overrides(temp_data_dir, {
+        "min_risk_reward_ratio": 1.4,
+        "max_positions_by_capital": {"3000": 6, "10000": 10, "30000": 15, "999999": 15},
+    })
+    locked = get_wfo_locked_params()
+    assert locked["min_risk_reward_ratio"] == 1.4
+    assert locked["max_positions_by_capital"]["999999"] == 15
+    # enforce auf eine driftende Config (R/R weg -> Default 2.0; Tier-Map top 20)
+    config = {
+        "leverage": {"min_risk_reward_ratio": None},
+        "portfolio_sizing": {"max_positions_by_capital": {"3000": 6, "10000": 10, "30000": 15, "999999": 20}},
+    }
+    enforce_locks(config)
+    assert config["leverage"]["min_risk_reward_ratio"] == 1.4
+    assert config["portfolio_sizing"]["max_positions_by_capital"]["999999"] == 15
+    assert detect_drift(config) == {}     # jetzt gematcht -> kein Drift, kein Alert

@@ -80,6 +80,18 @@ V12_DISABLED_SYMBOLS = [
     # greift vor dem Filter) -> hier gezielt deaktivieren, damit der Scanner es
     # gar nicht erst zu fetchen versucht. Bleibt im Universe-Filter sichtbar.
     "VITAX",
+    # v37e+ (16.07.2026): Universe-Cleanup — die 25 to_disable-Vorschlaege des
+    # bot-eigenen Universe-Health-Watchers umgesetzt (>=7 Fehl-Checks in Folge bzw.
+    # no_price). Delistete/fusionierte/umbenannte sp600-Namen, die auf veralteten
+    # EDGAR-Fakten noch hoch scoren -> verschwendete Buy-Slots + Rand-Sentry-Fehler
+    # (KW=PYTHON-FASTAPI-17, AMWD/FDP=no_price seit Tagen; BBT=ex-BB&T/Truist etc.).
+    # SUNMED BEWUSST NICHT dabei (Health-Watcher not_ok=0 -> hat sich erholt).
+    # Bleiben im Universe-Filter sichtbar (nur kein Trade); Health-Watcher hebt sie
+    # bei Erholung selbst wieder auf OK -> dann re-enable-Kandidat.
+    "AMWD", "KW", "FDP",                                    # no_price (klar delisted)
+    "ADAM", "AGNT", "AMTM", "BBT", "BTSG", "CALY", "CENTA", "COCO", "CON",
+    "CTKB", "CURB", "CVSA", "DCH", "ECG", "EFOR", "ESI", "GTM", "HTO",
+    "INVX", "JBTM", "LIF", "OPLN",                          # 7 Fehl-Checks in Folge
 ]
 
 V12_SECTIONS: dict[str, dict[str, Any]] = {

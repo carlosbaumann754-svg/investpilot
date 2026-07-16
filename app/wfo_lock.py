@@ -101,6 +101,15 @@ LOCKED_KEYS = [
     # Deployment-Control gelockt. Hat KEINE WFO-Window-Daten -> greift NUR via
     # manual_overrides (data/manual_lock_overrides.json). Picker "min" = konservativ.
     ("max_positions", "demo_trading.max_positions", "min"),
+    # v37e+ (16.07.2026): die Rekalibrierungs-Werte, die NICHT im demo_trading/scanner
+    # liegen, gegen Cloud-Restore-Revert schuetzen (nur via manual_overrides):
+    # - min_risk_reward_ratio: der R/R-Gate-Fix (2.0->1.4), der die Buys entblockte;
+    #   faellt er weg -> Code-Default 2.0 -> ALLE Aktien-Buys wieder blockiert.
+    # - max_positions_by_capital: die Tier-Map ist der EFFEKTIVE Positions-Cap
+    #   (resolve_max_positions nutzt sie, nicht demo_trading.max_positions);
+    #   Revert auf '999999':20 -> Deployment driftet Richtung ~90%.
+    ("min_risk_reward_ratio", "leverage.min_risk_reward_ratio", "max"),
+    ("max_positions_by_capital", "portfolio_sizing.max_positions_by_capital", "min"),
 ]
 
 
