@@ -799,13 +799,15 @@
                 <div class="card-title">Sharpe<span class="tip" data-tip="Misst, wie gut die Rendite im Verhaeltnis zum Risiko ist. Ueber 1 = gut, ueber 2 = sehr gut. Je hoeher, desto besser.">?</span></div>
                 <div class="card-value" style="font-size:18px" id="brain-sharpe">--</div>
             </div>
-            <div class="card">
+            <!-- v37e+ (16.07.2026): ausgeblendet — Brain-"Regeln" (learn_rules = _legacy_learn_rules_unused), steuert den Fundamental-Motor nicht. -->
+            <div class="card" style="display:none">
                 <div class="card-title">Regeln<span class="tip" data-tip="Anzahl der Regeln, die der Bot aus seiner Erfahrung gelernt hat (z.B. 'Asset X funktioniert bei VIX unter 20 gut').">?</span></div>
                 <div class="card-value" style="font-size:18px" id="brain-rules">--</div>
             </div>
         </div>
 
-        <div class="card">
+        <!-- v37e+ (16.07.2026): ausgeblendet — Brain-Instrument-Scores (Win-Rate-basierte Alt-Bewertung), vom Trader NICHT gelesen, steuert den Fundamental-Motor nicht. -->
+        <div class="card" style="display:none">
             <div class="card-title">Instrument Scores<span class="tip" data-tip="Bewertung jedes einzelnen Assets durch den Bot. Hoher Score = der Bot vertraut diesem Asset, niedriger Score = vorsichtig sein.">?</span></div>
             <div class="table-wrap">
                 <table>
