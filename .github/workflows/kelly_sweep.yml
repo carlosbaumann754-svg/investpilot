@@ -12,12 +12,11 @@ on:
         description: "Trigger-Quelle (dashboard / manual / debug)"
         required: false
         default: "manual"
-  schedule:
-    # Jeden 1. Sonntag im Monat, 07:00 UTC = 09:00 CEST.
-    # Laeuft NACH dem Sonntag-Backtest (06:00 UTC) und hat damit
-    # die aktuellsten Trade-Daten zur Verfuegung.
-    # Cron-Trick: "* * 1-7 * 0" = Sonntag und Tag 1-7 = erster Sonntag.
-    - cron: '0 7 1-7 * 0'
+  # v37e+ (16.07.2026): Schedule DEAKTIVIERT — Alt-TA-Decommission (Kelly-Sweep nutzt
+  # den Alt-TA-Backtester). Nebenbei: der Cron '0 7 1-7 * 0' hatte den POSIX-OR-Bug
+  # (Tag 1-7 ODER Sonntag = ~11 Laeufe/Monat statt 1). Manueller workflow_dispatch bleibt.
+  # schedule:
+  #   - cron: '0 7 1-7 * 0'
 
 concurrency:
   group: investpilot-kelly-sweep

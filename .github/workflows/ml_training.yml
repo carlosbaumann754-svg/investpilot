@@ -22,9 +22,11 @@ on:
         description: "Trigger-Quelle (dashboard / manual / debug)"
         required: false
         default: "manual"
-  schedule:
-    # Samstag 04:00 UTC = 06:00 CEST — Markets zu, vor Optimizer (So 03:00 UTC)
-    - cron: '0 4 * * 6'
+  # v37e+ (16.07.2026): Schedule DEAKTIVIERT — Alt-TA-Decommission. Meta-Labeler ist
+  # ohnehin Shadow-Mode (kein Live-Effekt); waehrend des Soaks keine automatische
+  # Modell-Neu-Trainierung. Manueller workflow_dispatch bleibt.
+  # schedule:
+  #   - cron: '0 4 * * 6'   # Samstag 04:00 UTC
 
 # Nur ein aktiver Lauf gleichzeitig — neuere Trigger queueen.
 concurrency:

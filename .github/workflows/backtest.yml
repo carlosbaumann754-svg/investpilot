@@ -23,9 +23,12 @@ on:
         description: "Sensitivity-Overrides space-separated (z.B. 'demo_trading.min_scanner_score=35 demo_trading.max_single_trade_pct_of_portfolio=0.12')"
         required: false
         default: ""
-  schedule:
-    # Sonntag 06:00 UTC = 08:00 CEST — 3h nach Optimizer (So 03:00 UTC)
-    - cron: '0 6 * * 0'
+  # v37e+ (16.07.2026): Schedule DEAKTIVIERT — Alt-TA-Decommission. Der Backtest
+  # (app.backtest_runner) laeuft auf dem Alt-TA-Motor, obsolet fuer den Fundamental-
+  # Signal-Stack. Neu-Motor-Backtests via signal_stack_backtester (VPS). Manueller
+  # workflow_dispatch bleibt.
+  # schedule:
+  #   - cron: '0 6 * * 0'   # Sonntag 06:00 UTC
 
 # Nur ein aktiver Lauf gleichzeitig — neuere Trigger queueen.
 concurrency:

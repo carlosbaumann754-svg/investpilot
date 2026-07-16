@@ -11,8 +11,12 @@ name: Weekly Optimizer
 # Gesamt-Speedup ggu. v10.0 sequenziell: ~30-50x. Ein 216-Combo Grid soll
 # damit deutlich unter 45 Min bleiben — Headroom fuer groessere Grids.
 on:
-  schedule:
-    - cron: '0 3 * * 0'
+  # v37e+ (16.07.2026): Schedule DEAKTIVIERT — Alt-TA-Decommission. Der Optimizer
+  # (app.optimizer_runner) tunt den Alt-TA-Motor, obsolet fuer den Fundamental-
+  # Signal-Stack (+ optimizer.enabled=False via bootstrap_v12 + WFO-Locks schuetzen
+  # die Rekalibrierungs-Params). Manueller workflow_dispatch bleibt.
+  # schedule:
+  #   - cron: '0 3 * * 0'   # Sonntag 03:00 UTC
   workflow_dispatch:
     inputs:
       triggered_by:
