@@ -27,14 +27,17 @@ on:
         description: "Anzahl Jahre Historie (default 5)"
         required: false
         default: "5"
-  schedule:
-    # 1. Sonntag jedes Monats 12:00 UTC = 14:00 CEST
-    # v37h+2 (17.05.2026): GH-Actions-Cron-Falle korrigiert.
-    # FRUEHER: '0 12 1-7 * 0' — wurde als OR ausgewertet (POSIX-Standard)
-    # statt AND -> Workflow lief JEDEN Tag 1-7 ODER JEDEN Sonntag (10+ Runs/Monat).
-    # JETZT: '0 12 * * 0' (jeden Sonntag) + Skript-Check ob 1.-7. (= 1. Sonntag).
-    # Bei nicht-1. Sonntag: workflow-Step macht early-exit mit success.
-    - cron: '0 12 * * 0'
+  # v37e+ (16.07.2026): MONATLICHER SCHEDULE DEAKTIVIERT. Grund: app.wfo_runner
+  # laeuft auf dem ALT-TA-Motor (walk_forward_optimizer), der fuer den seit 09.06.
+  # aktiven Fundamental-Signal-Stack-Motor obsolet + edgeless ist. Der Cron
+  # ueberschrieb monatlich data/wfo_status.json (-> Gist -> VPS) mit einer Alt-TA-
+  # Baseline und machte damit die Neu-Motor-Re-Baseline (scripts/wfo_build_status.py,
+  # Task #4) + den reaktivierten Drift-Watchdog kaputt (Aepfel-mit-Birnen-Vergleich).
+  # Neu-Motor-Baseline wird via scripts/wfo_build_status.py erzeugt (VPS, hat EDGAR-
+  # Facts). Manueller workflow_dispatch bleibt fuer Audit/Alt-TA-Vergleich verfuegbar.
+  # Reaktivieren erst wenn wfo_runner auf den Neu-Motor umgestellt ist.
+  # schedule:
+  #   - cron: '0 12 * * 0'   # 1. Sonntag/Monat 12:00 UTC (Gate-Job prueft DOM<=7)
 
 concurrency:
   group: investpilot-wfo
