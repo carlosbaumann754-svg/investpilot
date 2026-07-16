@@ -41,7 +41,8 @@ function switchTab(name) {
     if (name === 'order-audit') loadOrderAudit();
     if (name === 'brain') loadBrain();
     if (name === 'reports') { loadReports(); loadLastRunTimestamps(); }
-    if (name === 'backtest') { loadBacktest(); loadOptimizer(); loadKellySweep(); loadLastRunTimestamps(); }
+    // v37e+ (16.07.2026): "Backtest"-Tab entfernt (Alt-TA obsolet/stale). Loader dormant.
+    // if (name === 'backtest') { loadBacktest(); loadOptimizer(); loadKellySweep(); loadLastRunTimestamps(); }
     if (name === 'settings') loadSettings();
     if (name === 'logs') loadLogs();
     // v37h: 'ask' Tab wurde 12.05.2026 entfernt (Carlos: nicht benoetigt)

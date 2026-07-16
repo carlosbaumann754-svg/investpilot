@@ -67,7 +67,11 @@
     <button class="tab" onclick="switchTab('order-audit')">Order-Status</button>
     <button class="tab" onclick="switchTab('brain')">Brain</button>
     <button class="tab" onclick="switchTab('reports')">Reports</button>
-    <button class="tab" onclick="switchTab('backtest')">Backtest</button>
+    <!-- v37e+ (16.07.2026): "Backtest"-Tab entfernt (zeigte Alt-Motor-Backtest/Optimizer/
+         Kelly-Sweep — obsolet + stale seit Cron-Deaktivierung/Motor-Switch). Neu-Motor-
+         Robustheit steht in der Card "Stack-Validierung". Tab-Inhalt + Loader bleiben
+         dormant im Code (wie der Alt-TA-Code), Rueckbau post-Cutover. -->
+    <!-- <button class="tab" onclick="switchTab('backtest')">Backtest</button> -->
     <button class="tab" onclick="switchTab('settings')">Settings</button>
     <button class="tab" onclick="switchTab('logs')">Logs</button>
 </div>
@@ -362,7 +366,7 @@
                     <span id="v12-tsl-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
                 <div class="regime-detail-item">
-                    <span class="card-sub">Min Scanner-Score<span class="tip" data-tip="LEGACY / TA-Fallback: Mindest-Score-Schwelle des ALTEN TA-Scanners. Der aktive Fundamental-Signal-Stack-Motor nutzt diesen Wert NICHT — er kauft anhand seiner eigenen Composite-Score-Schwelle (Stack-Score -> Bot-Score, Kauf ab +10/+25). Frueher vom WFO-Optimizer ermittelt; der Optimizer ist im Soak pausiert, der Wert wird also nicht mehr revalidiert. Bleibt nur als TA-Fallback-Parameter erhalten.">?</span></span>
+                    <span class="card-sub">Min Scanner-Score<span class="tip" data-tip="Mindest-Kauf-Score des AKTIVEN Fundamental-Signal-Stack-Motors: der Bot kauft nur Kandidaten mit Bot-Score >= diesem Wert (Bot-Score = (Stack-Score - 50) x 2). Am 02.07.2026 von 40 auf 25 rekalibriert — die 40 war ein Alt-Motor-WFO-Wert und zu streng (nur ~11 Namen kamen drueber -> Bot fror bei 11 Positionen ein, ~55% investiert). 25 oeffnet den Trichter (~28 kaufbare Kandidaten -> ~15 Positionen / ~70%). Via WFO-Lock (manual_lock_overrides) gegen versehentliche Aenderung geschuetzt.">?</span></span>
                     <span id="v12-minscore-value" style="font-weight:700;font-size:14px;">--</span>
                 </div>
             </div>
@@ -473,8 +477,8 @@
         <div class="card" id="wfo-drift-card">
             <div class="card-title">
                 WFO-Drift-Watchdog
-                <span class="badge" style="background:#7a5c00;color:#ffd966;font-size:10px;margin-left:6px;padding:2px 6px;border-radius:4px;vertical-align:middle;">ALT-MOTOR (TA) · im Soak pausiert</span>
-                <span class="tip" data-tip="HINWEIS: Diese Karte misst den ALTEN TA-Motor (Walk-Forward-Sharpe der frueheren ETF/Mega-Cap-Strategie) und ist waehrend des Validierungs-Soaks bewusst PAUSIERT (wfo_drift_watchdog.enabled=false) — die Baseline stammt nicht vom aktiven Fundamental-Signal-Stack-Motor und ist daher fuer den aktuellen Bot NICHT aussagekraeftig (Cry-Wolf-Schutz). Der echte Performance-Massstab des neuen Motors ist die Spalte alpha IWM (Karte 'Bot vs. Markt' / Equity-Verlauf). Re-Baseline auf den neuen Motor erfolgt nach >=30 Stack-Trades, dann wird der Watchdog wieder scharfgeschaltet. Mechanik (fuer spaeter): vergleicht Live-Sharpe der letzten 30d mit der WFO-Backtest-Erwartung; Drift >30% = Alert.">?</span>
+                <span class="badge" style="background:#0f5132;color:#75e0a0;font-size:10px;margin-left:6px;padding:2px 6px;border-radius:4px;vertical-align:middle;">Neuer Motor · aktiv</span>
+                <span class="tip" data-tip="Vergleicht taeglich die Live-Edge (Profit-Faktor der letzten ~30 Handelstage aus den Close-Trades) mit der WFO-Baseline des AKTIVEN Fundamental-Signal-Stack-Motors. Re-Baseline am 16.07.2026 via signal_stack_backtester (7 Out-of-Sample-Jahres-Fenster, mean OOS-PF 1.71) — ersetzt die alte TA-Baseline. Seit 16.07. wieder scharfgeschaltet (wfo_drift_watchdog.enabled=true). Primaermetrik ist der PROFIT-FAKTOR (scale-invariant, R-B5), Sharpe nur informativ. Alarmiert via Pushover NUR bei echtem Edge-Zerfall (PF-Drift < -30%). Aktueller Stand: Live-PF ueber der Baseline = gesund.">?</span>
             </div>
             <div id="wfo-drift-badge" class="badge badge-blue" style="margin-bottom:8px;">--</div>
             <div id="wfo-drift-summary" class="card-sub" style="margin-bottom:8px;">Lade...</div>
