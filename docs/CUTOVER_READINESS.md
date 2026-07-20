@@ -142,3 +142,57 @@ kein Freibrief.
 - **Nebenbefund Deployment:** 15/15 Positionen (am Cap), aber nur ~36 % investiert
   (CHF 386k von 1'081k) — die WFO-Validierung lief mit 70 %. Der Motor läuft live auf
   halber Auslastung; bindend ist der Positions-Cap, nicht der Signal-Nachschub.
+
+---
+
+# EXIT-SWEEP 20.07.2026 — die Ursache ist bestätigt und quantifiziert
+
+`scripts/wfo_trailing_sweep.py`, 25 Exit-Varianten × 7 OOS-Fenster, SL fix −8.
+
+## Kernbefund: die Live-Exits sind die schlechteste getestete Variante
+| Variante | PF | Payoff | ø Rendite p.a. | worst MDD | Fenster PF>1 |
+|---|---|---|---|---|---|
+| **LIVE 6/4 + TP12** | **1.36** | **1.33** | **+8.9 %** | −8.3 % | 7/7 (min 1.07) |
+| 6/10, kein TP | 1.66 | 1.96 | +19.3 % | −8.9 % | 7/7 (min 1.17) |
+| 10/12, kein TP | 1.66 | 1.95 | +19.5 % | −9.2 % | 7/7 (min 1.23) |
+| kein Trailing, kein TP | **1.71** | **2.00** | **+21.6 %** | −9.9 % | 7/7 (min 1.23) |
+
+**Die Live-Config verliert in ALLEN SIEBEN Fenstern** — kein einziges Jahr, in dem das
+enge Trailing hilft:
+
+| Jahresrendite | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
+|---|---|---|---|---|---|---|---|
+| LIVE 6/4 TP12 | 8.3 | 13.4 | 16.8 | 3.9 | 13.9 | 1.3 | 4.8 |
+| 6/10 kein TP | 10.8 | 26.1 | 29.2 | **12.4** | 34.1 | 4.2 | 18.0 |
+| kein Trail | 11.3 | **40.3** | 28.9 | 8.9 | 37.0 | 6.1 | 18.4 |
+
+## Warum das glaubwürdig ist: Backtest und Live sagen dasselbe
+Der Sweep zeigt unabhängig, dass **6/4 + TP12 die HÖCHSTE Trefferquote (50.5 %) und das
+NIEDRIGSTE Payoff (1.33)** aller Varianten hat — exakt das Muster der Live-Round-Trips
+(67 % Treffer, Payoff 0.19). Zwei unabhängige Datenquellen, derselbe Mechanismus:
+**enge Exits fabrizieren viele Mini-Gewinne und lassen Verluste laufen.**
+
+## Die eigentliche Diagnose: „neuer Kopf, alte Beine" — zum zweiten Mal
+Trailing 6/4 und TP 12 stammen aus der **Alt-TA-Ära**. Bei der Rekalibrierung am 02.07.
+wurden SL, min_scanner_score und Caps angefasst — **die Exits blieben unangetastet**
+(„TP 12 unangetastet" ist im Plan wörtlich dokumentiert). Ein monatlich rebalancierender
+Fundamental-Ranker trägt damit Day-Trade-Exits. Dasselbe Muster wie beim
+`min_scanner_score = 40`-Fund — nur an einer anderen Stelle.
+
+## Empfehlung: 6/10 ohne TP — NICHT das rohe Optimum
+Das Maximum wäre „gar kein Trailing" (+21.6 %). Trotzdem empfehle ich **Trail-Aktivierung
+6 (unverändert), Trail 4 → 10, TP 12 → aus**:
+- **Bärenjahr 2022: 12.4 % vs 8.9 %** — der weite Trail schützt real, wenn es zählt.
+- Geringerer worst-MDD (−8.9 % vs −9.9 %).
+- **Minimale Änderung**: nur ein Parameter geweitet, einer abgeschaltet, SL unberührt →
+  Wirkung sauber zuordenbar.
+- Kostet ~2.3 Ppkt Mittelwert gegenüber dem Optimum. Bewusst bezahlt (konservative
+  Default-Regel bei knappen Fällen).
+
+## Caveats
+- **WFO-Tier-Evidenz, kein Live-Beweis** (Hierarchie Live > WFO > Optimizer). Survivorship-
+  und Lean-MVP-Caveats des Backtests gelten weiter.
+- Backtest-Trefferquote 46 % vs live 67 % — unterschiedliche Verteilungen; live n=9 ist
+  ohnehin zu klein. Übereinstimmend ist der **Mechanismus**, nicht das Niveau.
+- **Anwenden setzt die Soak-Messung zurück** (neue Konfiguration = neuer Messgegenstand).
+  Das ist der eigentliche Preis, nicht das Umsetzungsrisiko.
