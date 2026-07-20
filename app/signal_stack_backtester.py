@@ -93,32 +93,76 @@ def _month_starts(start: str, end: str) -> list:
 # POSITION-SIMULATION (Exits)
 # ============================================================
 def _sim_position(entry: float, fwd: list, sl_pct, tp_pct, trail_act_pct,
-                  trail_pct) -> tuple:
+                  trail_pct, tranches=None) -> tuple:
     """Simuliert eine Position ueber die Forward-Closes bis Rebalance/Exit.
 
-    Prioritaet pro Tag: SL -> Trailing -> TP. Sonst Halten bis Rebalance
-    (letzter fwd-Close). Liefert (return_pct, reason, days_held).
+    Prioritaet pro Tag: SL -> Tranchen -> Trailing -> TP. Sonst Halten bis
+    Rebalance (letzter fwd-Close). Liefert (return_pct, reason, days_held).
+
+    R-B12 (20.07.2026): TRANCHEN-UNTERSTUETZUNG nachgeruestet.
+    Der Live-Trader nimmt via leverage.tp_tranches Teilgewinne mit (aktuell
+    30 %% bei +8, 30 %% bei +16, 40 %% bei +30) — der Backtester kannte das
+    NICHT und hat die Live-Exits damit systematisch zu MILD modelliert. Der
+    Exit-Sweep vom 20.07. lief ohne diesen Mechanismus; live feuerten seit
+    Soak-Start 10 von 10 Partials bei +8 %% (keine einzige je bei +16 %%),
+    d. h. die Tranche ist real der wirksamste Gewinner-Deckel.
+
+    tranches: Liste von {"pct_of_position": p, "profit_target_pct": t}.
+    Erreicht der Kurs entry*(1+t/100), wird p %% der URSPRUNGSposition zu
+    diesem Kurs realisiert; der Rest laeuft unter denselben SL-/Trail-Regeln
+    weiter. Rueckgabe ist der positionsgewichtete Gesamt-Return.
+
+    tranches=None -> exakt das vorherige Verhalten (rueckwaertskompatibel).
     """
     if not fwd:
         return 0.0, "flat", 0
+
+    # Tranchen aufsteigend nach Ziel; defensiv gegen kaputte Config-Eintraege
+    pending: list = []
+    for t in (tranches or []):
+        try:
+            frac = float(t.get("pct_of_position", 0)) / 100.0
+            tgt = float(t.get("profit_target_pct"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if frac > 0:
+            pending.append((tgt, frac))
+    pending.sort(key=lambda x: x[0])
+
+    remaining = 1.0     # noch offener Anteil der Position
+    booked = 0.0        # bereits realisierter, anteilsgewichteter Return in %
+    fired = False       # hat mind. eine Tranche gegriffen?
     high = entry
     trail_armed = False
+
+    def _out(rest_ret, reason, day):
+        return booked + remaining * rest_ret, (f"TRANCHE+{reason}" if fired else reason), day
+
     for i, c in enumerate(fwd, 1):
-        # Hard-SL
+        # Hard-SL (trifft den verbleibenden Anteil)
         if sl_pct is not None and c <= entry * (1 + sl_pct / 100.0):
-            return float(sl_pct), "SL", i
+            return _out(float(sl_pct), "SL", i)
         high = max(high, c)
+        # Tranchen: alle an diesem Tag erreichten Ziele abarbeiten
+        while pending and remaining > 1e-9 and c >= entry * (1 + pending[0][0] / 100.0):
+            tgt, frac = pending.pop(0)
+            take = min(frac, remaining)
+            booked += take * tgt
+            remaining -= take
+            fired = True
+        if remaining <= 1e-9:
+            return booked, "TRANCHE_ALL", i
         # Trailing (erst scharf ab activation ueber Entry)
         if trail_pct is not None and trail_act_pct is not None:
             if not trail_armed and c >= entry * (1 + trail_act_pct / 100.0):
                 trail_armed = True
             if trail_armed and c <= high * (1 - trail_pct / 100.0):
-                return (c / entry - 1) * 100, "TRAIL", i
+                return _out((c / entry - 1) * 100, "TRAIL", i)
         # Take-Profit
         if tp_pct is not None and c >= entry * (1 + tp_pct / 100.0):
-            return float(tp_pct), "TP", i
+            return _out(float(tp_pct), "TP", i)
     # Rebalance-Exit am letzten Close
-    return (fwd[-1] / entry - 1) * 100, "REBAL", len(fwd)
+    return _out((fwd[-1] / entry - 1) * 100, "REBAL", len(fwd))
 
 
 # ============================================================
@@ -145,6 +189,7 @@ def precompute_monthly_picks(price_hist: dict, facts: dict, start: str, end: str
 def run_backtest(price_hist: dict, facts: dict, symbols: list, start: str, end: str,
                  top_n: int = 15, deployment: float = 0.90,
                  sl_pct=-5, tp_pct=None, trail_act_pct=None, trail_pct=None,
+                 tranches=None,
                  cost_pct: float = _ROUND_TRIP_COST_PCT, picks_by_month: dict = None) -> dict:
     """Monatlich rebalancierter Top-N-Signal-Stack-Backtest mit Exit-Sim.
 
@@ -177,7 +222,8 @@ def run_backtest(price_hist: dict, facts: dict, symbols: list, start: str, end: 
         for sym in picks:
             entry = prices[sym][0]
             fwd = _forward_closes(price_hist, sym, rb, nxt)
-            r, reason, days = _sim_position(entry, fwd, sl_pct, tp_pct, trail_act_pct, trail_pct)
+            r, reason, days = _sim_position(entry, fwd, sl_pct, tp_pct, trail_act_pct,
+                                            trail_pct, tranches)
             r_net = r - cost_pct           # Round-Trip-Kosten
             port_ret += per_pos * (r_net / 100.0)
             trades.append({"month": rb.isoformat(), "sym": sym, "ret": r,
@@ -187,7 +233,8 @@ def run_backtest(price_hist: dict, facts: dict, symbols: list, start: str, end: 
         eq_curve.append((nxt, equity))
     return {
         "config": {"top_n": top_n, "deployment": deployment, "sl_pct": sl_pct,
-                   "tp_pct": tp_pct, "trail_act_pct": trail_act_pct, "trail_pct": trail_pct},
+                   "tp_pct": tp_pct, "trail_act_pct": trail_act_pct, "trail_pct": trail_pct,
+                   "tranches": tranches},
         "monthly_pct": monthly, "trades": trades, "equity_final": equity,
         "eq_curve": eq_curve, "start": start, "end": end,
     }
