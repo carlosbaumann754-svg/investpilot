@@ -60,6 +60,19 @@ DEFAULT_ALERT_THROTTLE_HOURS = 24    # max 1 Alert pro Tag
 # eine daily-Sharpe-Schaetzung.
 DEFAULT_MIN_DISTINCT_DAYS = 10
 
+# ---- R-B12 (20.07.2026): ZWEITSIGNAL "Motor-Edge" ----------------------
+# Das obige PF-Signal misst das GESAMTE Buch in PROZENT ueber ein rollendes
+# Fenster. Es ist damit blind fuer die Oekonomie des aktiven Motors: am
+# 20.07. meldete es PF 2.02 ("gesund"), waehrend die Round-Trips, die der
+# neue Motor selbst eroeffnet UND geschlossen hatte, bei PF 0.38 lagen
+# (netto -7'534 USD). Ursachen: Prozent ignoriert Positionsgroesse, und
+# geerbte Alt-Buch-Gewinner zaehlen mit.
+# Das Zweitsignal rechnet in USD ueber saubere Round-Trips (siehe
+# app/roundtrip_metrics.py) und alarmiert unabhaengig vom Buch-Signal.
+DEFAULT_ROUNDTRIP_ENABLED = True
+DEFAULT_ROUNDTRIP_MIN_N = 12          # unter n=12 nur berichten, NICHT alarmieren
+DEFAULT_ROUNDTRIP_THRESHOLD_PCT = 30.0
+
 
 def _get_wfo_target_sharpe() -> Optional[float]:
     """Liest Mean OOS-Sharpe aus letztem WFO-Run.
@@ -320,6 +333,103 @@ def _compute_live_pf(trade_history: list,
     return pf, win_rate, n
 
 
+def _check_roundtrip_signal(trade_history: list, wfo_pf: Optional[float],
+                            wd_cfg: dict, result: dict) -> None:
+    """R-B12 ZWEITSIGNAL: Motor-Edge ueber saubere Round-Trips (USD).
+
+    Unabhaengig vom Buch-Signal oben: alarmiert, wenn die Positionen, die der
+    aktive Motor SELBST eroeffnet und geschlossen hat, oekonomisch zerfallen —
+    auch wenn das Gesamtbuch (inkl. geerbter Alt-Positionen) noch gut aussieht.
+
+    Schreibt result["roundtrip"] und setzt ggf. result["roundtrip_alert"].
+    Wirft nie — ein Fehler hier darf den Haupt-Check nicht kippen.
+    """
+    if not wd_cfg.get("roundtrip_signal_enabled", DEFAULT_ROUNDTRIP_ENABLED):
+        return
+    try:
+        from app.roundtrip_metrics import clean_roundtrip_stats, DEFAULT_REGIME_START
+
+        since = wd_cfg.get("roundtrip_since") or DEFAULT_REGIME_START
+        min_n = wd_cfg.get("roundtrip_min_n", DEFAULT_ROUNDTRIP_MIN_N)
+        thr = wd_cfg.get("roundtrip_threshold_pct",
+                         DEFAULT_ROUNDTRIP_THRESHOLD_PCT)
+
+        s = clean_roundtrip_stats(trade_history, since_iso=since)
+        rt = {
+            "n": s["n"], "net_usd": s["net_usd"], "pf": s["pf"],
+            "win_rate": s["win_rate"], "avg_win": s["avg_win"],
+            "avg_loss": s["avg_loss"], "since": s["since"],
+            "inherited_net_usd": s["inherited"]["net_usd"],
+        }
+        result["roundtrip"] = rt
+
+        # Verlustfreies Fenster (pf=None bei gross_loss=0) = gesund, kein Alarm.
+        if s["pf"] is None or wfo_pf in (None, 0):
+            rt["skip_reason"] = "kein PF-Vergleich moeglich (verlustfrei oder keine Baseline)"
+            return
+        drift = (s["pf"] - wfo_pf) / abs(wfo_pf) * 100
+        rt["drift_pct"] = round(drift, 2)
+        rt["wfo_pf"] = round(wfo_pf, 3)
+
+        # Min-Sample-Guard: bei Mini-Sample berichten, aber NICHT alarmieren.
+        # Round-Trips sammeln sich langsam (Wochen) — ein Alert auf n=5 waere
+        # Rauschen und wuerde den Cry-Wolf-Effekt fuettern.
+        if s["n"] < min_n:
+            rt["skip_reason"] = (f"Zu wenig saubere Round-Trips (n={s['n']}, "
+                                 f"min={min_n}) — nur Bericht, kein Alert")
+            log.info("Motor-Edge-Signal: n=%d < %d -> nur Bericht "
+                     "(PF %.2f vs WFO %.2f, netto %+.0f USD)",
+                     s["n"], min_n, s["pf"], wfo_pf, s["net_usd"])
+            return
+
+        if drift >= -thr:
+            log.info("Motor-Edge-Signal gesund (PF %.2f vs WFO %.2f, "
+                     "drift %+.1f%%, n=%d, netto %+.0f USD)",
+                     s["pf"], wfo_pf, drift, s["n"], s["net_usd"])
+            return
+
+        # --- Decay -> Alert (eigener Throttle, kollidiert nicht mit Buch-Signal)
+        state = _load_alert_state()
+        last = state.get("last_roundtrip_alert_at")
+        throttle_h = wd_cfg.get("alert_throttle_hours", DEFAULT_ALERT_THROTTLE_HOURS)
+        if last:
+            try:
+                lt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                if lt.tzinfo is not None:
+                    lt = lt.replace(tzinfo=None)
+                if (datetime.now() - lt).total_seconds() < throttle_h * 3600:
+                    rt["skip_reason"] = f"Alert gethrottlet (letzter < {throttle_h}h her)"
+                    return
+            except Exception:
+                pass
+
+        from app.alerts import send_alert
+        msg = (
+            f"MOTOR-EDGE-ALARM: Die Trades, die der Bot selbst eroeffnet UND "
+            f"geschlossen hat, sind netto {s['net_usd']:+,.0f} USD "
+            f"(Profit-Faktor {s['pf']:.2f} vs WFO-Baseline {wfo_pf:.2f} = "
+            f"{drift:+.1f}%). n={s['n']} Round-Trips seit {since[:10]}, "
+            f"Trefferquote {s['win_rate']:.0f}%, "
+            f"O Gewinn {s['avg_win']:+,.0f} vs O Verlust {s['avg_loss']:+,.0f}. "
+            f"Hinweis: das Buch-Signal kann trotzdem gruen sein (geerbte "
+            f"Positionen: {s['inherited']['net_usd']:+,.0f} USD). "
+            f"Aktion: Exit-Regeln + Edge pruefen, NICHT blind weiter-deployen."
+        )
+        send_alert(msg, level="WARNING")
+        result["roundtrip_alert"] = True
+        rt["alert_triggered"] = True
+        state["last_roundtrip_alert_at"] = datetime.now().isoformat()
+        state["last_roundtrip_pf"] = s["pf"]
+        state["last_roundtrip_net_usd"] = s["net_usd"]
+        _save_alert_state(state)
+        log.warning("Motor-Edge-Alert gesendet: PF %.2f vs %.2f (%.1f%%), "
+                    "netto %+.0f USD, n=%d",
+                    s["pf"], wfo_pf, drift, s["net_usd"], s["n"])
+    except Exception as e:  # nie den Haupt-Check kippen
+        log.warning("Motor-Edge-Signal fehlgeschlagen (non-fatal): %s", e)
+        result.setdefault("roundtrip", {})["error"] = str(e)
+
+
 def _count_distinct_trading_days(trade_history: list, lookback_days: int) -> int:
     """R-A53 (29.05.2026): Anzahl DISTINKTER Kalender-Tage mit Close-Trades
     im Lookback-Fenster.
@@ -441,6 +551,12 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
     except Exception:
         result["skip_reason"] = "trade_history.json nicht ladbar"
         return result
+
+    # R-B12 ZWEITSIGNAL: bewusst HIER, vor der Skip-Kette des Buch-Signals.
+    # Sonst wuerde ein "zu wenig Trades"/"zu wenig distinkte Tage"-Skip des
+    # Buch-Signals das Motor-Edge-Signal gleich mit verschlucken — obwohl es
+    # eine voellig andere Datenbasis (Round-Trips) hat.
+    _check_roundtrip_signal(trade_history, wfo_pf, cfg, result)
 
     # Live-Metriken: PF + Win-Rate (primaer) + Sharpe (informativ/Fallback)
     live_pf, live_win_rate, n = _compute_live_pf(trade_history, lookback_days)
