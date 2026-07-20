@@ -51,7 +51,7 @@ AUDIT_METADATA = {
 
 # Muss zu SOAK_START in web/app.py passen. Wird von der Config
 # (wfo_drift_watchdog.roundtrip_since) ueberschrieben, wenn dort gesetzt.
-DEFAULT_REGIME_START = "2026-07-02T22:00"
+DEFAULT_REGIME_START = "2026-07-20T22:00"
 
 BUY_ACTIONS = {"SCANNER_BUY", "PARTIAL_SIGNAL"}
 FULL_CLOSE_ACTIONS = {

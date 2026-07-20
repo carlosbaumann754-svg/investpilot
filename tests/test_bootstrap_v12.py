@@ -71,26 +71,40 @@ def test_reconstruction_from_empty_has_current_exit_baselines():
     lev = cfg.get("leverage")
     # leverage-Subkeys werden nur bei existierender Parent-Section injiziert;
     # bei {} ist leverage nicht da -> kein Inject. Wir pruefen die Baseline-Konstante.
-    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_activation_pct"] == 6.0
-    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_pct"] == 4.0
-    tranches = b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"]
-    assert [t["profit_target_pct"] for t in tranches] == [8, 16, 30]
+    # R-B12 (20.07.2026): Exit-Stack rekalibriert. Vorher 6.0/4.0 + Tranchen
+    # [8,16,30] — laut Exit-Sweep (40 Varianten x 7 OOS-Fenster) die schlechteste
+    # getestete Kombination (PF 1.33 gegen 1.71 beim Besten). Jetzt Trail 10/12
+    # als reines Katastrophen-Netz, keine Tranchen (kosteten allein 0.26 PF).
+    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_activation_pct"] == 10.0
+    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_pct"] == 12.0
+    assert b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"] == []
 
 
 def test_leverage_subkeys_injected_when_parent_present():
     cfg, _ = b.migrate({"leverage": {"enabled": True}})
     lev = cfg["leverage"]
-    assert lev["trailing_sl_activation_pct"] == 6.0
-    assert lev["trailing_sl_pct"] == 4.0
+    assert lev["trailing_sl_activation_pct"] == 10.0
+    assert lev["trailing_sl_pct"] == 12.0
+
+
+def test_empty_tranche_list_not_reinjected():
+    """R-B12: Die leere Tranchen-Liste muss als 'vorhanden' gelten.
+
+    Wuerde die Injection sie als fehlend behandeln (z.B. via Falsy-Pruefung
+    statt 'key not in parent'), kaeme der Gewinner-Deckel bei JEDEM Boot
+    zurueck — die Rekalibrierung waere still wirkungslos.
+    """
+    cfg, _ = b.migrate({"leverage": {"enabled": True, "tp_tranches": []}})
+    assert cfg["leverage"]["tp_tranches"] == []
 
 
 # --- Idempotenz: ein bereits korrekter Live-aehnlicher Config -> keine Changes
 def test_idempotent_on_correct_config():
     base, _ = b.migrate({})              # erzeugt eine v12+invariant-konforme Basis
     # Sektionen, die migrate nur-bei-Parent injiziert, ergaenzen:
-    base["leverage"] = {"trailing_sl_enabled": True,
-                        "trailing_sl_activation_pct": 6.0, "trailing_sl_pct": 4.0,
-                        "tp_tranches": b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"]}
+    # Werte aus den Konstanten ziehen statt hart zu verdrahten — sonst laeuft
+    # dieser "live-aehnliche" Config bei jeder Baseline-Aenderung aus dem Ruder.
+    base["leverage"] = dict(b.V12_SUBKEY_INJECT["leverage"])
     base["disabled_symbols"] = list(b.V12_DISABLED_SYMBOLS)
     again, changes2 = b.migrate(base)
     assert changes2 == [], f"erwartete Idempotenz, bekam Changes: {changes2}"
