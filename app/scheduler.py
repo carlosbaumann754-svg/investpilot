@@ -494,18 +494,26 @@ def _run_background_maintenance() -> None:
         try:
             from app.wfo_drift_watchdog import check_wfo_drift
             result = check_wfo_drift()
+            # R-B12 (20.07.2026) BUGFIX: Geloggt wurde live_sharpe/wfo_sharpe,
+            # OBWOHL die Drift-Entscheidung auf der PF-Basis faellt (drift_metric).
+            # Die Zeile mischte zwei Metriken — "live=11.27 ... drift=+83.5%" war
+            # Sharpe 11.27 neben einer Drift aus PF 3.14 vs 1.71. Das hat bei der
+            # Analyse am 20.07. real zu einer Fehlinterpretation gefuehrt. Jetzt
+            # wird die TATSAECHLICH verwendete Metrik geloggt (inkl. ihres Namens).
+            _m = result.get("drift_metric") or "sharpe"
+            _live, _wfo = result.get(f"live_{_m}"), result.get(f"wfo_{_m}")
+            _lv = f"{_live:.2f}" if isinstance(_live, (int, float)) else "n/a"
+            _wv = f"{_wfo:.2f}" if isinstance(_wfo, (int, float)) else "n/a"
             if result.get("alert_triggered"):
                 log.warning(
-                    f"BG-WFO-Drift: ALERT! live={result['live_sharpe']:.2f} "
-                    f"vs wfo={result['wfo_sharpe']:.2f}, "
+                    f"BG-WFO-Drift: ALERT! {_m}: live={_lv} vs wfo={_wv}, "
                     f"drift={result['drift_pct']:+.1f}%"
                 )
             elif result.get("skip_reason"):
                 log.info(f"BG-WFO-Drift: skip ({result['skip_reason']})")
             else:
                 log.info(
-                    f"BG-WFO-Drift: gesund (live={result['live_sharpe']:.2f}, "
-                    f"wfo={result['wfo_sharpe']:.2f}, "
+                    f"BG-WFO-Drift: gesund ({_m}: live={_lv}, wfo={_wv}, "
                     f"drift={result['drift_pct']:+.1f}%, n={result['n_trades']})"
                 )
         except Exception as e:

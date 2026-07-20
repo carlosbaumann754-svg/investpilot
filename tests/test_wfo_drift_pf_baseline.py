@@ -92,6 +92,44 @@ def test_compute_live_pf_too_few_trades():
     assert n == 1
 
 
+# ------------------------------------------------------------
+# R-B12 (20.07.2026) REGRESSION: Teil-Close-Gewichtung
+# Der Code suchte "partial_close_pct" — in trade_history.json heisst das Feld
+# aber "tranche_close_pct". Folge: frac fiel immer auf 1.0 zurueck, Teil-Closes
+# zaehlten VOLL => Live-PF systematisch zu optimistisch (live 3.14 statt 2.02).
+# Diese Tests fixieren, dass die Gewichtung wirklich greift.
+# ------------------------------------------------------------
+
+def _partial(pnl, pct_field, pct_value, days_ago=1):
+    t = _trade(pnl, days_ago=days_ago, action="PARTIAL_CLOSE")
+    t[pct_field] = pct_value
+    return t
+
+
+@pytest.mark.parametrize("field", ["tranche_close_pct", "partial_close_pct"])
+def test_compute_live_pf_weights_partials(field):
+    """Teil-Close zu 30% darf nur 30% seines pnl_pct beitragen.
+
+    +10% Teil-Close (30% der Position) = 3.0 gewichtet, gegen -3.0 Vollverlust
+    => PF 1.0. Ohne Gewichtung (der Bug) waere gross_win=10 => PF 3.33.
+    """
+    from app.wfo_drift_watchdog import _compute_live_pf
+    trades = [_partial(10.0, field, 30), _trade(-3.0)]
+    pf, wr, n = _compute_live_pf(trades, lookback_days=30)
+    assert n == 2
+    assert abs(pf - 1.0) < 0.01, f"Teil-Close nicht gewichtet (PF={pf}) — R-B12 zurueck?"
+    # Win-Rate nur auf finalen Closes -> hier nur der Verlust -> 0%
+    assert abs(wr - 0.0) < 0.01
+
+
+def test_compute_live_pf_partial_without_pct_counts_full():
+    """Ohne Prozent-Feld bleibt das konservative Fallback (frac=1.0) bestehen."""
+    from app.wfo_drift_watchdog import _compute_live_pf
+    trades = [_trade(10.0, action="PARTIAL_CLOSE"), _trade(-3.0)]
+    pf, wr, n = _compute_live_pf(trades, lookback_days=30)
+    assert abs(pf - (10.0 / 3.0)) < 0.01
+
+
 # ============================================================
 # check_wfo_drift — PF-Gating
 # ============================================================

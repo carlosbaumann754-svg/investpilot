@@ -288,7 +288,13 @@ def _compute_live_pf(trade_history: list,
         # Positions-Aggregation (M1). Sonst Live-PF (echte Teil-Closes als volle
         # Trades) vs WFO-PF (Partials gefaltet) = Aepfel/Birnen.
         if "PARTIAL" in action:
-            pcp = t.get("partial_close_pct")
+            # R-B12 (20.07.2026) BUGFIX: Das Feld heisst in trade_history.json
+            # "tranche_close_pct" — "partial_close_pct" existiert dort NICHT
+            # (live geprueft: 0 von 45 Partials). Folge: frac fiel IMMER auf 1.0
+            # zurueck, Teil-Closes zaehlten voll => exakt die Aepfel/Birnen-
+            # Verzerrung, die dieser Block verhindern soll. Effekt live: PF 3.14
+            # statt korrekt 2.02 (+55%% zu optimistisch). Beide Namen akzeptieren.
+            pcp = t.get("partial_close_pct") or t.get("tranche_close_pct")
             frac = (float(pcp) / 100.0) if pcp else 1.0
             pnls.append(val * frac)
         else:
