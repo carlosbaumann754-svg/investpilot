@@ -71,20 +71,21 @@ def test_reconstruction_from_empty_has_current_exit_baselines():
     lev = cfg.get("leverage")
     # leverage-Subkeys werden nur bei existierender Parent-Section injiziert;
     # bei {} ist leverage nicht da -> kein Inject. Wir pruefen die Baseline-Konstante.
-    # R-B12 (20.07.2026): Exit-Stack rekalibriert. Vorher 6.0/4.0 + Tranchen
-    # [8,16,30] — laut Exit-Sweep (40 Varianten x 7 OOS-Fenster) die schlechteste
-    # getestete Kombination (PF 1.33 gegen 1.71 beim Besten). Jetzt Trail 10/12
-    # als reines Katastrophen-Netz, keine Tranchen (kosteten allein 0.26 PF).
-    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_activation_pct"] == 10.0
-    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_pct"] == 12.0
-    assert b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"] == []
+    # R-B12 (20.07.2026): Die Umstellung auf 10/12 + TP aus + Tranchen aus wurde
+    # noch am selben Abend zurueckgedreht — der Backtest, der sie empfahl, holt
+    # ~86 % seines Gewinns aus monatlichem Rebalancing, das der Live-Bot nicht hat.
+    # Details im Kommentar an V12_SUBKEY_INJECT. Baselines daher wieder wie zuvor.
+    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_activation_pct"] == 6.0
+    assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_pct"] == 4.0
+    tranches = b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"]
+    assert [t["profit_target_pct"] for t in tranches] == [8, 16, 30]
 
 
 def test_leverage_subkeys_injected_when_parent_present():
     cfg, _ = b.migrate({"leverage": {"enabled": True}})
     lev = cfg["leverage"]
-    assert lev["trailing_sl_activation_pct"] == 10.0
-    assert lev["trailing_sl_pct"] == 12.0
+    assert lev["trailing_sl_activation_pct"] == 6.0
+    assert lev["trailing_sl_pct"] == 4.0
 
 
 def test_empty_tranche_list_not_reinjected():

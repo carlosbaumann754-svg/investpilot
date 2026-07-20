@@ -1692,13 +1692,13 @@ async def api_soak_progress(user=Depends(require_auth)):
         # investiert). Rekalibrierung Schritt B angewandt (SL -5->-8, min_scanner_score
         # 40->25, max_positions 20->15). Der bisherige Soak mass eine strangulierte
         # Config -> Uhr resetet auf die rekalibrierte Config.
-        # R-B12 (20.07.2026): ZWEITER Reset. Der Exit-Sweep (40 Varianten x 7 OOS-
-        # Fenster) zeigte, dass der Live-Exit-Stack die SCHLECHTESTE getestete
-        # Variante war (PF 1.33 vs 1.71 best) — Trailing 6/4 + TP 12 + tp_tranches
-        # sind Alt-TA-Erbe und deckelten die Gewinner (live: O Gewinn +783 gegen
-        # O Verlust -4'077). Umgestellt auf Trail 10/12, TP aus, Tranchen aus.
-        # Neue Config = neuer Messgegenstand -> Uhr startet erneut.
-        SOAK_START = "2026-07-20T22:00:00"
+        # R-B12 (20.07.2026): Der zweite Reset wurde noch am selben Abend
+        # ZURUECKGEDREHT — die Exit-Umstellung (Trail 10/12, TP aus, Tranchen aus)
+        # beruhte auf einem Backtest, dessen Gewinn zu ~86 %% aus dem monatlichen
+        # Rebalancing stammt; diesen Mechanismus hat der Live-Bot NICHT. Es wurde
+        # kein einziger Trade unter der neuen Config ausgefuehrt (Markt zu), daher
+        # bleibt die Messung ab 02.07. gueltig und laeuft ununterbrochen weiter.
+        SOAK_START = "2026-07-02T22:00:00"  # Reset auf rekalibrierte Config (Schritt B)
         GO_NOGO_TARGET = 50
         PHASE3_TARGET = 30
         CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")

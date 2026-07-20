@@ -142,20 +142,29 @@ V12_SECTIONS: dict[str, dict[str, Any]] = {
 # (nur wenn Parent-Section existiert, aber Sub-Key fehlt)
 V12_SUBKEY_INJECT: dict[str, dict[str, Any]] = {
     "leverage": {
-        # R-B12 (20.07.2026): an den rekalibrierten Exit-Stack angeglichen.
-        # Vorher 6.0/4.0 + Tranchen 30@8/30@16/40@30 — Alt-TA-Erbe und laut
-        # Exit-Sweep (40 Varianten x 7 OOS-Fenster) die SCHLECHTESTE getestete
-        # Kombination (PF 1.33 gegen 1.71 beim Besten). Die Tranchen allein
-        # kosteten 0.26 PF; live feuerten 10 von 10 Teilverkaeufen bei +8 %,
-        # keiner je bei +16 % = wirksamster Gewinner-Deckel.
-        # Trail 10/12 ist bewusst ein Katastrophen-Netz (braucht erst +10 %,
-        # dann -12 %), kein Gewinnmitnehmer mehr.
-        # Greift nur bei Reconstruction-aus-Null (Injection nur wenn Key FEHLT);
-        # die leere Tranchen-Liste zaehlt als vorhanden -> keine Rueckinjektion.
+        # R-B12 (20.07.2026) ZURUECKGEDREHT — WICHTIG, nicht erneut "optimieren"
+        # ohne den folgenden Befund zu beruecksichtigen:
+        # Der Exit-Sweep empfahl Trail 10/12 + TP aus + Tranchen aus (PF 1.66 vs
+        # 1.33). Die Auszaehlung der Exit-Gruende zeigte danach aber: bei dieser
+        # Variante stammen 62 %% der Ausstiege und ~86 %% des Gewinns aus dem
+        # monatlichen REBALANCING des Backtesters — einem Mechanismus, den der
+        # LIVE-Bot NICHT hat (kein Verkauf, wenn ein Titel aus den Top-15 faellt;
+        # rebalance_portfolio gleicht nur Ziel-Gewichte ab). Die alte Config
+        # dagegen erntet ueber TP + Tranchen (+3'282 bzw. +616 Pp) — Mechanismen,
+        # die live existieren. Ohne sie realisiert der Bot fast nur noch Verluste
+        # (Verlierer via SL raus, Gewinner bleiben ewig liegen).
+        # Zusatzfalle bei 10/12: scharf ab +10 %, dann -12 %% vom Hoch = Ausstieg
+        # bei -3.2 %% -> der Trail kann einen Gewinner in einen Verlierer drehen.
+        # Erst wenn der Backtester Mehr-Monats-Halten abbildet (oder der Bot echte
+        # Rotation bekommt), ist die Exit-Frage sinnvoll beantwortbar.
         "trailing_sl_enabled": True,
-        "trailing_sl_activation_pct": 10.0,
-        "trailing_sl_pct": 12.0,
-        "tp_tranches": [],
+        "trailing_sl_activation_pct": 6.0,
+        "trailing_sl_pct": 4.0,
+        "tp_tranches": [
+            {"pct_of_position": 30, "profit_target_pct": 8},
+            {"pct_of_position": 30, "profit_target_pct": 16},
+            {"pct_of_position": 40, "profit_target_pct": 30},
+        ],
     },
 }
 
