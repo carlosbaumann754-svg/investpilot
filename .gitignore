@@ -27,3 +27,13 @@ data/manual_lock_overrides.json
 # Stress-Test-Smoke-Inputs sind ephemer (echte Records liegen in
 # investpilot_weiterentwicklung/).
 stress_smoke_test.txt
+
+# R-B20 (21.07.2026): Laufzeit-State NICHT tracken. Getrackte, aber zur Laufzeit
+# mutierte Dateien sind eine Clobber-Falle beim VPS-Pull (die Lektion aus
+# data/config.json). Diese hier werden vom Bot laufend geschrieben und sind
+# jederzeit regenerierbar; gesichert werden sie ueber das Cloud-Backup.
+data/signal_stack_shadow.json
+data/universe_health_counters.json
+data/universe_health_suggestions.json
+data/wfo_drift_alert_state.json
+data/roundtrip_pf_reference.json
