@@ -75,6 +75,40 @@ schützen sollte, war selbst der Cry-Wolf.
 
 ---
 
+## 4b. Lockert der Vorschlag die Ausstiege? Dann greift er den Erntemechanismus an
+
+**Prüfen:** Verlängert die Änderung die Haltedauer? Wenn ja: Wie verhält sich die
+neue erwartete Haltedauer zum **Vorteils-Fenster** von rund einem Monat?
+
+```bash
+python scripts/haltedauer_analyse.py     # Zerfallskurve: lebt der Vorteil noch?
+python scripts/rotation_vs_halten.py     # aktuelle Haltedauer im Backtest
+```
+
+**Woher der Punkt kommt (21.07.2026, R-B26/R-B27):** Die Zerfallskurve zeigt, dass
+der Vorsprung der ausgewählten Namen **genau einen Monat** lebt (+1,078 %, t=3,46)
+und ab Monat 2 verschwindet (−0,068 % / +0,360 % / +0,253 % … alle unauffällig).
+Gleichzeitig liegt die tatsächliche Haltedauer bei **15 Handelstagen im Median**,
+61,7 % der Positionen schließen innerhalb von 21 Tagen.
+
+Daraus folgt die Umdeutung, die diesen Punkt nötig macht:
+
+> **Die engen Ausstiege sind nicht Risikomanagement — sie sind der
+> Erntemechanismus.** Sie holen den Vorsprung ab, bevor er verfällt.
+
+Jeder Vorschlag im Geist von „Gewinner laufen lassen" verlängert die Haltedauer
+in die Monate 2 bis 6 hinein — nachweislich der Bereich ohne Vorteil. Er kostet
+also nicht nur Risiko, er greift die Quelle der Rendite an.
+
+Genau das war die Änderung vom 20.07. (Trailing 10/12, Take-Profit aus, Tranchen
+aus). Sie wurde am selben Abend zurückgebaut, damals wegen eines Modellfehlers.
+Der tiefere Grund war dieser hier — er war nur noch nicht bekannt.
+
+**Faustregel:** Ausstiege lockern = beweispflichtig. Nicht „warum nicht", sondern
+„welcher Beleg zeigt, dass der Vorteil länger lebt als bisher gemessen?"
+
+---
+
 ## 5. Drawdown, nicht nur Rendite
 
 **Prüfen:** Max-Drawdown je Fenster — und **täglich zum Marktwert**, nicht aus
