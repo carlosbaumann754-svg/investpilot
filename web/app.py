@@ -958,6 +958,13 @@ async def api_portfolio(user=Depends(require_auth)):
 EXIT_TRIGGER_PRIORITY = ["SL", "Trailing-SL", "TP-1", "TP-2", "TP-3", "TP-final", "Time-Stop"]
 
 
+# R-B21 (21.07.2026): Ab diesem Wert gilt take_profit_pct als ABGESCHALTET.
+# Der Bot nutzt dafuer den Sentinel 999 statt None, weil trader.py
+# take_profit_pct/100 rechnet und bei None abstuerzen wuerde. Dieselbe
+# Konvention in scripts/build_roundtrip_reference.py und wfo_drift_watchdog.
+_TP_DISABLED_SENTINEL = 100
+
+
 def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -> dict:
     """Berechne für eine Position alle Trigger-Distanzen und den nächsten Exit.
 
@@ -1041,7 +1048,7 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
         "activation_pct": trail_activation,
     })
 
-    # --- TP-Tranchen (fortlaufend bis +18%) ---
+    # --- TP-Tranchen (aktuell 16 / 30, seit R-B15 ohne die +8er) ---
     # Wir wissen nicht welche schon gefeuert haben — prüfen per PnL-Schwelle.
     # Wenn pnl_pct >= tp_target, gilt Tranche als "durchgelaufen" (sie hat
     # geschlossen oder wäre gerade am schliessen).
@@ -1057,14 +1064,23 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
             "direction": "up",
         })
 
-    # --- Final TP (+18%) ---
+    # --- Finales Take-Profit ---
+    # R-B21 (21.07.2026): TP kann ABGESCHALTET sein. Technisch geschieht das
+    # ueber den Sentinel 999 (nicht None — trader.py rechnet take_profit_pct/100
+    # und wuerde bei None abstuerzen). Ohne diese Abfrage zeigte die Karte fuer
+    # JEDE offene Position einen aktiven Trigger "Take-Profit (+999%)" mit ~997%
+    # Distanz. Statt ihn wegzulassen wird er als ausgeschaltet ausgewiesen — die
+    # abgeschaltete Regel ist eine Information, kein Rauschen.
+    tp_aus = tp_final_pct is None or tp_final_pct >= _TP_DISABLED_SENTINEL
     triggers.append({
         "type": "TP-final",
-        "label": f"Take-Profit ({tp_final_pct:+.0f}%)",
-        "target_pct": tp_final_pct,
-        "distance_pct": round(tp_final_pct - pnl_pct, 2),
-        "active": pnl_pct < tp_final_pct,
+        "label": ("Take-Profit: aus (Gewinner laufen bis Tranche/Trailing)"
+                  if tp_aus else f"Take-Profit ({tp_final_pct:+.0f}%)"),
+        "target_pct": None if tp_aus else tp_final_pct,
+        "distance_pct": None if tp_aus else round(tp_final_pct - pnl_pct, 2),
+        "active": False if tp_aus else pnl_pct < tp_final_pct,
         "direction": "up",
+        "disabled": tp_aus,
     })
 
     # --- Time-Stop ---
