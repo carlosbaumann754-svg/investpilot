@@ -394,14 +394,22 @@ async function loadSoakProgress() {
         const res = await resp.json();
         if (!res || res.error) return;
         const closed = res.closed_trades || 0;
-        const target = res.go_nogo_target || 50;
-        const phase3 = res.phase3_target || 30;
+        const target = res.go_nogo_target || 100;
+        const phase3 = res.phase3_target || 25;
         const pct = res.progress_pct || 0;
         const days = (res.days_running != null) ? res.days_running + 'd' : '?';
 
+        // R-B24: cutover_date ist jetzt bewusst null (kein festes Datum mehr).
+        // Ohne diese Abfrage stand hier woertlich "Cutover-Ziel null." — gefunden
+        // bei der Sichtpruefung, nicht in der API-Antwort. Faellt spaeter wieder
+        // ein Datum an, wird es unveraendert angezeigt.
+        const zielText = res.cutover_date
+            ? 'Cutover-Ziel ' + res.cutover_date + '.'
+            : (res.cutover_regel || 'Kein festes Cutover-Datum — Go-Live ueber Kriterien.');
+
         document.getElementById('soak-headline').innerHTML =
-            '<strong>' + closed + ' / ' + target + '</strong> geschlossene Trades — Soak laeuft seit '
-            + res.soak_start + ' (' + days + '). Cutover-Ziel ' + res.cutover_date + '.';
+            '<strong>' + closed + ' / ' + target + '</strong> saubere Round-Trips — Soak laeuft seit '
+            + res.soak_start + ' (' + days + '). ' + zielText;
 
         const badge = document.getElementById('soak-badge');
         if (closed >= target) badge.textContent = 'Go/No-Go bereit';
@@ -3148,10 +3156,15 @@ async function loadCutoverReadiness() {
         badge.style.color = c.fg;
         badge.textContent = c.label + ' · ' + (d.summary?.green || 0) + '/' + (d.summary?.total || 0);
 
-        const days = d.days_to_cutover ?? '?';
+        // R-B24: kein festes Cutover-Datum mehr. Frueher stand hier "Cutover am
+        // 2026-08-04 · noch 14 Tage" — waehrend die Soak-Karte direkt darueber
+        // schon "kein Datum" sagte. Zwei Karten, zwei Wahrheiten.
+        const datumTeil = d.cutover_date
+            ? `Cutover am <strong>${d.cutover_date}</strong> &middot; ` +
+              `noch <strong>${d.days_to_cutover ?? '?'} Tage</strong> &middot; `
+            : `<strong>Kein festes Datum</strong> &middot; Go-Live ueber Kriterien &middot; `;
         headline.innerHTML =
-            `Cutover am <strong>${d.cutover_date}</strong> &middot; ` +
-            `noch <strong>${days} Tage</strong> &middot; ` +
+            datumTeil +
             `<span style="color:#34d399;">${d.summary?.green || 0} gruen</span>` +
             (d.summary?.yellow ? ` &middot; <span style="color:#fbbf24;">${d.summary.yellow} gelb</span>` : '') +
             (d.summary?.red    ? ` &middot; <span style="color:#f87171;">${d.summary.red} rot</span>` : '');

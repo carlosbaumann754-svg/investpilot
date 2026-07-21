@@ -5411,9 +5411,17 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
     # Motor (5-Signal-EDGAR-Stack) hat 0 Live-Trades und braucht ein eigenes
     # sauberes Fenster (>=2 Wochen stabiler Code + >=50 Close-Trades).
     # Historie: 28.05 -> 01.06 (v37h+2) -> 07.07 (Soak) -> 04.08 (Signal-Stack).
-    cutover_date = _date(2026, 8, 4)  # Di, volles Daten-Fenster fuer Signal-Stack
+    #
+    # R-B24 (21.07.2026): FESTES DATUM ENTFERNT — zweite Fundstelle.
+    # api_soak_progress war heute frueh schon umgestellt, diese hier war die Kopie
+    # (Dashboard-Sichtpruefung: Soak-Karte sagte "kein Datum", Readiness-Karte
+    # gleichzeitig "Cutover am 2026-08-04 · noch 14 Tage" — zwei Karten, zwei
+    # Wahrheiten). Das Datum war ohnehin nicht mehr erreichbar: die Soak-Uhr wurde
+    # am 21.07. erneut resetet, und das Sample-Kriterium (100 saubere Round-Trips)
+    # braucht bei ~0.6 RT/Tag rund acht Monate.
+    cutover_date = None
+    days_to_cutover = None
     today = _dt.now(_tz.utc).date()
-    days_to_cutover = (cutover_date - today).days
 
     gates: list[dict] = []
 
@@ -5548,12 +5556,34 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
                       "status": "yellow", "detail": "Status nicht ladbar"})
 
     # --- Gate #5: Kill-Switch-Drill ---
+    # R-B24 (21.07.2026): von GRUEN auf ROT korrigiert.
+    #
+    # Dieses Gate stand hartkodiert auf gruen mit Verweis auf den Drill vom
+    # 29.04.2026. R-B22 hat gestern belegt, dass genau in diesem Zeitraum der
+    # Schliess-Pfad des Not-Aus gar nicht funktionieren KONNTE: die Verbindung
+    # wurde damals mit readonly=True geholt und lieferte ein leeres Portfolio.
+    # "9 Tests gruen" hiess also: neun Tests haben bestaetigt, dass nichts
+    # geschlossen wird. Der Drill hat den Soft-Stop geprueft, nicht das Schliessen.
+    #
+    # Danach wurde auf readonly=False umgestellt — womit der Not-Aus clientId 1
+    # aus der config bekam, die der laufende Scheduler dauerhaft haelt
+    # ("Error 326: client id already in use"). Beide Varianten waren kaputt, nur
+    # unterschiedlich. Gefixt in R-B22 durch eigene clientId 97.
+    #
+    # VERIFIZIERT ist seit R-B22 nur der ABRUF (15 Positionen statt 0). Dass das
+    # tatsaechliche SCHLIESSEN durchlaeuft, ist unbewiesen — und die Historie
+    # zeigt, dass Code-Review hier zweimal nicht gereicht hat. Das Gate bleibt
+    # rot, bis der Drill aus ELITE_PRE_CUTOVER real gefahren wurde.
     gates.append({
-        "nr": 5, "title": "Kill-Switch-Drill",
-        "status": "green",
-        "detail": "Drill 29.04.2026 BESTANDEN — 3-Stage-Fallback (Soft-Stop + "
-                  "Hard-Kill mit ib_insync-Fallback). 9 Tests gruen.",
-        "last_check": "2026-04-29",
+        "nr": 5, "title": "Not-Aus-Drill (echtes Schliessen)",
+        "status": "red",
+        "detail": "OFFEN — Drill 29.04.2026 ist ENTWERTET: er lief mit readonly-"
+                  "Verbindung gegen ein leeres Portfolio, hat das Schliessen also "
+                  "nie geprueft (Beleg: R-B22, 21.07.). Der Konstruktionsfehler ist "
+                  "gefixt (eigene clientId 97), verifiziert ist aber nur der Abruf. "
+                  "Harte Bedingung vor Go-Live: Drill bei geschlossenem Markt, "
+                  "Ausloesung ueber das Dashboard, mit Freigabe von Carlos.",
+        "last_check": None,
     })
 
     # --- Gate #6: IBKR Master-2FA ---
@@ -5685,8 +5715,11 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
     )
 
     return {
-        "cutover_date": cutover_date.isoformat(),
+        "cutover_date": cutover_date,
         "days_to_cutover": days_to_cutover,
+        "cutover_regel": ("Kein festes Datum — Go-Live erst, wenn alle Hard-Gates "
+                          "gruen sind (inkl. Not-Aus-Drill) und die Soak-Kriterien "
+                          "erfuellt sind."),
         "overall_status": overall,
         "summary": {"green": green, "yellow": yellow, "red": red, "total": len(gates)},
         "hard_gates": gates,
