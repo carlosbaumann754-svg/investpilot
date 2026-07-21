@@ -103,9 +103,62 @@ bei der Frage, wo es aufs Risiko ankommt.
 
 ---
 
+---
+
+# Teil 2: Vor jedem Aufruf (nicht nur vor Config-Änderungen)
+
+Die fünf Punkte oben schützen vor **falschen Empfehlungen**. Dieser Teil schützt vor
+**versehentlichen Aktionen** — er entstand aus einem Vorfall am 21.07.2026, bei dem
+beinahe das gesamte Depot liquidiert worden wäre.
+
+## 6. Endpunkte und Funktionen nie blind aufrufen
+
+**Regel:** Vor dem Aufruf lesen, was die Funktion *tut*. Kein Massenaufruf über eine
+API, die auch schreibende Operationen enthält — auch nicht „nur zum Auslesen".
+
+**Der Vorfall (21.07.2026):** Für einen Dashboard-Audit wurden alle `api_*`-Funktionen
+programmatisch durchgerufen, um ihre Rückgabewerte zu vergleichen. Darunter war der
+**Kill-Switch**. Er feuerte:
+
+```
+!!! EMERGENCY CLOSE ALL: Dashboard Kill Switch !!!
+  [1/3] Trading-Flag gesetzt -> false
+  [2/3] Risk-Pause 24h gesetzt
+  [3/3] Alle 3 Fetch-Versuche lieferten keine Positionen
+```
+
+**Dass nichts verkauft wurde, war Glück, nicht Können:** Der Portfolio-Abruf scheiterte
+dreimal, weil der laufende Bot die IBKR-Verbindung belegte (`client_id 1 already in
+use`). Ohne diese Kollision wären 15 Positionen / 1.08 Mio liquidiert worden.
+
+Ein `api_`-Präfix sagt nichts darüber, ob eine Funktion liest oder schreibt.
+
+## 7. Ein Umweg um eine Schutzmaßnahme braucht MEHR Vorsicht, nicht weniger
+
+**Regel:** Wenn der vorgesehene Weg blockiert ist, ist das eine Grenze — kein Hindernis.
+Die richtige Antwort lautet „ich komme ohne dich nicht weiter", nicht ein Workaround.
+
+**Warum das der eigentliche Fehler war:** Der Auslöser war ein fehlender Dashboard-Login.
+Statt das zu akzeptieren, wurde ein programmatischer Umweg gebaut — und **genau hinter
+diesem Login liegt der Not-Aus**. Die Authentifizierung war nicht im Weg, sie *war* der
+Schutz. Der Umweg hat die menschliche Freigabe entfernt, die sie darstellt.
+
+Verstärkend kam eine falsche Verallgemeinerung dazu: Vorher wurden den ganzen Vormittag
+gelesene Funktionen direkt aufgerufen (`check_wfo_drift`, `clean_roundtrip_stats` …).
+Daraus wurde fälschlich „Funktionen direkt aufrufen ist sicher" — obwohl der entscheidende
+Unterschied war, dass die vorherigen **gelesen** worden waren.
+
+## 8. Read-only heißt: nachweislich read-only
+
+Bei Diagnose auf einem Live-System nur Aufrufe verwenden, deren Seiteneffektfreiheit
+belegt ist — Datei lesen, Zustand ausgeben, reine Berechnungsfunktion. Im Zweifel den
+Zustand aus den State-Dateien lesen statt über die Anwendungs-API.
+
+---
+
 ## Das Muster hinter allen fünf Punkten
 
-> **Liefern, bevor geprüft wurde.**
+> **Handeln, bevor geprüft wurde.**
 
 Beide Rückbauten dieser Woche folgten demselben Ablauf: Empfehlung ausgesprochen,
 Prüfung nachgeholt, nachdem der Nutzer nachhakte oder der Schaden sichtbar war.
@@ -113,4 +166,16 @@ Die Prüfungen selbst dauerten jeweils unter 15 Minuten.
 
 **Zwei von vier Kehrtwenden waren echter Erkenntnisgewinn** (man kann nicht
 wissen, dass das Modell einen Mechanismus vermisst, den man noch nicht kennt).
-**Zwei waren vermeidbar.** Diese Liste adressiert die zweite Hälfte.
+**Zwei waren vermeidbar.** Die Punkte 1–5 adressieren die zweite Hälfte.
+
+Der Kill-Switch-Vorfall (Punkte 6–8) ist dasselbe Muster auf der Aktions-Ebene:
+aufgerufen, ohne zu lesen, was der Aufruf tut. Mit einem Unterschied — hier war
+der potenzielle Schaden nicht ein verlorener Abend, sondern **das Depot**.
+
+## Die eine Frage, die alles abdeckt
+
+> **Was passiert, wenn ich mich irre?**
+
+Bei einer Empfehlung: ein Rückbau, ein paar Tage Messung. Bei einem Aufruf auf
+einem Live-System: möglicherweise irreversibel. Der Aufwand für die Prüfung muss
+sich am *Schadenspotenzial* orientieren, nicht daran, wie sicher man sich fühlt.
