@@ -75,37 +75,46 @@ schützen sollte, war selbst der Cry-Wolf.
 
 ---
 
-## 4b. Lockert der Vorschlag die Ausstiege? Dann greift er den Erntemechanismus an
+## 4b. Ausstiege sind ein Renditehebel erster Ordnung — immer messen, nie herleiten
 
-**Prüfen:** Verlängert die Änderung die Haltedauer? Wenn ja: Wie verhält sich die
-neue erwartete Haltedauer zum **Vorteils-Fenster** von rund einem Monat?
+**Prüfen:** Jede Exit-Änderung im **Halten-Modus** (`run_backtest_hold`) gegen die
+aktuelle Config durchrechnen. Nicht aus der Zerfallskurve ableiten.
 
 ```bash
-python scripts/haltedauer_analyse.py     # Zerfallskurve: lebt der Vorteil noch?
-python scripts/rotation_vs_halten.py     # aktuelle Haltedauer im Backtest
+python scripts/rotation_vs_halten.py     # Halten-Modus, identische Parameter
 ```
 
-**Woher der Punkt kommt (21.07.2026, R-B26/R-B27):** Die Zerfallskurve zeigt, dass
-der Vorsprung der ausgewählten Namen **genau einen Monat** lebt (+1,078 %, t=3,46)
-und ab Monat 2 verschwindet (−0,068 % / +0,360 % / +0,253 % … alle unauffällig).
-Gleichzeitig liegt die tatsächliche Haltedauer bei **15 Handelstagen im Median**,
-61,7 % der Positionen schließen innerhalb von 21 Tagen.
+**Woher der Punkt kommt (21.07.2026) — und warum er zweimal geschrieben wurde:**
 
-Daraus folgt die Umdeutung, die diesen Punkt nötig macht:
+Erste Fassung dieses Punktes behauptete: *„Die engen Ausstiege sind der
+Erntemechanismus — Lockern greift die Renditequelle an."* Hergeleitet aus zwei
+korrekten Befunden (Vorteil lebt einen Monat, Exits greifen nach 15 Tagen).
 
-> **Die engen Ausstiege sind nicht Risikomanagement — sie sind der
-> Erntemechanismus.** Sie holen den Vorsprung ab, bevor er verfällt.
+**Carlos' Rückfrage — „müssen die engen Ausstiege jetzt zurück?" — führte zur
+Messung, und die widerlegte die Herleitung in beide Richtungen:**
 
-Jeder Vorschlag im Geist von „Gewinner laufen lassen" verlängert die Haltedauer
-in die Monate 2 bis 6 hinein — nachweislich der Bereich ohne Vorteil. Er kostet
-also nicht nur Risiko, er greift die Quelle der Rendite an.
+| Variante | Rendite | Sharpe | MaxDD | Haltedauer | ≤ 21 d |
+|---|---|---|---|---|---|
+| eng (TP +12, Tranchen 8/12) | +125,6 % | 0,81 | −12,0 % | 13 d | 68,5 % |
+| aktuell (TP aus, Tranchen 16/30) | +234,0 % | 1,17 | −11,0 % | 15 d | 61,7 % |
+| locker (ohne Tranchen, Trail 10/12) | +327,7 % | 1,21 | −10,0 % | 28 d | 39,1 % |
 
-Genau das war die Änderung vom 20.07. (Trailing 10/12, Take-Profit aus, Tranchen
-aus). Sie wurde am selben Abend zurückgebaut, damals wegen eines Modellfehlers.
-Der tiefere Grund war dieser hier — er war nur noch nicht bekannt.
+Die **engste** Variante ist die schlechteste, die **lockerste** die beste. Es gibt
+keinen Zusammenhang „enger = mehr Ernte".
 
-**Faustregel:** Ausstiege lockern = beweispflichtig. Nicht „warum nicht", sondern
-„welcher Beleg zeigt, dass der Vorteil länger lebt als bisher gemessen?"
+**Warum die Herleitung nicht tragen konnte:** Die Zerfallskurve misst den
+*Durchschnitt* der ausgewählten Namen. Ein Trailing-Stop wirkt aber
+**asymmetrisch** — er lässt einzelne Gewinner laufen und schneidet Verlierer ab.
+Diese Asymmetrie ist eine andere Renditequelle als der Auswahl-Vorteil, und die
+Kurve kann sie strukturell nicht sehen.
+
+**Die eigentliche Lehre ist also Punkt 4, eine Ebene höher:** Auch eine
+*Schlussfolgerung* kann geraten sein, nicht nur eine Zahl. Zwei belegte Befunde
+plus eine plausible Verbindung ergeben keinen dritten Befund.
+
+**Faustregel:** Exits sind der stärkste einzelne Hebel im ganzen System
+(+125 % bis +328 % bei identischer Auswahl). Deshalb: jede Änderung messen —
+und keine Regel über sie aufstellen, die nicht selbst gemessen wurde.
 
 ---
 
