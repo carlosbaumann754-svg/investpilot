@@ -1728,7 +1728,21 @@ async def api_soak_progress(user=Depends(require_auth)):
         #     statistisch nicht von Pech unterscheiden.
         # Gezaehlt wird jetzt ueber roundtrip_metrics — dieselbe Quelle wie der
         # Gatekeeper und das Motor-Edge-Signal (eine Definition, nicht drei).
-        GO_NOGO_TARGET = 100          # saubere Round-Trips fuer ein belastbares Urteil
+        # R-B29 (21.07.2026): 100 -> 80. KEINE Absenkung der Anforderung, sondern
+    # dieselbe Regel auf aktualisierte Daten.
+    #
+    # Die Regel lautet seit R-B23: "so viele Round-Trips, dass das 5%-Quantil des
+    # Profit-Faktors ueber 1.0 liegt" — erst dort laesst sich "verdient kein Geld"
+    # von Pech unterscheiden. Mit der alten Exit-Config (Tranchen aktiv) war das
+    # bei n~100 der Fall. Nach dem Tranchen-Wegfall (R-B28) ist die Referenz neu
+    # erzeugt: Referenz-PF stieg von 1.41 auf 1.698, und p05 ueberschreitet 1.0
+    # jetzt schon bei n=80 (1.03) statt bei n=100 (1.08).
+    #
+    # Der bessere Motor braucht also weniger Stichprobe fuer denselben Beweis.
+    # 100 stehenzulassen waere nicht "vorsichtiger", sondern willkuerlich — die
+    # Zahl haette dann keine Herleitung mehr. Kostet rund fuenf Wochen ohne
+    # statistischen Gegenwert.
+    GO_NOGO_TARGET = 80          # saubere Round-Trips fuer ein belastbares Urteil
         PHASE3_TARGET = 25            # erste Orientierung (noch KEIN Beweis)
         CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")
         hist = read_json_safe("trade_history.json") or []

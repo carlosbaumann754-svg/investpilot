@@ -91,6 +91,55 @@ IBG_TIMEOUT = int(os.environ.get("IBG_TIMEOUT", "15"))
 IBG_EMERGENCY_CLIENT_ID = int(os.environ.get("IBG_EMERGENCY_CLIENT_ID", "97"))
 
 
+# ============================================================
+# CLIENT-ID-VERGABE (R-B29, 21.07.2026)
+# ============================================================
+# Jede IBKR-Verbindung braucht eine eindeutige clientId; doppelt vergeben
+# ergibt "Error 326: client id already in use". Was das anrichtet, hat der
+# Not-Aus-Vorfall am 21.07. gezeigt: der Kill-Switch teilte sich die ID mit dem
+# laufenden Bot und konnte deshalb GENAU DANN nicht schliessen, wenn man ihn
+# braucht (R-B22).
+#
+# DER NEBENFUND VON DAMALS, hier behoben: 197 (Session-Watchdog) und 199
+# (SelfTest) liegen INNERHALB des Zufallsbereichs 100-999, aus dem readonly-
+# Verbindungen ihre ID ziehen. Jede solche Verbindung hatte also eine Chance von
+# 2/900, einem laufenden Dienst die Verbindung wegzuschiessen.
+#
+# Klein, aber die Folgen sind unangenehm asymmetrisch: der Watchdog ist genau
+# das System, das Verbindungsprobleme erkennen soll. Faellt er durch eine
+# Kollision aus, faellt die Ueberwachung mit aus — und zwar still.
+RESERVED_CLIENT_IDS = frozenset({
+    1,    # Bot-Trader (Scheduler, dauerhaft belegt)
+    88,   # Preis-Provider
+    89,   # Sizing-Fallback
+    97,   # Not-Aus (R-B22)
+    99,   # Reconcile
+    197,  # IBKR-Session-Watchdog
+    199,  # Self-Test
+})
+
+_RANDOM_CLIENT_ID_MIN = 100
+_RANDOM_CLIENT_ID_MAX = 999
+
+# Einmal aufgebaut statt bei jedem Aufruf neu zu wuerfeln und zu pruefen —
+# das schliesst eine Kollision strukturell aus, statt sie nur unwahrscheinlich
+# zu machen. Eine Verwerfungs-Schleife koennte theoretisch endlos laufen.
+_RANDOM_CLIENT_ID_POOL = tuple(
+    i for i in range(_RANDOM_CLIENT_ID_MIN, _RANDOM_CLIENT_ID_MAX + 1)
+    if i not in RESERVED_CLIENT_IDS
+)
+
+
+def random_client_id() -> int:
+    """Zufaellige clientId fuer readonly-/Ad-hoc-Verbindungen.
+
+    Zieht ausschliesslich aus Werten, die keinem festen Dienst gehoeren.
+    Garantiert kollisionsfrei gegenueber RESERVED_CLIENT_IDS.
+    """
+    import random
+    return random.choice(_RANDOM_CLIENT_ID_POOL)
+
+
 def emergency_broker_config(config: dict | None) -> dict:
     """Config-Kopie fuer den Not-Aus: schreibfaehig, mit eigener clientId.
 
@@ -423,8 +472,7 @@ class IbkrBroker(BrokerBase):
         #     -> Bot-Trader-Hauptinstanz: clientId=1 aus config.json
         explicit_id = ibkr_cfg.get("client_id")
         if self.readonly or explicit_id is None:
-            import random
-            self.client_id = random.randint(100, 999)
+            self.client_id = random_client_id()
         else:
             self.client_id = int(explicit_id)
         self.timeout = int(ibkr_cfg.get("timeout") or IBG_TIMEOUT)
@@ -586,8 +634,12 @@ class IbkrBroker(BrokerBase):
                 "already in use", "timeout", "peer closed", "326",
                 "different loop", "different event loop"
             )):
-                import random
-                fresh_id = random.randint(100, 999)
+                # R-B29: auch hier aus dem reservierungs-freien Pool ziehen.
+                # Diese Stelle ist die heiklere von beiden: sie feuert GERADE
+                # DANN, wenn schon ein Verbindungskonflikt vorliegt — eine
+                # zufaellig getroffene Dienst-ID wuerde den Konflikt dann von
+                # der eigenen Verbindung auf einen fremden Dienst verschieben.
+                fresh_id = random_client_id()
                 log.warning(
                     "IBG-Connect mit clientId=%d failed (%s) — Retry mit fresh clientId=%d",
                     self.client_id, type(primary_err).__name__, fresh_id,
