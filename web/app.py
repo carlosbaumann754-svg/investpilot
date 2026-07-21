@@ -1772,12 +1772,23 @@ async def api_soak_progress(user=Depends(require_auth)):
             "unrealized_pnl": round(unrealized, 2),
             "unrealized_currency": unrealized_ccy,
             "metrics": metrics,
-            "caveat": ("Rekalibrierte Config (ab 02.07.): SL -8%, min_scanner_score "
-                       "25, max_positions 15. Der Bot deployt jetzt breiter (~15 statt "
-                       "11 Positionen) statt bei einem Alt-Motor-Score-Gate einzufrieren. "
-                       "Frischer Soak misst diese Config -> die ersten Trades sind noch "
-                       "Uebergang (alt geoeffnet, neu geschlossen); belastbar ab ~10-15 "
-                       "geschlossenen Trades auf der neuen Config."),
+            # R-B21 (21.07.2026): Text auf die AKTUELLE Config gezogen. Er
+            # beschrieb noch den Stand vom 02.07. und kannte weder die
+            # Exit-Korrektur (R-B15/B17) noch die Stichproben-Realitaet aus der
+            # Referenzverteilung. Bei jeder Config-Aenderung mit anpassen —
+            # ein Anzeigetext, der die Vorgaenger-Config beschreibt, ist
+            # schlimmer als keiner.
+            "caveat": ("Exit-korrigierte Config (ab 21.07.): SL -8%, Trailing 6/4, "
+                       "Tranchen 16/30, KEIN festes Take-Profit, min_scanner_score 25, "
+                       "max 15 Positionen. Die +8%-Tranche und das TP bei +12% sind "
+                       "raus -- sie deckelten jeden Gewinner, waehrend Verlierer bis "
+                       "-8% liefen. Die ersten Abschluesse sind noch Uebergang (unter "
+                       "der alten Config eroeffnet). WICHTIG zur Einordnung: Der "
+                       "Gatekeeper sind die REALISIERTEN Round-Trips, die der Bot "
+                       "selbst eroeffnet UND geschlossen hat -- nicht der Depotwert "
+                       "(der enthaelt Buchgewinne). Und laut Referenzverteilung "
+                       "braucht es ~100 solcher Round-Trips, bevor sich 'verdient "
+                       "kein Geld' statistisch von Pech unterscheiden laesst."),
         }
     except Exception as e:
         log.error(f"Soak-Progress Error: {e}")
