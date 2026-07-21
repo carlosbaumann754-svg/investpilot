@@ -1,12 +1,42 @@
-# Cutover-Runbook (v37h+2, Stand 17.05.2026)
+# Cutover-Runbook (R-B33, Stand 21.07.2026)
 
-> **Zweck:** Schritt-fuer-Schritt-Anleitung fuer den Real-Money-Cutover am
-> **Montag 01.06.2026** und Notfall-Pfade fuer die ersten 6 Wochen
-> Live-Trading. Alles in **Schweizer Zeit (CEST/CET)**.
+> **Zweck:** Schritt-fuer-Schritt-Anleitung fuer den Real-Money-Cutover und
+> Notfall-Pfade fuer die ersten 6 Wochen Live-Trading. Alles in
+> **Schweizer Zeit (CEST/CET)**.
 >
-> **Datums-Aenderung 17.05.2026:** Cutover verschoben von Do 28.05. auf
-> Mo 01.06.2026. Begruendung: 4 zusaetzliche Soak-Test-Tage, Memorial-Day
-> 25.05. als natuerliche Pause, Mo-Cutover = volle Trading-Woche ab Tag 1.
+> **KEIN FESTES DATUM MEHR (21.07.2026, R-B23/R-B24):** Go-Live, wenn die
+> Kriterien in ELITE_VALIDIERUNGS_SOAK gruen sind — inklusive bestandenem
+> Not-Aus-Drill (Section 0). Die konkreten Datumsangaben in den Tabellen
+> unten (01.06. etc.) sind als "Cutover-Tag" zu lesen.
+> Historie: 28.05. -> 01.06. -> 07.07. -> 04.08. -> Kriterien-Regel.
+
+---
+
+## 0. VORABEND des Cutover: NOT-AUS-DRILL (Pflicht, Hard-Gate #5)
+
+> **NEU 21.07.2026 (R-B33).** Kein Go-Live ohne bestandenen Drill — Carlos-Entscheid
+> nach dem Kill-Switch-Vorfall vom 21.07. Der Not-Aus war ZWEIMAL strukturell kaputt
+> (readonly-Portfolio 29.04.; clientId-Kollision bis R-B22), beide Male hat
+> Code-Review es nicht gefunden. Deshalb Drill statt Review.
+>
+> **Warum am Vorabend:** Der Wechsel auf echtes Geld erfordert ohnehin, das
+> Paper-Depot zu raeumen — genau das tut der Drill. Ein Termin, zwei Pflichten:
+> der Not-Aus beweist das SCHLIESSEN, und das Buch ist danach leer fuer den
+> Real-Start. Es gibt keinen separaten Termin zu planen — wer den Cutover
+> ansetzt, hat den Drill automatisch am Abend davor.
+
+| Zeit (CEST) | Schritt | Wer | Erwartung |
+|---|---|---|---|
+| nach 22:00 (Markt zu) | **Soak-Kennzahlen einfrieren**: `Pull-BotState.cmd` + Dashboard-Screenshot (Soak-Karte, Gatekeeper) | du | Kriterien 2+3 werden VOR dem Drill bewertet — die Drill-Schliessungen sind Not-Aus-Closes, keine regulaeren Exits, und duerfen die Round-Trip-Statistik nicht verfaelschen |
+| +5 min | Portfolio-Stand dokumentieren (Symbole, Stueckzahlen, Werte) | du | Screenshot oder `Pull-BotState.cmd`-Export |
+| +10 min | **Ausdrueckliche Freigabe aussprechen** ("Drill jetzt") | du | ohne Freigabe kein Drill — der Drill verkauft echte (Paper-)Positionen |
+| +11 min | **Kill-Switch ueber das DASHBOARD ausloesen** (roter Button) — NICHT per Skript: der Dashboard-Pfad ist der historisch defekte, also genau der zu testende | du | Pushover "KILL SWITCH AKTIV" |
+| +12-15 min | Pruefen: Trading-Flag `false`, Risk-Pause gesetzt, **ALLE Positionen geschlossen**, Orders bei IBKR sichtbar, **keine Error-326-Meldung** im Log | du + Claude | Bestanden = alle fuenf Punkte erfuellt |
+| +20 min | Ergebnis protokollieren (CHANGELOG + `data/cutover_confirmations.json`) | Claude | Hard-Gate #5 -> gruen |
+| danach | KEINE Wiederherstellung der Positionen — das Buch bleibt leer fuer den Cutover am Folgetag | — | Risk-Pause laeuft ohnehin bis nach dem Switch |
+
+**Abbruchkriterium:** Schliesst der Drill NICHT alle Positionen -> Cutover ABGESAGT,
+Ursache analysieren, Fix, neuer Drill an einem spaeteren Vorabend. Kein "trotzdem live".
 
 ---
 
