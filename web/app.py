@@ -1715,8 +1715,19 @@ async def api_soak_progress(user=Depends(require_auth)):
         # geschlossenem Markt, vor Handelsbeginn -> sauberer Schnitt, die 9
         # Round-Trips der Vorgaenger-Config zaehlen nicht mehr fuers Gate.
         SOAK_START = "2026-07-21T12:00:00"
-        GO_NOGO_TARGET = 50
-        PHASE3_TARGET = 30
+        # R-B23 (21.07.2026): Ziel auf SAUBERE ROUND-TRIPS umgestellt.
+        # Vorher 50 "Close-Trades" — zwei Fehler in einer Zahl:
+        # (a) CLOSE_KEYS enthaelt "CLOSE", und PARTIAL_CLOSE enthaelt das auch ->
+        #     Teilverkaeufe zaehlten als abgeschlossene Trades. Genau diese
+        #     Aufblaehung erzeugte die scheinbare 82%-Win-Rate.
+        # (b) 50 ist zu wenig: die empirische Referenzverteilung (R-B18, 871
+        #     Backtest-Trades) zeigt, dass das 5%-Quantil des Profit-Faktors erst
+        #     bei n~100 ueber 1.0 steigt. Vorher laesst sich "verdient kein Geld"
+        #     statistisch nicht von Pech unterscheiden.
+        # Gezaehlt wird jetzt ueber roundtrip_metrics — dieselbe Quelle wie der
+        # Gatekeeper und das Motor-Edge-Signal (eine Definition, nicht drei).
+        GO_NOGO_TARGET = 100          # saubere Round-Trips fuer ein belastbares Urteil
+        PHASE3_TARGET = 25            # erste Orientierung (noch KEIN Beweis)
         CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")
         hist = read_json_safe("trade_history.json") or []
         closes = []
@@ -1740,8 +1751,21 @@ async def api_soak_progress(user=Depends(require_auth)):
             closes.append(t)
         pnls_pct = [float(t["pnl_pct"]) for t in closes]
         pnls_usd = [float(t["pnl_usd"]) for t in closes if t.get("pnl_usd") is not None]
-        n_closed = len(closes)
         wins = sum(1 for p in pnls_pct if p > 0)
+
+        # R-B23: Fortschritt zaehlt SAUBERE ROUND-TRIPS (im Fenster eroeffnet UND
+        # geschlossen), nicht Close-Ereignisse. Dieselbe Quelle wie Gatekeeper und
+        # Motor-Edge-Signal. Faellt das aus, lieber 0 anzeigen als die alte,
+        # aufgeblaehte Zahl — eine zu optimistische Fortschrittsanzeige ist genau
+        # das, was uns die 82%-Win-Rate vorgegaukelt hat.
+        rt_stats = None
+        try:
+            from app.roundtrip_metrics import clean_roundtrip_stats
+            rt_stats = clean_roundtrip_stats(hist, since_iso=SOAK_START)
+            n_closed = rt_stats["n"]
+        except Exception as e:
+            log.warning(f"Soak-Progress: Round-Trip-Zaehlung fehlgeschlagen: {e}")
+            n_closed = 0
         # offene Positionen + unrealized aus brain-cache (loop-safe)
         n_open, unrealized = 0, 0.0
         # v37dt Audit#21: unrealized kommt aus _base_unrealized_pnl -> Basis-
@@ -1759,16 +1783,24 @@ async def api_soak_progress(user=Depends(require_auth)):
                 unrealized = float(pf.get("unrealizedPnL") or 0)
         except Exception:
             pass
+        # R-B23: Kennzahlen auf derselben Basis wie der Fortschritt (Round-Trips).
+        # Vorher mischten sich hier Close-Ereignisse (Win-Rate ueber Teilverkaeufe
+        # = aufgeblaeht) mit der Trade-Zahl — die Karte war in sich widerspruechlich.
         metrics = None
-        if n_closed > 0:
+        if rt_stats and rt_stats["n"] > 0:
+            n_rt = rt_stats["n"]
+            n_wins = round(rt_stats["win_rate"] / 100 * n_rt) if rt_stats["win_rate"] else 0
             metrics = {
-                "win_rate_pct": round(wins / n_closed * 100, 1),
-                "avg_return_pct": round(sum(pnls_pct) / n_closed, 2),
-                "best_pct": round(max(pnls_pct), 2),
-                "worst_pct": round(min(pnls_pct), 2),
-                "wins": wins,
-                "losses": n_closed - wins,
-                "total_realized_usd": round(sum(pnls_usd), 2) if pnls_usd else None,
+                "win_rate_pct": rt_stats["win_rate"],
+                "avg_return_pct": rt_stats["avg_ret_pct"],
+                "best_pct": round(max(pnls_pct), 2) if pnls_pct else None,
+                "worst_pct": round(min(pnls_pct), 2) if pnls_pct else None,
+                "wins": n_wins,
+                "losses": n_rt - n_wins,
+                "total_realized_usd": rt_stats["net_usd"],
+                # Die zwei Zahlen, auf die es beim Gate ankommt:
+                "gatekeeper_net_usd": rt_stats["net_usd"],
+                "profit_faktor_pct_basis": rt_stats["pf_pct"],
             }
         days_running = None
         try:
@@ -1778,7 +1810,15 @@ async def api_soak_progress(user=Depends(require_auth)):
             pass
         return {
             "soak_start": SOAK_START,
-            "cutover_date": "2026-08-04",
+            # R-B23: Festes Cutover-Datum entfernt (Carlos-Entscheid 21.07.2026).
+            # Der 04.08. war inhaltlich tot — die Soak-Uhr wurde am 21.07. erneut
+            # zurueckgesetzt, und das Sample-Kriterium verlangt ~100 saubere
+            # Round-Trips (~8 Monate bei aktueller Frequenz). Ein Datum zu raten
+            # und alle vier Wochen zu verschieben erzeugt nur falsche Sicherheit.
+            "cutover_date": None,
+            "cutover_regel": ("Kein festes Datum. Go-Live, wenn die Kriterien in "
+                              "ELITE_VALIDIERUNGS_SOAK gruen sind — inklusive "
+                              "bestandenem Not-Aus-Drill."),
             "days_running": days_running,
             "closed_trades": n_closed,
             "go_nogo_target": GO_NOGO_TARGET,
