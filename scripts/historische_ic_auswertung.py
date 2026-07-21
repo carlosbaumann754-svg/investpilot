@@ -39,6 +39,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+TOP_N = 15  # so viele Namen haelt der Bot
+
 START = "2017-01-01"
 END = "2026-07-01"
 
@@ -116,12 +118,72 @@ def main() -> int:
         print(f"  BEFUND [{b['status']}]: {b['text']}")
         print()
 
+    # ---------------------------------------------------------------------
+    # SPITZEN-ANALYSE
+    # ---------------------------------------------------------------------
+    # Der Rang-IC bewertet die GESAMTE Rangfolge — auch die Frage, ob Platz 200
+    # korrekt vor Platz 250 liegt. Das interessiert den Bot ueberhaupt nicht: er
+    # kauft die besten 15 von ~300. Ein Vorteil koennte ausschliesslich an der
+    # Spitze sitzen und im Gesamt-IC untergehen.
+    #
+    # Deshalb hier direkt die Frage, die zaehlt: Haben die Top-15 danach besser
+    # abgeschnitten als der Durchschnitt des Universums?
+    print("=" * 68)
+    print("SPITZEN-ANALYSE — kauft der Bot die richtigen Namen?")
+    print("=" * 68)
+    top_erg = {}
+    for h, name in ((1, "1 Monat"), (3, "3 Monate")):
+        diffs = []
+        tage = sorted(hist)
+        for i in range(0, len(tage) - h, h):  # nicht ueberlappend
+            s_snap, e_snap = hist[tage[i]], hist[tage[i + h]]
+            paare = []
+            for sym, (score, preis) in s_snap.items():
+                sp = e_snap.get(sym)
+                if not sp or preis <= 0 or sp[1] <= 0:
+                    continue
+                paare.append((score, sp[1] / preis - 1.0))
+            if len(paare) < 50:
+                continue
+            paare.sort(key=lambda p: p[0], reverse=True)
+            top = [r for _, r in paare[:TOP_N]]
+            alle = [r for _, r in paare]
+            diffs.append((sum(top) / len(top) - sum(alle) / len(alle)) * 100)
+
+        if len(diffs) < 2:
+            continue
+        mittel = sum(diffs) / len(diffs)
+        var = sum((d - mittel) ** 2 for d in diffs) / (len(diffs) - 1)
+        streuung = var ** 0.5
+        t = mittel / (streuung / len(diffs) ** 0.5) if streuung > 0 else None
+        from app.signal_ic_tracker import t_kritisch
+        schwelle = t_kritisch(len(diffs) - 1)
+        top_erg[name] = {"n_perioden": len(diffs), "mehrrendite_pct": round(mittel, 3),
+                         "streuung": round(streuung, 3),
+                         "t_wert": round(t, 2) if t else None,
+                         "schwelle": round(schwelle, 2),
+                         "anteil_positiv_pct": round(
+                             sum(1 for d in diffs if d > 0) / len(diffs) * 100, 1)}
+        print(f"\n  Horizont {name} ({len(diffs)} Perioden)")
+        print(f"    Mehrrendite Top-{TOP_N} vs. Universum : {mittel:+.3f} % pro Periode")
+        print(f"    Streuung                            :  {streuung:.3f} %")
+        print(f"    t-Wert                              :  {_f(t, 2)}  "
+              f"(noetig {schwelle:.2f})")
+        print(f"    Perioden mit Mehrrendite            :  "
+              f"{sum(1 for d in diffs if d > 0) / len(diffs) * 100:.1f} %")
+        if t and abs(t) >= schwelle:
+            print(f"    ==> {'VORTEIL' if t > 0 else 'NACHTEIL'} nachweisbar.")
+        else:
+            print("    ==> Kein nachweisbarer Unterschied zum Zufall.")
+    print()
+
     save_json("signal_ic_historisch.json", {
         "start": start, "ende": ende,
         "n_snapshots": len(hist),
         "hinweis": ("Point-in-Time-Scores aus dem Backtester (filed<=asof). "
                     "Misst nur die Selektion, nicht Ausfuehrung/Kosten."),
         "horizonte": ergebnisse,
+        "spitzen_analyse": top_erg,
     })
     print("Gespeichert: data/signal_ic_historisch.json")
     return 0
