@@ -2737,8 +2737,15 @@ async def api_killswitch(user=Depends(require_auth)):
         from app.config_manager import load_config
 
         config = load_config()
-        # readonly=False: wir wollen Positionen wirklich schliessen
-        client = get_broker(config, readonly=False)
+        # R-B22 (21.07.2026): SCHREIBFAEHIG **und** mit eigener clientId.
+        # readonly=False allein reichte NICHT: dann kommt clientId=1 aus der
+        # config — dieselbe, die der Scheduler-Prozess dauerhaft haelt ->
+        # "Error 326: client id already in use" -> Portfolio-Fetch leer ->
+        # der Not-Aus schliesst NICHTS. Genau so am 21.07.2026 passiert.
+        # readonly=True waere ebenfalls falsch (darf keine Orders senden und
+        # lieferte am 29.04.2026 leere Portfolios).
+        from app.ibkr_client import emergency_broker_config
+        client = get_broker(emergency_broker_config(config), readonly=False)
         username = getattr(user, "username", None) or str(user)
         result = emergency_close_all(client, f"Dashboard Kill Switch von {username}")
 

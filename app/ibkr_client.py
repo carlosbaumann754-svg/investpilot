@@ -71,6 +71,45 @@ IBG_PORT = int(os.environ.get("IBG_PORT", "4004"))  # socat-bridge port, NICHT 4
 IBG_CLIENT_ID = int(os.environ.get("IBG_CLIENT_ID", "1"))
 IBG_TIMEOUT = int(os.environ.get("IBG_TIMEOUT", "15"))
 
+# R-B22 (21.07.2026): Eigene clientId fuer den NOT-AUS.
+#
+# WARUM: Dashboard (uvicorn) und Handelsschleife (python -m app.scheduler) sind
+# GETRENNTE PROZESSE. Der Scheduler haelt clientId=1 dauerhaft. Der Kill-Switch
+# braucht eine SCHREIBFAEHIGE Verbindung (er will schliessen) und bekam ueber
+# readonly=False ebenfalls die 1 aus der config -> "Error 326: client id already
+# in use" -> alle drei Fetch-Versuche leer -> KEINE Position geschlossen.
+# Am 21.07.2026 real passiert.
+#
+# Das Fatale ist der Umkehrschluss: Der Not-Aus konnte genau dann nicht
+# schliessen, wenn der Bot laeuft — also immer, wenn man ihn braucht.
+# (Vorgeschichte: davor war der Pfad readonly=True und lieferte leere Portfolios,
+#  Vorfall 29.04.2026. Es wurde ein Problem gegen das andere getauscht.)
+#
+# Belegte IDs: 1=Bot, 88=Preis-Provider, 89=Sizing-Fallback, 99=Reconcile,
+#              197=Session-Watchdog, 199=SelfTest, 100-999=Zufallspool readonly.
+# 97 ist frei UND liegt ausserhalb des Zufallsbereichs (kein Zufalls-Konflikt).
+IBG_EMERGENCY_CLIENT_ID = int(os.environ.get("IBG_EMERGENCY_CLIENT_ID", "97"))
+
+
+def emergency_broker_config(config: dict | None) -> dict:
+    """Config-Kopie fuer den Not-Aus: schreibfaehig, mit eigener clientId.
+
+    Bewusst eine eigene Funktion statt inline im Endpunkt — so ist der
+    kritischste Pfad des Systems testbar, ohne web.app importieren (und damit
+    einen Kill-Switch-Endpunkt in Reichweite haben) zu muessen.
+
+    readonly wird explizit auf False gesetzt: ein readonly-Broker darf keine
+    Orders senden UND verwirft die explizite clientId zugunsten einer zufaelligen
+    (siehe IbkrBroker.__init__). Fuer den Not-Aus doppelt untauglich.
+    """
+    cfg = dict(config or {})
+    cfg["ibkr"] = {
+        **(cfg.get("ibkr") or {}),
+        "client_id": IBG_EMERGENCY_CLIENT_ID,
+        "readonly": False,
+    }
+    return cfg
+
 
 def connect(
     host: str = IBG_HOST,
