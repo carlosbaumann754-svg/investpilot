@@ -13,13 +13,36 @@ Snapshot-Schema:
 {
     "date": "2026-04-14",          # ISO-Datum (1 pro Tag, Idempotenz-Key)
     "ts":   "2026-04-14T22:35:01", # erstmaliger Zeitstempel
-    "portfolio_total_value": 1234.56,  # USD, Cash + Invested + Unrealized
+    "portfolio_total_value": 1234.56,  # Kontowaehrung (CHF), Cash + Invested + Unrealized
+    # --- R-B13 (21.07.2026): Bestandteile fuer die Ergebnis-Bruecke ---
+    "unrealized_pnl": 8087.06,     # USD  <- OHNE DAS ist keine Bruecke baubar
+    "base_unrealized_pnl": 6549.61,  # CHF
+    "base_realized_pnl": 0.0,      # CHF
+    "cash": 694380.7,              # CHF
+    "invested": 468529.32,         # USD
+    "num_positions": 15,
+    "base_currency": "CHF",
+    # --- Benchmarks + FX ---
     "spy_close": 524.31,
     "qqq_close": 451.89,
     "agg_close": 102.14,
     "iwm_close": 198.72,           # v37dv: Small-Cap-Benchmark (korrekt fuer sp600)
+    "usdchf_close": 0.8103,        # R-B13: CHF je USD — Depot CHF vs Benchmarks USD
     "source": "scheduler-daily-2230"
 }
+
+WARUM die Bestandteile (R-B13, 21.07.2026):
+Frueher wurde nur der Gesamtwert gespeichert. Dadurch liess sich im Nachhinein
+nicht trennen, welcher Teil einer Wertaenderung aus REALISIERTEN Trades und
+welcher aus BUCHGEWINNEN stammt. Bei der 3-Monats-Analyse am 20.07. scheiterte
+die Ergebnis-Bruecke genau daran (unrealized_pnl war nirgends historisiert;
+brain_state.performance_snapshots deckt nur die letzten 1-2 Tage ab) — der
+Restposten von -87k war ein reines Daten-Artefakt.
+
+Ergebnis-Bruecke (ab jetzt rechenbar):
+  Delta(portfolio_total_value) = realisierte Trades
+                               + Delta(unrealized_pnl)
+                               + Ein-/Auszahlungen + Gebuehren + FX
 
 Berechnung Monatszeile (frontend):
 - Erster und letzter Snapshot des Kalendermonats
@@ -88,13 +111,28 @@ def _fetch_latest_close(symbol: str) -> float | None:
         return None
 
 
-def _fetch_portfolio_total_value() -> float | None:
-    """Aktueller Portfolio-Wert.
+# R-B13 (21.07.2026): Bestandteile, die zusaetzlich zum Gesamtwert persistiert
+# werden. Ohne sie ist im Nachhinein NICHT rekonstruierbar, welcher Teil einer
+# Wertaenderung aus realisierten Trades und welcher aus Buchgewinnen stammt.
+# Konkreter Anlass: Die Ergebnis-Bruecke fuer die 3-Monats-Analyse am 20.07.
+# liess sich nicht bauen, weil unrealized_pnl nirgends historisiert war
+# (brain_state.performance_snapshots deckt nur die letzten 1-2 Tage ab).
+# 'unrealized_pnl'/'invested' sind USD, 'base_*' und total_value sind Kontowaehrung (CHF).
+_COMPONENT_KEYS = (
+    "unrealized_pnl", "base_unrealized_pnl", "base_realized_pnl",
+    "cash", "invested", "num_positions", "base_currency",
+)
+
+
+def _fetch_portfolio_components() -> dict | None:
+    """Portfolio-Wert PLUS Bestandteile fuer die spaetere Ergebnis-Bruecke.
 
     Strategie: Erst aus brain_state.performance_snapshots den juengsten Wert
     nehmen (vom letzten Trading-Zyklus, max 5 Min alt) — vermeidet einen
-    eToro-API-Call und ist robust wenn die Auth-Session gerade rotiert.
-    Fallback: Live-Call ueber EtoroClient.
+    Broker-API-Call und ist robust wenn die Auth-Session gerade rotiert.
+    Fallback: Live-Call ueber den Broker.
+
+    Returns dict mit mindestens {"portfolio_total_value": float} oder None.
     """
     try:
         brain = load_json("brain_state.json")
@@ -104,7 +142,11 @@ def _fetch_portfolio_total_value() -> float | None:
                 latest = snaps[-1]
                 tv = latest.get("total_value")
                 if isinstance(tv, (int, float)) and tv > 0:
-                    return float(tv)
+                    out = {"portfolio_total_value": float(tv)}
+                    for k in _COMPONENT_KEYS:
+                        if k in latest:
+                            out[k] = latest[k]
+                    return out
     except Exception as e:
         log.debug(f"Brain-Snapshot-Read fehlgeschlagen: {e}")
 
@@ -131,7 +173,11 @@ def _fetch_portfolio_total_value() -> float | None:
                 )
                 continue
         total = credit + invested + unrealized
-        return float(total) if total > 0 else None
+        if total <= 0:
+            return None
+        return {"portfolio_total_value": float(total), "cash": credit,
+                "invested": invested, "unrealized_pnl": unrealized,
+                "num_positions": len(port.get("positions", []) or [])}
     except Exception as e:
         log.warning(f"Live-Portfolio-Fetch fehlgeschlagen: {e}")
         return None
@@ -166,29 +212,42 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
         log.debug(f"Equity-Snapshot fuer {today_iso} existiert bereits — skip")
         return None
 
-    portfolio_value = _fetch_portfolio_total_value()
-    if portfolio_value is None:
+    comp = _fetch_portfolio_components()
+    if comp is None:
         log.warning("Equity-Snapshot abgebrochen: Portfolio-Wert nicht ermittelbar")
         return None
 
     snap = {
         "date": today_iso,
         "ts": datetime.now().isoformat(timespec="seconds"),
-        "portfolio_total_value": round(portfolio_value, 2),
+        "portfolio_total_value": round(comp["portfolio_total_value"], 2),
         "source": triggered_by,
     }
+    # R-B13: Bestandteile mitschreiben -> Ergebnis-Bruecke bleibt rekonstruierbar
+    for k in _COMPONENT_KEYS:
+        v = comp.get(k)
+        snap[k] = round(v, 2) if isinstance(v, float) else v
     # v37dv: IWM (Russell 2000 Small-Cap) ergaenzt — die KORREKTE Benchmark fuer
     # den sp600-Small-Cap-Motor (SPY/QQQ sind Large-Cap, beta-unpassend). IWM ist
     # zwar in disabled_symbols (kein Trade), wird hier aber nur als Preis-Referenz
     # via yfinance geholt -> kein Konflikt.
-    for sym in ("SPY", "QQQ", "AGG", "IWM"):
+    # R-B13 (21.07.2026): USD/CHF mitschreiben. Das Depot wird in CHF gefuehrt,
+    # die Benchmarks notieren in USD — ohne Kurs vergleicht man Aepfel mit Birnen.
+    # Bei der 3-Monats-Analyse am 20.07. musste der Kurs nachtraeglich geholt
+    # werden; das Ergebnis (Alpha -7 Ppkt in BEIDEN Waehrungen) war zu wichtig,
+    # um es kuenftig von einem Ad-hoc-Download abhaengig zu machen.
+    for sym, key in (("SPY", "spy_close"), ("QQQ", "qqq_close"),
+                     ("AGG", "agg_close"), ("IWM", "iwm_close"),
+                     ("CHF=X", "usdchf_close")):
         c = _fetch_latest_close(sym)
-        snap[f"{sym.lower()}_close"] = round(c, 4) if c is not None else None
+        snap[key] = round(c, 4) if c is not None else None
 
     history.append(snap)
     _save_history(history)
     log.info(
-        f"Equity-Snapshot {today_iso}: Portfolio=${snap['portfolio_total_value']:,.2f}, "
+        f"Equity-Snapshot {today_iso}: Portfolio={snap['portfolio_total_value']:,.2f} "
+        f"{snap.get('base_currency') or ''}, unrealisiert={snap.get('unrealized_pnl')} USD, "
+        f"Pos={snap.get('num_positions')}, USD/CHF={snap.get('usdchf_close')}, "
         f"SPY={snap.get('spy_close')}, QQQ={snap.get('qqq_close')}, "
         f"AGG={snap.get('agg_close')}, IWM={snap.get('iwm_close')}"
     )
