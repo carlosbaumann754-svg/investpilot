@@ -173,14 +173,19 @@ def compute_ic(history: dict, horizon: int = 21, overlap: bool = False,
     for start, ende in paare:
         s_snap, e_snap = history[start], history[ende]
         scores, rets, syms = [], [], []
-        for sym, (score, preis) in s_snap.items():
+        # R-B30: ueber den Index lesen, nicht per Tupel-Entpackung. Seit Schema 2
+        # sind die Zeilen laenger ([score, kurs, eligible, *einzelsignale]) —
+        # "for sym, (score, preis) in ..." waere daran hart gescheitert. So bleiben
+        # alte (2-spaltige) und neue Zeilen gleichermassen lesbar.
+        for sym, zeile in s_snap.items():
             spaeter = e_snap.get(sym)
+            preis = zeile[1]
             if not spaeter or not preis or preis <= 0:
                 continue
             preis_spaeter = spaeter[1]
             if not preis_spaeter or preis_spaeter <= 0:
                 continue
-            scores.append(score)
+            scores.append(zeile[0])
             rets.append(preis_spaeter / preis - 1.0)
             syms.append(sym)
 
@@ -322,6 +327,60 @@ def bewertung(agg: dict) -> dict:
             "text": f"Kein nachweisbarer Zusammenhang (IC {ic:+.3f}, t={t}, "
                     f"noetig waeren {schwelle:.2f}). Entweder gibt es keinen "
                     "Vorteil, oder er ist zu klein fuer die bisherige Datenmenge."}
+
+
+def compute_ic_je_signal(history: dict, horizon: int = 21,
+                         min_symbols: int = MIN_SYMBOLS_PER_PERIOD) -> dict:
+    """Rang-IC getrennt fuer jedes der fuenf Einzelsignale (R-B30).
+
+    Die logische Anschlussfrage an R-B25: die Gesamtnote traegt an der Spitze —
+    aber traegt sie, WEIL der Value-Teil funktioniert, oder TROTZ eines Teils, der
+    schadet? Ohne diese Aufschluesselung optimiert man blind an fuenf Reglern.
+
+    Braucht Schema-2-Zeilen. Bei aelteren Daten (nur [score, kurs]) kommt ein
+    leeres Ergebnis zurueck statt einer erfundenen Zahl.
+    """
+    from app.signal_score_history import SIGNAL_NAMES, row_signals
+
+    tage = sorted(history or {})
+    paare = _period_pairs(tage, horizon, overlap=False)
+
+    je_signal = {n: [] for n in SIGNAL_NAMES}
+    for start, ende in paare:
+        s_snap, e_snap = history[start], history[ende]
+        werte = {n: ([], []) for n in SIGNAL_NAMES}   # (signalwerte, renditen)
+        for sym, zeile in s_snap.items():
+            spaeter = e_snap.get(sym)
+            preis = zeile[1]
+            if not spaeter or not preis or preis <= 0:
+                continue
+            preis_spaeter = spaeter[1]
+            if not preis_spaeter or preis_spaeter <= 0:
+                continue
+            ret = preis_spaeter / preis - 1.0
+            for n, v in row_signals(zeile).items():
+                if v is None:
+                    continue
+                werte[n][0].append(v)
+                werte[n][1].append(ret)
+
+        for n, (xs, ys) in werte.items():
+            if len(xs) < min_symbols:
+                continue
+            ic = spearman(xs, ys)
+            if ic is not None:
+                je_signal[n].append(round(ic, 4))
+
+    ergebnis = {}
+    for n, ics in je_signal.items():
+        if not ics:
+            ergebnis[n] = {"n_perioden": 0, "mittlerer_ic": None, "t_wert": None}
+            continue
+        agg = _aggregat([{"rang_ic": x, "quintile": None} for x in ics])
+        agg["n_perioden"] = len(ics)
+        agg["bewertung"] = bewertung(agg)
+        ergebnis[n] = agg
+    return {"horizont_handelstage": horizon, "je_signal": ergebnis}
 
 
 def run_ic_report(horizons=DEFAULT_HORIZONS) -> dict:

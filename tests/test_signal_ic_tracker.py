@@ -24,7 +24,12 @@ from app.signal_ic_tracker import (
     compute_ic,
     spearman,
 )
-from app.signal_score_history import append_snapshot, build_snapshot
+from app.signal_score_history import (
+    append_snapshot,
+    build_snapshot,
+    row_price,
+    row_score,
+)
 
 
 # --------------------------------------------------------------- Statistik ---
@@ -199,12 +204,16 @@ def test_bewertung_hoher_ic_ohne_t_wert_ist_kein_signal():
 def test_build_snapshot_preis_als_tupel():
     """Der Preis-Provider liefert (kurs_jetzt, kurs_vor_21d) — nur der erste zaehlt."""
     snap = build_snapshot({"AAA": {"score": 53.264}}, {"AAA": (12.3456, 11.0)})
-    assert snap == {"AAA": [53.26, 12.3456]}
+    # Ueber die Hilfsfunktionen statt Positionsvergleich — so bleibt der Test
+    # gueltig, wenn das Schema spaeter weitere Spalten bekommt (R-B30).
+    assert row_score(snap["AAA"]) == 53.26
+    assert row_price(snap["AAA"]) == 12.3456
 
 
 def test_build_snapshot_preis_als_float():
     snap = build_snapshot({"AAA": {"score": 50.0}}, {"AAA": 10.0})
-    assert snap == {"AAA": [50.0, 10.0]}
+    assert row_score(snap["AAA"]) == 50.0
+    assert row_price(snap["AAA"]) == 10.0
 
 
 def test_build_snapshot_ohne_kurs_wird_ausgelassen():
@@ -238,7 +247,8 @@ def test_append_snapshot_ist_idempotent():
 
     snaps = gespeichert["signal_score_history.json"]["snapshots"]
     assert list(snaps) == ["2026-07-21"]
-    assert snaps["2026-07-21"]["AAA"] == [55.0, 11.0]  # der neuere Wert gewinnt
+    zeile = snaps["2026-07-21"]["AAA"]
+    assert (row_score(zeile), row_price(zeile)) == (55.0, 11.0)  # neuerer Wert gewinnt
     assert r["replaced"] is True
 
 
@@ -267,3 +277,80 @@ def test_append_snapshot_leer_wird_nicht_gespeichert():
 
     assert r["ok"] is False
     assert gespeichert == {}
+
+
+# ------------------------------------------- R-B30: Einzelsignale im Archiv ---
+
+def test_snapshot_speichert_einzelsignale():
+    """Der Kern von R-B30: die fuenf Einzelsignale landen im Archiv.
+
+    Ohne sie liesse sich nie beantworten, WELCHES Signal den Vorteil traegt — und
+    nachtraeglich geht es nicht, weil die EDGAR-Faktenlage von morgen Zahlen
+    enthaelt, die es heute nicht gab.
+    """
+    from app.signal_score_history import SIGNAL_NAMES, row_signals
+
+    eintrag = {"score": 53.26, "eligible": True,
+               "percentiles": {"value": 0.5, "quality": 0.61, "reversal": 0.7246,
+                               "lev": 0.4, "earngrowth": 0.4382}}
+    snap = build_snapshot({"AAA": eintrag}, {"AAA": (12.3456, 11.0)})
+    zeile = snap["AAA"]
+
+    assert zeile[0] == 53.26          # score
+    assert zeile[1] == 12.3456        # kurs
+    assert zeile[2] == 1              # eligible
+    assert len(zeile) == 3 + len(SIGNAL_NAMES)
+    assert row_signals(zeile) == {"value": 0.5, "quality": 0.61, "reversal": 0.7246,
+                                  "lev": 0.4, "earngrowth": 0.4382}
+
+
+def test_fehlendes_einzelsignal_wird_none_statt_geraten():
+    """Ein 0.5-Platzhalter waere spaeter nicht mehr von einem echten Median zu
+    unterscheiden — die Luecke muss als Luecke erkennbar bleiben."""
+    from app.signal_score_history import row_signals
+    eintrag = {"score": 50.0, "eligible": False,
+               "percentiles": {"value": 0.7}}          # vier Signale fehlen
+    zeile = build_snapshot({"AAA": eintrag}, {"AAA": (10.0, 9.0)})["AAA"]
+    assert zeile[2] == 0                                # eligible False
+    assert row_signals(zeile) == {"value": 0.7}         # None-Werte fallen raus
+
+
+def test_alte_zweispaltige_zeilen_bleiben_lesbar():
+    """Rueckwaertskompatibilitaet: compute_ic darf an Schema-1-Daten nicht
+    scheitern (die Umstellung kam vor der ersten Sammlung, aber die
+    Backtest-Skripte erzeugen weiterhin zweispaltige Zeilen)."""
+    n = 40
+    start = {f"S{i}": [float(i), 100.0] for i in range(n)}
+    ende = {f"S{i}": [0.0, 100.0 * (1 + i / 100.0)] for i in range(n)}
+    erg = compute_ic({"2026-01-01": start, "2026-01-02": ende}, horizon=1)
+    assert erg["perioden"][0]["rang_ic"] == pytest.approx(1.0)
+
+
+def test_ic_je_signal_trennt_gutes_von_schlechtem_signal():
+    """Zwei Signale konstruiert: 'value' sagt die Rendite exakt vorher,
+    'quality' zeigt genau falsch herum. Die Aufschluesselung muss das trennen."""
+    from app.signal_ic_tracker import compute_ic_je_signal
+
+    n = 60
+    start, ende = {}, {}
+    for i in range(n):
+        # [score, kurs, eligible, value, quality, reversal, lev, earngrowth]
+        start[f"S{i}"] = [50.0, 100.0, 1, i / n, 1 - i / n, 0.5, 0.5, 0.5]
+        ende[f"S{i}"] = [50.0, 100.0 * (1 + i / 100.0), 1, 0, 0, 0, 0, 0]
+
+    erg = compute_ic_je_signal({"2026-01-01": start, "2026-01-02": ende}, horizon=1)
+    js = erg["je_signal"]
+    assert js["value"]["mittlerer_ic"] == pytest.approx(1.0)
+    assert js["quality"]["mittlerer_ic"] == pytest.approx(-1.0)
+    # konstante Signale -> keine Korrelation definiert -> keine Periode
+    assert js["reversal"]["n_perioden"] == 0
+
+
+def test_ic_je_signal_ohne_einzelsignale_liefert_leer_statt_erfunden():
+    """Schema-1-Daten: lieber 'nichts messbar' als eine Zahl aus dem Nichts."""
+    from app.signal_ic_tracker import compute_ic_je_signal
+    n = 40
+    start = {f"S{i}": [float(i), 100.0] for i in range(n)}
+    ende = {f"S{i}": [0.0, 101.0] for i in range(n)}
+    erg = compute_ic_je_signal({"2026-01-01": start, "2026-01-02": ende}, horizon=1)
+    assert all(v["n_perioden"] == 0 for v in erg["je_signal"].values())

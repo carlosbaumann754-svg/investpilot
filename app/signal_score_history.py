@@ -58,6 +58,55 @@ AUDIT_METADATA = {
 
 _HISTORY_FILE = "signal_score_history.json"
 
+# ============================================================
+# SCHEMA 2 (R-B30, 21.07.2026) — Einzelsignale mitspeichern
+# ============================================================
+# Schema 1 speicherte nur [score, kurs]. Damit liesse sich beantworten, OB das
+# Ranking funktioniert — aber nie, WELCHES der fuenf Signale es traegt.
+#
+# Der Scan berechnet die Einzelwerte ohnehin (signal_stack_shadow.json fuehrt sie
+# unter "percentiles"); sie wurden nur weggeworfen. Und sie lassen sich NICHT
+# nachtraeglich ergaenzen: die EDGAR-Faktenlage von morgen enthaelt Zahlen, die es
+# heute noch nicht gab (Nachmeldungen, Restatements). Wer sie spaeter rekonstruiert,
+# baut exakt den Look-Ahead-Bias ein, gegen den die ganze Messung antritt.
+#
+# Deshalb JETZT, vor der ersten Sammlung: der Unterschied kostet ~40 Bytes pro
+# Aktie und Tag (18 KB statt 7 KB taeglich, ~9 MB ueber 500 Tage) und ermoeglicht
+# spaeter die Frage "traegt der Value-Teil oder der Quality-Teil?" — die logische
+# Anschlussfrage an R-B25.
+SCHEMA_VERSION = 2
+
+# Reihenfolge der Einzelsignale in jeder Zeile. NICHT umsortieren — die Position
+# ist der Schluessel; ein Tausch wuerde die Historie still verfaelschen.
+SIGNAL_NAMES = ("value", "quality", "reversal", "lev", "earngrowth")
+
+# Zeilenaufbau: [score, kurs, eligible, *einzelsignale]
+_IDX_SCORE, _IDX_PRICE, _IDX_ELIGIBLE = 0, 1, 2
+_IDX_SIGNALS = 3
+
+
+def row_score(row):
+    """Gesamtnote aus einer Archiv-Zeile (schema-unabhaengig)."""
+    return row[_IDX_SCORE]
+
+
+def row_price(row):
+    """Kurs aus einer Archiv-Zeile (schema-unabhaengig)."""
+    return row[_IDX_PRICE]
+
+
+def row_eligible(row):
+    """War die Aktie an diesem Tag ueberhaupt kaufbar? None bei Schema 1."""
+    return bool(row[_IDX_ELIGIBLE]) if len(row) > _IDX_ELIGIBLE else None
+
+
+def row_signals(row) -> dict:
+    """{signalname: perzentil} — leer bei Schema-1-Zeilen."""
+    if len(row) <= _IDX_SIGNALS:
+        return {}
+    werte = row[_IDX_SIGNALS:]
+    return {n: v for n, v in zip(SIGNAL_NAMES, werte) if v is not None}
+
 # Aufbewahrung. 309 Symbole * ~22 Bytes ~ 7 KB/Tag -> 500 Tage ~ 3.5 MB.
 # 500 Handelstage sind knapp zwei Jahre; laenger zurueck ist fuer die
 # Auswertung ohnehin von begrenztem Wert, weil sich das Signal aendert.
@@ -72,7 +121,7 @@ def _round_or_none(v, digits: int):
 
 
 def build_snapshot(scores: dict, prices: dict) -> dict:
-    """{symbol: [score, kurs]} aus Score- und Preis-Dict.
+    """{symbol: [score, kurs, eligible, *einzelsignale]} aus Score- und Preis-Dict.
 
     ``prices`` kommt vom Preis-Provider als ``{symbol: (kurs_jetzt, kurs_vor_21d)}``;
     gebraucht wird hier nur der aktuelle Kurs. Ein einzelner Float wird ebenfalls
@@ -80,16 +129,26 @@ def build_snapshot(scores: dict, prices: dict) -> dict:
 
     Symbole ohne Kurs werden **weggelassen** — ohne Kurs laesst sich spaeter keine
     Folgerendite bilden, der Eintrag waere nur Ballast.
+
+    Fehlt ein Einzelsignal (unvollstaendige EDGAR-Abdeckung), steht dort None statt
+    eines geratenen Ersatzwerts. Ein 0.5-Platzhalter waere spaeter nicht mehr von
+    einem echten Median zu unterscheiden.
     """
     snap = {}
     for sym, entry in (scores or {}).items():
-        score = entry.get("score") if isinstance(entry, dict) else entry
+        ist_dict = isinstance(entry, dict)
+        score = entry.get("score") if ist_dict else entry
         raw = (prices or {}).get(sym)
         price = raw[0] if isinstance(raw, (tuple, list)) and raw else raw
         s, p = _round_or_none(score, 2), _round_or_none(price, 4)
         if s is None or p is None or p <= 0:
             continue
-        snap[sym] = [s, p]
+
+        eligible = int(bool(entry.get("eligible"))) if ist_dict else 0
+        pc = (entry.get("percentiles") or {}) if ist_dict else {}
+        signale = [_round_or_none(pc.get(n), 4) for n in SIGNAL_NAMES]
+
+        snap[sym] = [s, p, eligible, *signale]
     return snap
 
 
@@ -127,6 +186,9 @@ def append_snapshot(asof: str, scores: dict, prices: dict,
                 del snapshots[alt]
 
         save_json(_HISTORY_FILE, {
+            "schema": SCHEMA_VERSION,
+            "signal_names": list(SIGNAL_NAMES),
+            "zeilenaufbau": "[score, kurs, eligible, *einzelsignale]",
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "n_snapshots": len(snapshots),
             "snapshots": snapshots,
