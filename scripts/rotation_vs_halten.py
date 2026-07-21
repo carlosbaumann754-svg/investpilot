@@ -49,6 +49,11 @@ TOP_N = 15
 
 
 def _kennzahlen(res: dict, label: str) -> dict:
+    # run_backtest/-_hold liefern nur Rohdaten; die Kennzahlen rechnet _metrics.
+    from app import signal_stack_backtester as bt
+    m = bt._metrics(res.get("monthly_pct") or [], res.get("equity_final", 1.0),
+                    res.get("trades") or [])
+    res = {**res, **m}
     trades = res.get("trades") or []
     tage = [t["days"] for t in trades if t.get("days")]
     gruende = {}
