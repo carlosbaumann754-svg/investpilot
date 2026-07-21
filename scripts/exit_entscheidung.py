@@ -102,17 +102,23 @@ def mae_je_trade(bt, price_hist, trades):
     return maes
 
 
-def jahres_renditen(eq_curve):
-    """{jahr: rendite_pct} aus der Equity-Kurve."""
-    nach_jahr = defaultdict(list)
-    for d, e in eq_curve:
-        nach_jahr[d.year].append((d, e))
-    out = {}
-    for jahr, punkte in sorted(nach_jahr.items()):
-        punkte.sort()
-        if len(punkte) >= 2:
-            out[jahr] = (punkte[-1][1] / punkte[0][1] - 1) * 100
-    return out
+def jahres_renditen(monthly_pct, rebals):
+    """{jahr: rendite_pct} aus den Monatsrenditen.
+
+    eq_curve enthaelt im Halten-Modus nur Start und Ende (geprueft im Quelltext),
+    taugt also nicht. monthly_pct ist dagegen 1:1 mit den Monatsanfaengen
+    ausgerichtet und laesst sich je Jahr aufzinsen.
+
+    EINSCHRAENKUNG: Im Halten-Modus wird das Ergebnis eines Trades dem
+    AUSSTIEGSMONAT zugeschrieben. Eine Position ueber den Jahreswechsel landet
+    also komplett im Folgejahr. Fuer die Stabilitaetsfrage ist das vertretbar
+    (die Verzerrung trifft alle Konfigurationen gleich), fuer eine Jahresrendite
+    im buchhalterischen Sinn nicht.
+    """
+    nach_jahr = defaultdict(float)
+    for r, d in zip(monthly_pct, rebals):
+        nach_jahr[d.year] = (1 + nach_jahr[d.year] / 100.0) * (1 + r / 100.0) * 100 - 100
+    return dict(sorted(nach_jahr.items()))
 
 
 def main() -> int:
@@ -129,6 +135,7 @@ def main() -> int:
     ph = bt.load_price_history(symbols, START, END)
     picks = bt.precompute_monthly_picks(ph, facts, START, END)
 
+    rebals = bt._month_starts(START, END)
     konfigs = list(konfigurationen())
     print(f"{len(konfigs)} Konfigurationen. SL {SL} und TP aus sind gesperrt.\n", flush=True)
 
@@ -140,7 +147,7 @@ def main() -> int:
         trades = r["trades"]
         maes = mae_je_trade(bt, ph, trades)
         maes_sort = sorted(maes)
-        jr = jahres_renditen(r["eq_curve"])
+        jr = jahres_renditen(r["monthly_pct"], rebals)
 
         gruende = defaultdict(int)
         for t in trades:
