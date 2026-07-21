@@ -33,6 +33,38 @@ FILES=(
     "survivorship_history.json"
     "auth_2fa.json"
     "ibkr_contract_cache.json"
+
+    # R-B30 (21.07.2026): Die Liste war seit April eingefroren, waehrend das
+    # data/-Verzeichnis wuchs. Carlos' Frage "wo werden die Daten gespeichert"
+    # deckte auf: zehn wichtige Dateien lagen NUR auf der VPS-Platte.
+    # Nach Schadensschwere ergaenzt:
+
+    # (1) UNERSETZLICH — laesst sich nicht rekonstruieren:
+    "signal_score_history.json"      # taegl. Point-in-Time-Scores (R-B25/R-B30).
+                                     # Rekonstruktion = Look-Ahead-Bias, der
+                                     # Verlust von 6 Wochen war der Ausloeser
+                                     # des ganzen Moduls.
+    "equity_history.json"            # taegl. Equity-Snapshots inkl. USD/CHF —
+                                     # Kursverlauf des eigenen Depots.
+
+    # (2) TEUER — rekonstruierbar, aber mit Stunden Aufwand/Risiko:
+    "manual_lock_overrides.json"     # validierte Post-Soak-Werte; Verlust
+                                     # wuerde Alt-Motor-WFO-Locks reaktivieren
+                                     # (Bot friert bei 11 Positionen ein).
+    "roundtrip_pf_reference.json"    # Referenzverteilung; ohne sie ist der
+                                     # Motor-Edge-Alarm blind (Staleness-Guard
+                                     # blockt dann JEDEN Alarm).
+    "cutover_confirmations.json"     # Audit-Trail der Hard-Gate-Bestaetigungen
+                                     # (z.B. Master-2FA) — Nachweis, nicht Zahl.
+    "wfo_signal_stack_baseline.json" # WFO-Baseline des neuen Motors.
+
+    # (3) LAUFZEIT-ZUSTAND — klein, aber Verlust aendert Bot-VERHALTEN:
+    "trailing_sl_state.json"         # Ratchet-Staende; Verlust = Trailing faellt
+                                     # auf Entry-Basis zurueck -> Stops weiter
+                                     # als der Hoechststand rechtfertigt.
+    "partial_close_state.json"       # welche Tranchen je Position schon feuerten
+                                     # (Tranchen sind aus, Historie bleibt).
+    "buy_cooldown.json"              # verhindert Sofort-Rueckkauf nach Exit.
 )
 
 # Sammle nur Dateien die existieren (some erst spaeter angelegt)
