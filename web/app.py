@@ -1074,7 +1074,9 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     tp_aus = tp_final_pct is None or tp_final_pct >= _TP_DISABLED_SENTINEL
     triggers.append({
         "type": "TP-final",
-        "label": ("Take-Profit: aus (Gewinner laufen bis Tranche/Trailing)"
+        # R-B28: "Tranche" aus dem Text entfernt — Tranchen sind abgeschaltet.
+        # Der Trailing-Stop ist jetzt der EINZIGE Gewinn-Mechanismus.
+        "label": ("Take-Profit: aus (Gewinner laufen bis zum Trailing-Stop)"
                   if tp_aus else f"Take-Profit ({tp_final_pct:+.0f}%)"),
         "target_pct": None if tp_aus else tp_final_pct,
         "distance_pct": None if tp_aus else round(tp_final_pct - pnl_pct, 2),
