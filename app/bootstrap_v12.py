@@ -169,10 +169,37 @@ V12_SUBKEY_INJECT: dict[str, dict[str, Any]] = {
         "trailing_sl_enabled": True,
         "trailing_sl_activation_pct": 6.0,
         "trailing_sl_pct": 4.0,
-        "tp_tranches": [
-            {"pct_of_position": 30, "profit_target_pct": 16},
-            {"pct_of_position": 30, "profit_target_pct": 30},
-        ],
+        # R-B28 (21.07.2026): TRANCHEN ABGESCHALTET — leere Liste, kein Teilverkauf.
+        #
+        # Belegt ueber 27 Konfigurationen x 10 Jahre (scripts/exit_entscheidung.py):
+        # ohne Tranchen besserer Sharpe in 9 VON 9 Trailing-Einstellungen, hoehere
+        # Rendite ebenfalls 9 von 9. Kein Einzelsieger-Zufall, sondern ein
+        # gerichteter Effekt — Tranchen deckeln Gewinner.
+        #
+        # Entscheidend war, dass sich sonst NICHTS aendert: gleiche Trade-Zahl
+        # (1051), gleiche Trefferquote (58.2 %), gleicher Durchschnittsverlust
+        # (-7.61 %). Tranchen loesten nie einen Ausstieg aus, sie verkauften nur
+        # unterwegs Teile. Der Wegfall wirkt daher ausschliesslich auf die
+        # Gewinnerseite: groesster Trade der Historie +67.4 % -> +134.6 %.
+        # Asymmetrie: schlechtestes Jahr -0.5 Prozentpunkte, 8 von 10 Jahren besser.
+        #
+        # Der Live-Trader liest lev_cfg.get("tp_tranches", []) und prueft
+        # "if tp_tranches" (app/trader.py:1315) -> leere Liste schaltet sauber ab.
+        # Diese Baseline ist die faktische Wiederherstellungs-Quelle (siehe
+        # Abschnitt 4 in migrate()), deshalb MUSS sie leer bleiben — sonst belebt
+        # ein Volume-Wipe / Fresh-Clone die Tranchen wieder.
+        #
+        # NICHT geaendert: Trailing 6/4. Der Walk-Forward (beste Config auf
+        # Vorjahren waehlen, Rang im Folgejahr ablesen) ergab ein mittleres
+        # Perzentil von 54 % = Muenzwurf. Die Trailing-Parameter lassen sich auf
+        # dieser Historie NICHT bestimmen. 6/4 bleibt, weil es auf jedem
+        # Robustheitsmass vorne liegt: 10/10 positive Jahre, schlechtestes +2.9 %,
+        # bester MAE (-4.68 % Median), niedrigster Papieranteil (0.7 %).
+        #
+        # Der obige Absatz zur "faktischen Rotation" bleibt gueltig, aber mit
+        # praeziserer Zahl: gemessene Haltedauer Median 15 Handelstage (R-B27) —
+        # der Bot rotiert bereits schneller als ein Monatskalender.
+        "tp_tranches": [],
     },
 }
 

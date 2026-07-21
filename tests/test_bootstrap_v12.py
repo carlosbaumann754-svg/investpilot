@@ -78,13 +78,29 @@ def test_reconstruction_from_empty_has_current_exit_baselines():
     #  R-B15 (21.07.): Nur die +8%-Tranche raus. Ausgewaehlt nicht nach Rendite,
     #    sondern nach dem Anteil, der NICHT am Phantom-Rebalancing haengt
     #    (11 % -> 7 %) bei hoechstem live erntbarem Gewinn.
-    # Trailing bleibt bewusst 6/4 — jede weitere Lockerung braucht zuerst echte
-    # Ranking-Rotation im Bot (die Exits sind aktuell die faktische Rotation).
+    #  R-B28 (21.07.): ALLE Tranchen raus. Diesmal nicht aus einem Einzel-Backtest,
+    #    sondern aus 27 Konfigurationen x 10 Jahren (scripts/exit_entscheidung.py):
+    #    ohne Tranchen besserer Sharpe in 9 VON 9 Trailing-Einstellungen, hoehere
+    #    Rendite ebenfalls 9/9. Gerichteter Effekt, kein Einzelsieger-Zufall.
+    #    Entscheidend war die Neutralitaet auf der Verlustseite: gleiche Trade-Zahl
+    #    (1051), gleiche Trefferquote (58.2 %), gleicher Durchschnittsverlust
+    #    (-7.61 %). Tranchen loesten nie einen Ausstieg aus, sie deckelten nur
+    #    Gewinner — groesster Trade der Historie +67.4 % -> +134.6 %.
+    #
+    # Trailing bleibt 6/4, aber mit NEUER Begruendung seit R-B28: Der Walk-Forward
+    # (beste Config auf allen Vorjahren waehlen, Rang im Folgejahr ablesen) ergab
+    # ein mittleres Perzentil von 54 % — ein Muenzwurf. Die Trailing-Parameter sind
+    # auf dieser Historie NICHT bestimmbar; weiteres Optimieren daran ist belegbar
+    # wertlos. 6/4 bleibt, weil es auf jedem Robustheitsmass vorne liegt:
+    # 10/10 positive Jahre, schlechtestes +2.9 %, bester MAE (-4.68 % Median),
+    # niedrigster Papieranteil (0.7 %).
     assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_activation_pct"] == 6.0
     assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_pct"] == 4.0
     tranches = b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"]
-    assert [t["profit_target_pct"] for t in tranches] == [16, 30], \
-        "R-B15: die +8%-Tranche war der Gewinner-Killer und darf nicht zurueck"
+    assert tranches == [], \
+        ("R-B28: Tranchen abgeschaltet (9/9 Konfigurationen besser ohne). Eine "
+         "nicht-leere Baseline wuerde sie bei Volume-Wipe/Fresh-Clone wiederbeleben "
+         "— diese Baseline ist die faktische Wiederherstellungs-Quelle.")
 
 
 def test_leverage_subkeys_injected_when_parent_present():
