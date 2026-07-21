@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 AUDIT_METADATA = {
     "purpose": "Shadow-Mode-Runner: berechnet+loggt Signal-Stack-Scores parallel zur alten Selektion (trading-neutral, validiert vor dem Umschalten in Phase 4)",
     "config_section": None,  # v37dr: config-los (Schalter = top-level use_signal_stack)
-    "state_files": ["signal_stack_shadow.json"],
+    "state_files": ["signal_stack_shadow.json", "signal_score_history.json"],
     "self_tests": [],
     "scheduler_hooks": ["run_shadow_scan (Host-Crontab taeglich, 30 21 * * 1-5)"],
     "health_check": "shadow_status",
@@ -77,6 +77,20 @@ def run_shadow_scan(symbols: list, asof: Optional[str] = None,
         save_json(_SHADOW_FILE, payload)
     except Exception as e:  # pragma: no cover - IO best effort
         log.warning("signal_stack_shadow.json schreiben fehlgeschlagen: %s", e)
+
+    # R-B25: Schnappschuss ins Archiv. signal_stack_shadow.json wird bei jedem
+    # Lauf ueberschrieben und ist in keinem Backup enthalten — die ~309 taeglichen
+    # Bewertungen waren damit jeden Tag verloren. Sie sind aber die schnellste
+    # Antwort auf "funktioniert das Signal": ueber das ganze Universum gemessen
+    # statt ueber die ~15 gehaltenen Positionen.
+    # Best-effort und bewusst NACH dem Shadow-Write: die Archivierung darf den
+    # Scan unter keinen Umstaenden gefaehrden.
+    try:
+        from app.signal_score_history import append_snapshot
+        append_snapshot(asof, scores, prices)
+    except Exception as e:  # pragma: no cover - IO best effort
+        log.warning("Score-Historie: Archivierung fehlgeschlagen: %s", e)
+
     _write_universe_health(symbols, prices)
     log.info("Shadow-Scan: %d gescort, %d mit Preis (asof %s)", len(scores), len(prices), asof)
     return {"scored": len(scores), "n_priced": len(prices), "asof": asof}
