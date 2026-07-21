@@ -265,6 +265,15 @@ def send_alert(message, level="INFO", config=None):
 
     if sent:
         state = _load_alert_state()
+        # R-B14 (21.07.2026): Der Zaehler hiess "today", wurde aber NIE
+        # zurueckgesetzt — am 20.07. stand er auf 467, obwohl an dem Tag NULL
+        # Alerts rausgingen. Das hat bei der Watchdog-Analyse zu einer
+        # Fehldiagnose gefuehrt ("467 Alerts heute?!"). Jetzt echter Tageszaehler
+        # mit Datums-Stempel.
+        today = datetime.now().strftime("%Y-%m-%d")
+        if state.get("alerts_sent_date") != today:
+            state["alerts_sent_date"] = today
+            state["alerts_sent_today"] = 0
         state["alerts_sent_today"] = state.get("alerts_sent_today", 0) + 1
         _save_alert_state(state)
 
@@ -520,11 +529,20 @@ def send_daily_summary(portfolio_value, daily_pnl_pct, daily_pnl_usd,
 
 
 def should_send_daily_summary():
-    """Pruefe ob taegliche Zusammenfassung gesendet werden soll (21:00-21:05)."""
+    """Pruefe ob die taegliche Zusammenfassung gesendet werden soll (Stunde 21).
+
+    R-B14 (21.07.2026) BUGFIX: Frueher war das Fenster 21:00-21:05. Geprueft wird
+    aber erst am ENDE eines Handelszyklus (trader.py Schritt 11) — dauert der
+    Zyklus ein paar Minuten, ist das 5-Minuten-Fenster bereits zu. Ergebnis: die
+    Zusammenfassung ist seit dem 28.04.2026 stillschweigend ausgefallen
+    (last_daily_summary stand knapp drei Monate unveraendert).
+    Gegen Dopplungen schuetzt ohnehin der Datums-Guard unten — das enge Fenster
+    war reine Zerbrechlichkeit. Jetzt: irgendwann in Stunde 21, genau einmal.
+    """
     now = datetime.now()
     state = _load_alert_state()
 
-    if now.hour != 21 or now.minute >= 5:
+    if now.hour != 21:
         return False
 
     last = state.get("last_daily_summary")
