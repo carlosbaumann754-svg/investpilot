@@ -53,6 +53,12 @@ MIN_SAMPLES_PER_CLASS = 20
 #: Maximalalter (Tage) der einbezogenen Trades. Aelter = veraltet.
 MAX_AGE_DAYS = 90
 
+# R-B19 (21.07.2026): Ab dieser Abweichung zwischen Fill- und Zielpreis ist ein
+# Eintrag ein Broker-Datenfehler, keine Slippage. Grosszuegig: echte Kursluecken
+# schaffen 10 %+; die am 21.07. gefundenen Faelle lagen bei 61-1002 %, der
+# schlechteste ECHTE Wert bei 6.4 %.
+MAX_PLAUSIBLE_DEVIATION = 0.25
+
 #: Asset-Klassen, fuer die wir kalibrieren (muessen mit cost_model.py matchen).
 TARGET_CLASSES = ("stocks", "etf", "crypto", "forex", "commodities", "indices")
 
@@ -204,6 +210,7 @@ def _load_trade_fills(max_age_days: int) -> List[TradeFill]:
     cutoff_ts = datetime.now(timezone.utc).timestamp() - max_age_days * 86400
     sym_class = _build_symbol_to_class_map()
     fills: List[TradeFill] = []
+    verworfen: List[tuple] = []   # R-B19: unplausible Fills, fuer den Report
 
     for entry in history:
         if not isinstance(entry, dict):
@@ -225,6 +232,23 @@ def _load_trade_fills(max_age_days: int) -> List[TradeFill]:
         except (TypeError, ValueError):
             continue
         if fill_price <= 0 or intended <= 0:
+            continue
+
+        # R-B19 (21.07.2026): Unplausible Fills aussortieren. Am 21.07. lagen
+        # sechs Eintraege mit absurden Abweichungen in der Historie (COPPER
+        # +1002 %, IWM -96 %, OIL -61 %) — Broker-Datenfehler bei CFD-/Rohstoff-
+        # Kontrakten, keine echte Slippage: die Fill-Daten gehoerten erkennbar zu
+        # einem anderen Kontrakt (IWM angeblich 4204 Stueck zu 11.51, real ~279).
+        # Der Median hat sie ueberlebt, aber Mittelwert (17.2 %) und Stdev
+        # (106 %) waren unbrauchbar — und bei hoeherem Muell-Anteil kippt auch
+        # der Median. Doppelter Boden: das Flag aus trader._attach_fill_prices
+        # (greift ab jetzt) UND eine eigene Schwelle (greift auf Altdaten).
+        if entry.get("fill_price_implausible"):
+            verworfen.append((entry.get("symbol"), None))
+            continue
+        abweichung = abs(fill_price / intended - 1.0)
+        if abweichung > MAX_PLAUSIBLE_DEVIATION:
+            verworfen.append((entry.get("symbol"), abweichung * 100))
             continue
 
         # Alter pruefen
@@ -251,6 +275,19 @@ def _load_trade_fills(max_age_days: int) -> List[TradeFill]:
             side=str(entry.get("action", "BUY")).upper(),
             timestamp=ts_str,
         ))
+
+    # R-B19: Verworfene sichtbar machen. Still filtern waere derselbe Fehler wie
+    # bei der Tages-Zusammenfassung (R-B14) — ein Problem, das keine Spur
+    # hinterlaesst, wird nicht bemerkt.
+    if verworfen:
+        beispiele = ", ".join(
+            f"{s}" + (f" ({d:+.0f}%)" if d is not None else " [markiert]")
+            for s, d in verworfen[:5])
+        logger.warning(
+            "Kosten-Kalibrierung: %d unplausible Fill-Preise verworfen "
+            "(> %.0f%% Abweichung Fill vs Ziel = Broker-Datenfehler, keine "
+            "echte Slippage). Beispiele: %s",
+            len(verworfen), MAX_PLAUSIBLE_DEVIATION * 100, beispiele)
 
     return fills
 

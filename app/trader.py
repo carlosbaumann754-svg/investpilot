@@ -271,6 +271,12 @@ def _has_recent_earnings_close(symbol: str, hours: int = 24) -> bool:
         return False  # bei Fehler nicht blockieren
 
 
+# R-B19 (21.07.2026): Ab dieser Abweichung zwischen Fill- und Zielpreis gilt ein
+# Fill als unplausibel (Broker-Datenfehler statt echter Slippage). Siehe
+# _attach_fill_prices. Grosszuegig gewaehlt: echte Kursluecken schaffen 10 %+.
+_FILL_PLAUSIBILITY_MAX_DEV = 0.25
+
+
 def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
     """v37j: Reichert ein trade_entry um avg_fill_price + intended_price an.
 
@@ -301,6 +307,26 @@ def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
             trade_entry["intended_price"] = float(intended)
         if ref_quote and float(ref_quote) > 0:
             trade_entry["ref_quote"] = float(ref_quote)
+        # R-B19 (21.07.2026): PLAUSIBILITAETS-PRUEFUNG. Am 21.07. gefunden:
+        # sechs Fills mit absurden Abweichungen (COPPER +1002 %, IWM -96 %,
+        # OIL -61 %) — alles commodities/gehebelte ETFs aus der Alt-TA-Aera.
+        # Die Fill-Daten passten nicht zum Instrument (IWM angeblich 4204 Stueck
+        # zu 11.51, real ~279) -> der Broker meldet fuer CFD-/Rohstoff-Kontrakte
+        # offenbar Werte auf anderer Basis. Der Cost-Model-Kalibrator hat es dank
+        # Median ueberlebt, sein Mittelwert (17.2 %) und Stdev (106 %) waren aber
+        # unbrauchbar — und bei mehr Muell haette es auch den Median gekippt.
+        # 25 % ist grosszuegig (echte Gaps schaffen 10 %+), faengt aber jeden
+        # gefundenen Fall (schlechteste ECHTE Abweichung: -6.4 %).
+        a = trade_entry.get("avg_fill_price")
+        i = trade_entry.get("intended_price")
+        if a and i and abs(a / i - 1.0) > _FILL_PLAUSIBILITY_MAX_DEV:
+            trade_entry["fill_price_implausible"] = True
+            log.warning(
+                "Fill-Preis unplausibel: %s %s avg_fill=%.4f vs intended=%.4f "
+                "(%+.1f%%) -> markiert, fliesst NICHT in die Kosten-Kalibrierung",
+                trade_entry.get("action"), trade_entry.get("symbol"),
+                a, i, (a / i - 1.0) * 100,
+            )
     except (TypeError, ValueError):
         pass
     return trade_entry
