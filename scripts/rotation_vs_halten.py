@@ -57,9 +57,10 @@ def _kennzahlen(res: dict, label: str) -> dict:
     return {
         "label": label,
         "rendite_pct": res.get("total_return_pct"),
-        "cagr_pct": res.get("cagr_pct"),
+        "sharpe": res.get("sharpe_ann"),
         "max_dd_pct": res.get("max_drawdown_pct"),
-        "sharpe": res.get("sharpe"),
+        "win_rate_pct": res.get("win_rate_pct"),
+        "avg_trade_pct": res.get("avg_trade_pct"),
         "n_trades": len(trades),
         "haltedauer_median": statistics.median(tage) if tage else None,
         "haltedauer_mittel": round(statistics.mean(tage), 1) if tage else None,
@@ -68,9 +69,10 @@ def _kennzahlen(res: dict, label: str) -> dict:
 
 
 def _zeile(k: dict) -> str:
-    return (f"  {k['label']:<34} | {_f(k['rendite_pct'], 1):>8} | "
-            f"{_f(k['cagr_pct'], 2):>7} | {_f(k['max_dd_pct'], 1):>7} | "
-            f"{k['n_trades']:>6} | {_f(k['haltedauer_median'], 0):>7}")
+    return (f"  {k['label']:<34} | {_f(k['rendite_pct'], 1):>9} | "
+            f"{_f(k['sharpe'], 2):>7} | {_f(k['max_dd_pct'], 1):>7} | "
+            f"{_f(k['avg_trade_pct'], 2):>7} | {k['n_trades']:>6} | "
+            f"{_f(k['haltedauer_median'], 0):>7}")
 
 
 def main() -> int:
@@ -113,9 +115,9 @@ def main() -> int:
     print("=" * 92)
     print("TEIL 1 — der Juni-Vergleich mit VOREINSTELLUNGEN (der mutmassliche Fehler)")
     print("=" * 92)
-    print(f"  {'Variante':<34} | {'Rendite':>8} | {'CAGR':>7} | "
-          f"{'MaxDD':>7} | {'Trades':>6} | {'Halte-d':>7}")
-    print("  " + "-" * 88)
+    print(f"  {'Variante':<34} | {'Rendite':>9} | {'Sharpe':>7} | "
+          f"{'MaxDD':>7} | {'O-Trade':>7} | {'Trades':>6} | {'Halte-d':>7}")
+    print("  " + "-" * 96)
 
     r_alt = bt.run_backtest(price_hist, facts, symbols, START, END,
                             top_n=TOP_N, picks_by_month=picks)  # deployment 0.90, sl -5
@@ -132,9 +134,9 @@ def main() -> int:
     print("=" * 92)
     print("TEIL 2 — FAIRER VERGLEICH: identische Live-Exits, identischer Kapitaleinsatz")
     print("=" * 92)
-    print(f"  {'Variante':<34} | {'Rendite':>8} | {'CAGR':>7} | "
-          f"{'MaxDD':>7} | {'Trades':>6} | {'Halte-d':>7}")
-    print("  " + "-" * 88)
+    print(f"  {'Variante':<34} | {'Rendite':>9} | {'Sharpe':>7} | "
+          f"{'MaxDD':>7} | {'O-Trade':>7} | {'Trades':>6} | {'Halte-d':>7}")
+    print("  " + "-" * 96)
 
     for dep in (0.70, 0.90):
         rot = bt.run_backtest(price_hist, facts, symbols, START, END,
