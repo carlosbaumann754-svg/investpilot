@@ -76,6 +76,15 @@ def _forward_closes(price_hist: dict, sym: str, entry_day: date, until_day: date
     return [c for (d, c) in price_hist.get(sym, []) if entry_day < d <= until_day]
 
 
+def _forward_series(price_hist: dict, sym: str, entry_day: date, until_day: date) -> list:
+    """Wie _forward_closes, aber MIT Datum: [(date, close), ...].
+
+    Der Hold-Modus braucht den Ausstiegs-ZEITPUNKT, nicht nur die Rendite —
+    sonst weiss er nicht, wann ein Depot-Slot wieder frei wird.
+    """
+    return [(d, c) for (d, c) in price_hist.get(sym, []) if entry_day < d <= until_day]
+
+
 def _month_starts(start: str, end: str) -> list:
     """Erster Kalendertag jedes Monats im Bereich (Rebalance-Termine)."""
     y, m, _ = (int(x) for x in start.split("-"))
@@ -234,6 +243,120 @@ def run_backtest(price_hist: dict, facts: dict, symbols: list, start: str, end: 
     return {
         "config": {"top_n": top_n, "deployment": deployment, "sl_pct": sl_pct,
                    "tp_pct": tp_pct, "trail_act_pct": trail_act_pct, "trail_pct": trail_pct,
+                   "tranches": tranches},
+        "monthly_pct": monthly, "trades": trades, "equity_final": equity,
+        "eq_curve": eq_curve, "start": start, "end": end,
+    }
+
+
+def run_backtest_hold(price_hist: dict, facts: dict, symbols: list, start: str, end: str,
+                      top_n: int = 15, deployment: float = 0.70,
+                      sl_pct=-8, tp_pct=None, trail_act_pct=None, trail_pct=None,
+                      tranches=None,
+                      cost_pct: float = _ROUND_TRIP_COST_PCT,
+                      picks_by_month: dict = None) -> dict:
+    """R-B16 (21.07.2026) — simuliert das TATSAECHLICHE Verhalten des Live-Bots.
+
+    UNTERSCHIED ZU run_backtest (und warum das gebraucht wird)
+    ----------------------------------------------------------
+    run_backtest verkauft JEDE Position am Monatsende zwangsweise ("REBAL") und
+    besetzt das Depot komplett neu. Der LIVE-Bot macht das NICHT: er rotiert
+    nicht aus dem Ranking heraus (rebalance_portfolio gleicht nur Ziel-Gewichte
+    ab), sondern haelt eine Position, bis ein Exit feuert.
+
+    Bei der Exit-Analyse am 20.07.2026 fuehrte dieser Unterschied dazu, dass bis
+    zu 100 %% des Backtest-Gewinns aus einem Mechanismus stammten, den es live gar
+    nicht gibt — die daraus abgeleitete Empfehlung musste am selben Abend
+    zurueckgedreht werden. Dieser Modus schliesst die Luecke: hier kaufen wir
+    monatlich nur in FREIE Slots nach, Positionen laufen bis zu ihrem Exit.
+
+    Damit werden die beiden Designs zum ersten Mal vergleichbar:
+      run_backtest      = "mit monatlicher Rotation"   (Bot hat das NICHT)
+      run_backtest_hold = "halten bis Exit"            (Bot-Realitaet)
+
+    Kapital-Modell: fixes Gewicht deployment/top_n je Slot, Verzinsung beim
+    Ausstieg (chronologisch). Bewusst simpel — die Aussage liegt in den
+    Trade-Kennzahlen (PF/Payoff/Trefferquote), nicht in der Equity-Kurve.
+
+    BEKANNTE MODELL-GRENZEN (bitte bei der Interpretation mitdenken):
+      * Kein buy_cooldown. Der Live-Bot sperrt ein Symbol nach einem Stop eine
+        Weile; hier kann derselbe Titel am naechsten Monatsersten sofort wieder
+        gekauft werden -> Stop-und-sofort-zurueck wird zu guenstig abgebildet.
+      * Kaeufe nur zu Monatsanfang. Live kauft der Bot nach, sobald ein Slot
+        frei wird — hier wartet freies Kapital bis zum naechsten Rebalance.
+      * Keine Ranking-Rotation (bewusst — das IST ja der Unterschied): ein Titel
+        wird nicht verkauft, weil er aus den Top-N faellt.
+      * "OPEN_AT_END" = am Testende noch offen. Diese Positionen sind NICHT
+        realisiert; ihr Ergebnis ist ein Buchwert und faellt bei Trade-Metriken
+        wie PF/Payoff mit ins Gewicht.
+    """
+    from app import signal_stack
+    rebals = _month_starts(start, end)
+    end_d = date.fromisoformat(end)
+    w = deployment / max(top_n, 1)      # fixes Gewicht je Slot
+
+    open_until: dict = {}               # symbol -> Ausstiegsdatum (Slot belegt bis)
+    trades = []
+
+    for rb in rebals:
+        # 1) Abgelaufene Positionen geben ihren Slot frei
+        for s, ed in list(open_until.items()):
+            if ed <= rb:
+                del open_until[s]
+
+        free = top_n - len(open_until)
+        if free <= 0:
+            continue                    # Depot voll -> kein Nachkauf (wie live)
+
+        prices = _prices_asof(price_hist, rb)
+        if not prices:
+            continue
+        if picks_by_month is not None:
+            ranked = picks_by_month.get(rb, [])
+        else:
+            scores = signal_stack.score_universe(list(prices.keys()), facts, prices,
+                                                 rb.isoformat())
+            ranked = signal_stack.ranked_symbols(scores)
+        # Nur was einen Preis hat und noch nicht im Depot liegt
+        cand = [p for p in ranked if p in prices and p not in open_until][:free]
+
+        for sym in cand:
+            entry = prices[sym][0]
+            ser = _forward_series(price_hist, sym, rb, end_d)   # LANGES Fenster
+            if not ser:
+                continue
+            fwd = [c for (_, c) in ser]
+            r, reason, days = _sim_position(entry, fwd, sl_pct, tp_pct,
+                                            trail_act_pct, trail_pct, tranches)
+            # Ausstiegsdatum = Datum des Tages, an dem der Exit gefeuert hat
+            idx = min(max(days - 1, 0), len(ser) - 1)
+            exit_d = ser[idx][0]
+            # "REBAL" heisst hier NICHT Rotation, sondern: kein Exit hat je
+            # gefeuert -> Position am Testende noch offen. Klar benennen, sonst
+            # verwechselt man es mit dem Rotations-Exit des anderen Modus.
+            if reason == "REBAL":
+                reason = "OPEN_AT_END"
+            open_until[sym] = exit_d
+            trades.append({"month": rb.isoformat(), "sym": sym, "ret": r,
+                           "ret_net": r - cost_pct, "reason": reason,
+                           "days": days, "entry": rb.isoformat(),
+                           "exit": exit_d.isoformat()})
+
+    # 2) Equity chronologisch nach Ausstieg verzinsen
+    equity = 1.0
+    by_month: dict = {}
+    for t in sorted(trades, key=lambda x: x["exit"]):
+        before = equity
+        equity *= (1 + w * t["ret_net"] / 100.0)
+        key = t["exit"][:7]
+        by_month[key] = by_month.get(key, 0.0) + (equity - before) / before * 100.0
+
+    monthly = [by_month.get(f"{d.year:04d}-{d.month:02d}", 0.0) for d in rebals]
+    eq_curve = [(rebals[0], 1.0), (end_d, equity)]
+    return {
+        "config": {"mode": "hold", "top_n": top_n, "deployment": deployment,
+                   "sl_pct": sl_pct, "tp_pct": tp_pct,
+                   "trail_act_pct": trail_act_pct, "trail_pct": trail_pct,
                    "tranches": tranches},
         "monthly_pct": monthly, "trades": trades, "equity_final": equity,
         "eq_curve": eq_curve, "start": start, "end": end,
