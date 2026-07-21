@@ -142,28 +142,36 @@ V12_SECTIONS: dict[str, dict[str, Any]] = {
 # (nur wenn Parent-Section existiert, aber Sub-Key fehlt)
 V12_SUBKEY_INJECT: dict[str, dict[str, Any]] = {
     "leverage": {
-        # R-B12 (20.07.2026) ZURUECKGEDREHT — WICHTIG, nicht erneut "optimieren"
-        # ohne den folgenden Befund zu beruecksichtigen:
-        # Der Exit-Sweep empfahl Trail 10/12 + TP aus + Tranchen aus (PF 1.66 vs
-        # 1.33). Die Auszaehlung der Exit-Gruende zeigte danach aber: bei dieser
-        # Variante stammen 62 %% der Ausstiege und ~86 %% des Gewinns aus dem
-        # monatlichen REBALANCING des Backtesters — einem Mechanismus, den der
-        # LIVE-Bot NICHT hat (kein Verkauf, wenn ein Titel aus den Top-15 faellt;
-        # rebalance_portfolio gleicht nur Ziel-Gewichte ab). Die alte Config
-        # dagegen erntet ueber TP + Tranchen (+3'282 bzw. +616 Pp) — Mechanismen,
-        # die live existieren. Ohne sie realisiert der Bot fast nur noch Verluste
-        # (Verlierer via SL raus, Gewinner bleiben ewig liegen).
-        # Zusatzfalle bei 10/12: scharf ab +10 %, dann -12 %% vom Hoch = Ausstieg
-        # bei -3.2 %% -> der Trail kann einen Gewinner in einen Verlierer drehen.
-        # Erst wenn der Backtester Mehr-Monats-Halten abbildet (oder der Bot echte
-        # Rotation bekommt), ist die Exit-Frage sinnvoll beantwortbar.
+        # R-B15 (21.07.2026): Die +8%%-Tranche ist RAUS. Sie war der
+        # Gewinner-Killer — live feuerten 10 von 10 Teilverkaeufen dort, KEINER
+        # je bei +16%%: jeder Gewinner gab bei +8%% ein Drittel ab, waehrend
+        # Verlierer bis -8%% liefen (O Gewinn +783 gegen O Verlust -4'077).
+        #
+        # AUSWAHLKRITERIUM (nicht Rendite!): Gemessen wurde je Variante, welcher
+        # Anteil des Backtest-Gewinns aus dem monatlichen REBALANCING stammt —
+        # einem Mechanismus, den der LIVE-Bot NICHT hat (keine Ranking-Rotation).
+        # Die Abhaengigkeit steigt exakt mit der Lockerung: 11%% (alt) -> 34%%
+        # (TP raus) -> 70%% -> 100%% (alles aus). Diese Variante ist die einzige,
+        # die sich verbessert UND weniger vom Phantom abhaengt: REBAL-Anteil
+        # 11%%->7%%, live erntbarer Gewinn 3'970->4'159, PF 1.34->1.39.
+        # NICHT gewaehlt wurde "TP raus" (PF 1.41), weil dort der live erntbare
+        # Gewinn SINKT (3'970->3'126) — das Modell sieht besser aus, der Bot
+        # verdient weniger. Siehe R-B12-Historie: genau dieser Fehler wurde am
+        # 20.07. schon einmal gemacht und am selben Abend zurueckgedreht.
+        #
+        # Config ist jetzt widerspruchsfrei: Stop -8, Ziel +12, Trailing als Netz.
+        # (Vorher standen Tranchen 8/16/30 gegen ein TP bei 12 -> Tranche 2+3
+        # waren seit jeher tot, weil das TP vorher zuschlaegt.)
+        # WICHTIG bei kuenftigen Lockerungen: Die Exits SIND die faktische
+        # Rotation (sie drehen das Buch, dadurch bleibt es nah am Ranking —
+        # gemessen 11 von 15 Positionen noch in den Top-15). Wer sie weiter
+        # lockert, MUSS echte Ranking-Rotation nachruesten. Paket, nicht Option.
         "trailing_sl_enabled": True,
         "trailing_sl_activation_pct": 6.0,
         "trailing_sl_pct": 4.0,
         "tp_tranches": [
-            {"pct_of_position": 30, "profit_target_pct": 8},
             {"pct_of_position": 30, "profit_target_pct": 16},
-            {"pct_of_position": 40, "profit_target_pct": 30},
+            {"pct_of_position": 30, "profit_target_pct": 30},
         ],
     },
 }

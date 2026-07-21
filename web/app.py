@@ -1692,13 +1692,13 @@ async def api_soak_progress(user=Depends(require_auth)):
         # investiert). Rekalibrierung Schritt B angewandt (SL -5->-8, min_scanner_score
         # 40->25, max_positions 20->15). Der bisherige Soak mass eine strangulierte
         # Config -> Uhr resetet auf die rekalibrierte Config.
-        # R-B12 (20.07.2026): Der zweite Reset wurde noch am selben Abend
-        # ZURUECKGEDREHT — die Exit-Umstellung (Trail 10/12, TP aus, Tranchen aus)
-        # beruhte auf einem Backtest, dessen Gewinn zu ~86 %% aus dem monatlichen
-        # Rebalancing stammt; diesen Mechanismus hat der Live-Bot NICHT. Es wurde
-        # kein einziger Trade unter der neuen Config ausgefuehrt (Markt zu), daher
-        # bleibt die Messung ab 02.07. gueltig und laeuft ununterbrochen weiter.
-        SOAK_START = "2026-07-02T22:00:00"  # Reset auf rekalibrierte Config (Schritt B)
+        # R-B15 (21.07.2026): Reset auf die Exit-Korrektur — die +8%-Tranche ist
+        # raus (Gewinner-Killer: 10 von 10 Teilverkaeufen feuerten dort, keiner je
+        # bei +16%). Ausgewaehlt nach dem Anteil des Backtest-Gewinns, der NICHT
+        # am Phantom-Rebalancing haengt (siehe bootstrap_v12). Angewandt bei
+        # geschlossenem Markt, vor Handelsbeginn -> sauberer Schnitt, die 9
+        # Round-Trips der Vorgaenger-Config zaehlen nicht mehr fuers Gate.
+        SOAK_START = "2026-07-21T12:00:00"
         GO_NOGO_TARGET = 50
         PHASE3_TARGET = 30
         CLOSE_KEYS = ("CLOSE", "STOP_LOSS", "TAKE_PROFIT", "TIME_STOP", "TRAILING")

@@ -71,14 +71,20 @@ def test_reconstruction_from_empty_has_current_exit_baselines():
     lev = cfg.get("leverage")
     # leverage-Subkeys werden nur bei existierender Parent-Section injiziert;
     # bei {} ist leverage nicht da -> kein Inject. Wir pruefen die Baseline-Konstante.
-    # R-B12 (20.07.2026): Die Umstellung auf 10/12 + TP aus + Tranchen aus wurde
-    # noch am selben Abend zurueckgedreht — der Backtest, der sie empfahl, holt
-    # ~86 % seines Gewinns aus monatlichem Rebalancing, das der Live-Bot nicht hat.
-    # Details im Kommentar an V12_SUBKEY_INJECT. Baselines daher wieder wie zuvor.
+    # Historie dieser Baseline (beide Male teuer gelernt):
+    #  R-B12 (20.07.): Umstellung auf 10/12 + TP aus + Tranchen aus — noch am
+    #    selben Abend zurueckgedreht, weil der empfehlende Backtest ~86 % seines
+    #    Gewinns aus monatlichem Rebalancing holt, das der Live-Bot NICHT hat.
+    #  R-B15 (21.07.): Nur die +8%-Tranche raus. Ausgewaehlt nicht nach Rendite,
+    #    sondern nach dem Anteil, der NICHT am Phantom-Rebalancing haengt
+    #    (11 % -> 7 %) bei hoechstem live erntbarem Gewinn.
+    # Trailing bleibt bewusst 6/4 — jede weitere Lockerung braucht zuerst echte
+    # Ranking-Rotation im Bot (die Exits sind aktuell die faktische Rotation).
     assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_activation_pct"] == 6.0
     assert b.V12_SUBKEY_INJECT["leverage"]["trailing_sl_pct"] == 4.0
     tranches = b.V12_SUBKEY_INJECT["leverage"]["tp_tranches"]
-    assert [t["profit_target_pct"] for t in tranches] == [8, 16, 30]
+    assert [t["profit_target_pct"] for t in tranches] == [16, 30], \
+        "R-B15: die +8%-Tranche war der Gewinner-Killer und darf nicht zurueck"
 
 
 def test_leverage_subkeys_injected_when_parent_present():
