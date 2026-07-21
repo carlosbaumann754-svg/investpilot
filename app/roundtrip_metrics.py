@@ -113,15 +113,23 @@ def build_episodes(trade_history: list) -> tuple[list[dict], list[dict]]:
         if action in BUY_ACTIONS:
             ep = open_eps.setdefault(sym, {
                 "symbol": sym, "entry_ts": ts, "exit_ts": None,
-                "pnl_usd": 0.0, "n_partials": 0, "n_buys": 0,
+                "pnl_usd": 0.0, "invested_usd": 0.0, "n_partials": 0, "n_buys": 0,
             })
             ep["n_buys"] += 1
+            # R-B18 (21.07.2026): Einsatz mitfuehren -> Prozent-Rendite je
+            # Episode. Der USD-PF ist oekonomisch richtig, aber statistisch
+            # NICHT mit dem Backtest vergleichbar (der gewichtet gleich).
+            # Gemessen am 21.07.: USD-PF 0.38 vs Prozent-PF 0.45 auf denselben
+            # 9 Trades. Fuer Alarm-Entscheidungen zaehlt die Prozent-Basis.
+            amt = t.get("amount_usd")
+            if isinstance(amt, (int, float)) and amt > 0:
+                ep["invested_usd"] += float(amt)
         elif action in CLOSE_ACTIONS:
             # Close ohne bekannten Einstieg (Historie beginnt mittendrin) ->
             # entry_ts None; wird spaeter als "geerbt" klassifiziert.
             ep = open_eps.setdefault(sym, {
                 "symbol": sym, "entry_ts": None, "exit_ts": None,
-                "pnl_usd": 0.0, "n_partials": 0, "n_buys": 0,
+                "pnl_usd": 0.0, "invested_usd": 0.0, "n_partials": 0, "n_buys": 0,
             })
             pnl = t.get("pnl_usd")
             if isinstance(pnl, (int, float)):
@@ -136,24 +144,43 @@ def build_episodes(trade_history: list) -> tuple[list[dict], list[dict]]:
     return closed, list(open_eps.values())
 
 
+def _pf(vals: list) -> Optional[float]:
+    """Profit-Faktor. None wenn verlustfrei (statt inf) — JSON/Vergleiche."""
+    gw = sum(v for v in vals if v > 0)
+    gl = abs(sum(v for v in vals if v <= 0))
+    return round(gw / gl, 3) if gl > 0 else None
+
+
 def _stats(episodes: list[dict]) -> dict:
     n = len(episodes)
     if n == 0:
         return {"n": 0, "net_usd": 0.0, "win_rate": None, "avg_win": None,
-                "avg_loss": None, "pf": None, "gross_win": 0.0, "gross_loss": 0.0}
-    wins = [e["pnl_usd"] for e in episodes if e["pnl_usd"] > 0]
-    losses = [e["pnl_usd"] for e in episodes if e["pnl_usd"] <= 0]
+                "avg_loss": None, "pf": None, "pf_pct": None, "avg_ret_pct": None,
+                "gross_win": 0.0, "gross_loss": 0.0}
+    usd = [e["pnl_usd"] for e in episodes]
+    wins = [v for v in usd if v > 0]
+    losses = [v for v in usd if v <= 0]
     gross_win = sum(wins)
     gross_loss = abs(sum(losses))
+
+    # R-B18: Prozent-Renditen je Episode (Ergebnis / Einsatz). NUR diese Basis
+    # ist mit dem gleichgewichtenden Backtest — und damit mit der
+    # Referenzverteilung — vergleichbar.
+    pcts = [e["pnl_usd"] / e["invested_usd"] * 100
+            for e in episodes if e.get("invested_usd")]
+
     return {
         "n": n,
         "net_usd": round(gross_win - gross_loss, 2),
         "win_rate": round(len(wins) / n * 100, 1),
         "avg_win": round(gross_win / len(wins), 2) if wins else None,
         "avg_loss": round(-gross_loss / len(losses), 2) if losses else None,
-        # Kein Verlust im Fenster -> PF unendlich; None statt inf, damit
-        # Vergleiche/JSON nicht kippen. Aufrufer behandelt das als "gesund".
-        "pf": round(gross_win / gross_loss, 3) if gross_loss > 0 else None,
+        # Oekonomisch richtig (so viel Geld ist geflossen) -> Gatekeeper.
+        "pf": _pf(usd),
+        # Statistisch vergleichbar -> Alarm-Entscheidungen.
+        "pf_pct": _pf(pcts) if pcts else None,
+        "avg_ret_pct": round(sum(pcts) / len(pcts), 3) if pcts else None,
+        "n_pct": len(pcts),
         "gross_win": round(gross_win, 2),
         "gross_loss": round(gross_loss, 2),
     }

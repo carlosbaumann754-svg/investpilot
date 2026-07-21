@@ -70,8 +70,13 @@ DEFAULT_MIN_DISTINCT_DAYS = 10
 # Das Zweitsignal rechnet in USD ueber saubere Round-Trips (siehe
 # app/roundtrip_metrics.py) und alarmiert unabhaengig vom Buch-Signal.
 DEFAULT_ROUNDTRIP_ENABLED = True
-DEFAULT_ROUNDTRIP_MIN_N = 12          # unter n=12 nur berichten, NICHT alarmieren
-DEFAULT_ROUNDTRIP_THRESHOLD_PCT = 30.0
+# R-B18 (21.07.2026): min_n=12 + feste 30%%-Schwelle sind ERSATZLOS ENTFALLEN.
+# Gemessen loesten sie bei einem gesunden System in 41.5%% der Faelle Fehlalarm
+# aus (Details im Docstring von _check_roundtrip_signal). Stattdessen wird gegen
+# die empirische Verteilung verglichen: Alarm unterhalb des p05-Quantils dessen,
+# was ein gesundes System bei genau diesem n zeigt -> Fehlalarm-Rate per
+# Konstruktion 5%%, unabhaengig von n. Tabelle: data/roundtrip_pf_reference.json.
+DEFAULT_ROUNDTRIP_QUANTILE = "p05"
 
 
 def _get_wfo_target_sharpe() -> Optional[float]:
@@ -333,15 +338,65 @@ def _compute_live_pf(trade_history: list,
     return pf, win_rate, n
 
 
+def _reference_threshold(n: int, quantil: str = "p05") -> tuple:
+    """R-B18: Alarmgrenze aus der empirischen Referenzverteilung.
+
+    Returns (grenze, referenz_dict) oder (None, referenz_dict/None).
+    Zwischen den tabellierten n-Werten wird linear interpoliert.
+    """
+    try:
+        from app.config_manager import load_json
+        ref = load_json("roundtrip_pf_reference.json")
+    except Exception:
+        ref = None
+    if not isinstance(ref, dict) or not ref.get("by_n"):
+        return None, None
+
+    punkte = sorted((int(k), v) for k, v in ref["by_n"].items() if quantil in v)
+    if not punkte:
+        return None, ref
+    if n <= punkte[0][0]:
+        return punkte[0][1][quantil], ref
+    if n >= punkte[-1][0]:
+        return punkte[-1][1][quantil], ref
+    for (n0, v0), (n1, v1) in zip(punkte, punkte[1:]):
+        if n0 <= n <= n1:
+            f = (n - n0) / (n1 - n0)
+            return v0[quantil] + f * (v1[quantil] - v0[quantil]), ref
+    return None, ref
+
+
 def _check_roundtrip_signal(trade_history: list, wfo_pf: Optional[float],
                             wd_cfg: dict, result: dict) -> None:
-    """R-B12 ZWEITSIGNAL: Motor-Edge ueber saubere Round-Trips (USD).
+    """ZWEITSIGNAL "Motor-Edge": zerfaellt die Oekonomie der eigenen Trades?
 
-    Unabhaengig vom Buch-Signal oben: alarmiert, wenn die Positionen, die der
-    aktive Motor SELBST eroeffnet und geschlossen hat, oekonomisch zerfallen —
-    auch wenn das Gesamtbuch (inkl. geerbter Alt-Positionen) noch gut aussieht.
+    Unabhaengig vom Buch-Signal oben: sieht nur Positionen, die der aktive Motor
+    SELBST eroeffnet UND geschlossen hat — das Gesamtbuch kann durch geerbte
+    Alt-Positionen gut aussehen, waehrend der Motor Geld verliert.
 
-    Schreibt result["roundtrip"] und setzt ggf. result["roundtrip_alert"].
+    R-B18 (21.07.2026) NEU KALIBRIERT — der urspruengliche Entwurf war falsch:
+    Er alarmierte bei "PF mehr als 30 %% unter der WFO-Baseline", ab einem
+    GERATENEN Mindest-Sample von 12. Gemessen ueber 871 Backtest-Trades loest
+    diese Regel bei einem KERNGESUNDEN System in 41.5 %% der Faelle Fehlalarm aus
+    — nicht selten, sondern in zwei von fuenf Auswertungen. Ursache ist nicht der
+    Schwellwert, sondern die Kennzahl: der Profit-Faktor ist ein Quotient aus
+    Summen, extrem schief verteilt, konvergiert sehr langsam. Selbst bei n=80
+    liegt sein 10 %%-Quantil (1.06) noch unter der alten Alarmgrenze (1.20). Die
+    einzige "funktionierende" Kombination (n=80 bei -50 %%) haette bei ~0.6
+    Round-Trips/Tag ueber fuenf Monate geschwiegen — nach der Cutover-
+    Entscheidung. Ein Fruehwarnsystem, das zu spaet spricht, ist keins.
+
+    JETZT: Alarm, wenn der Live-PF unter das 5 %%-Quantil dessen faellt, was ein
+    gesundes System bei GENAU DIESEM n produziert (Tabelle:
+    data/roundtrip_pf_reference.json, erzeugt von
+    scripts/build_roundtrip_reference.py). Fehlalarm-Rate damit per Konstruktion
+    5 %% bei jedem n — das Signal darf frueh sprechen, nur mit weiter Toleranz.
+
+    Verglichen wird der PROZENT-PF (pf_pct), nicht der USD-PF: nur er ist mit dem
+    gleichgewichtenden Backtest vergleichbar. Der USD-Wert bleibt im Bericht,
+    weil er die oekonomisch richtige Groesse fuer den Cutover-Gatekeeper ist.
+
+    Schreibt result["roundtrip"], setzt ggf. result["roundtrip_alert"].
     Wirft nie — ein Fehler hier darf den Haupt-Check nicht kippen.
     """
     if not wd_cfg.get("roundtrip_signal_enabled", DEFAULT_ROUNDTRIP_ENABLED):
@@ -350,43 +405,71 @@ def _check_roundtrip_signal(trade_history: list, wfo_pf: Optional[float],
         from app.roundtrip_metrics import clean_roundtrip_stats, DEFAULT_REGIME_START
 
         since = wd_cfg.get("roundtrip_since") or DEFAULT_REGIME_START
-        min_n = wd_cfg.get("roundtrip_min_n", DEFAULT_ROUNDTRIP_MIN_N)
-        thr = wd_cfg.get("roundtrip_threshold_pct",
-                         DEFAULT_ROUNDTRIP_THRESHOLD_PCT)
+        quantil = wd_cfg.get("roundtrip_alert_quantile", DEFAULT_ROUNDTRIP_QUANTILE)
 
         s = clean_roundtrip_stats(trade_history, since_iso=since)
         rt = {
-            "n": s["n"], "net_usd": s["net_usd"], "pf": s["pf"],
+            "n": s["n"], "net_usd": s["net_usd"],
+            "pf": s["pf"],            # USD — Gatekeeper
+            "pf_pct": s["pf_pct"],    # Prozent — Alarm-Basis
+            "avg_ret_pct": s["avg_ret_pct"],
             "win_rate": s["win_rate"], "avg_win": s["avg_win"],
             "avg_loss": s["avg_loss"], "since": s["since"],
             "inherited_net_usd": s["inherited"]["net_usd"],
         }
         result["roundtrip"] = rt
 
-        # Verlustfreies Fenster (pf=None bei gross_loss=0) = gesund, kein Alarm.
-        if s["pf"] is None or wfo_pf in (None, 0):
-            rt["skip_reason"] = "kein PF-Vergleich moeglich (verlustfrei oder keine Baseline)"
+        if s["n"] == 0:
+            rt["skip_reason"] = "noch keine sauberen Round-Trips im Fenster"
             return
-        drift = (s["pf"] - wfo_pf) / abs(wfo_pf) * 100
-        rt["drift_pct"] = round(drift, 2)
-        rt["wfo_pf"] = round(wfo_pf, 3)
-
-        # Min-Sample-Guard: bei Mini-Sample berichten, aber NICHT alarmieren.
-        # Round-Trips sammeln sich langsam (Wochen) — ein Alert auf n=5 waere
-        # Rauschen und wuerde den Cry-Wolf-Effekt fuettern.
-        if s["n"] < min_n:
-            rt["skip_reason"] = (f"Zu wenig saubere Round-Trips (n={s['n']}, "
-                                 f"min={min_n}) — nur Bericht, kein Alert")
-            log.info("Motor-Edge-Signal: n=%d < %d -> nur Bericht "
-                     "(PF %.2f vs WFO %.2f, netto %+.0f USD)",
-                     s["n"], min_n, s["pf"], wfo_pf, s["net_usd"])
+        if s["pf_pct"] is None:
+            rt["skip_reason"] = "kein Prozent-PF (verlustfrei oder Einsatz unbekannt)"
             return
 
-        if drift >= -thr:
-            log.info("Motor-Edge-Signal gesund (PF %.2f vs WFO %.2f, "
-                     "drift %+.1f%%, n=%d, netto %+.0f USD)",
-                     s["pf"], wfo_pf, drift, s["n"], s["net_usd"])
+        grenze, ref = _reference_threshold(s["n"], quantil)
+        if grenze is None:
+            rt["skip_reason"] = ("Referenzverteilung fehlt — "
+                                 "scripts/build_roundtrip_reference.py laufen lassen")
+            log.warning("Motor-Edge-Signal ohne Referenz: kein Alarm moeglich "
+                        "(n=%d, PF%% %.2f)", s["n"], s["pf_pct"])
             return
+
+        rt["alarm_grenze"] = round(grenze, 3)
+        rt["quantil"] = quantil
+
+        # Staleness-Guard: Referenz gegen die AKTUELLE Exit-Config pruefen.
+        # Eine Tabelle zur falschen Config liefert falsche Grenzen -> lieber
+        # nicht alarmieren, aber laut sein. (Ein still gewordenes Signal war
+        # genau der Fehler bei der Tages-Zusammenfassung, siehe R-B14.)
+        try:
+            from app.config_manager import load_config
+            c = load_config()
+            lev, dt = c.get("leverage", {}) or {}, c.get("demo_trading", {}) or {}
+            tp = dt.get("take_profit_pct")
+            live_exit = {
+                "sl_pct": dt.get("stop_loss_pct"),
+                "tp_pct": None if (tp is None or tp >= 100) else float(tp),
+                "trail_act_pct": lev.get("trailing_sl_activation_pct"),
+                "trail_pct": lev.get("trailing_sl_pct"),
+                "tranches": lev.get("tp_tranches") or None,
+            }
+            if ref.get("exit_config") and ref["exit_config"] != live_exit:
+                rt["skip_reason"] = ("Referenz passt nicht zur Live-Config — "
+                                     "build_roundtrip_reference.py neu laufen lassen")
+                rt["referenz_veraltet"] = True
+                log.warning("Motor-Edge-Signal: Referenz VERALTET. Referenz=%s "
+                            "Live=%s -> kein Alarm bis neu erzeugt.",
+                            ref["exit_config"], live_exit)
+                return
+        except Exception as e:
+            log.debug("Staleness-Check nicht moeglich: %s", e)
+
+        if s["pf_pct"] >= grenze:
+            log.info("Motor-Edge-Signal gesund (PF%% %.2f >= Grenze %.2f "
+                     "[%s bei n=%d], netto %+.0f USD)",
+                     s["pf_pct"], grenze, quantil, s["n"], s["net_usd"])
+            return
+        drift = s["pf_pct"] - grenze
 
         # --- Decay -> Alert (eigener Throttle, kollidiert nicht mit Buch-Signal)
         state = _load_alert_state()
@@ -406,10 +489,11 @@ def _check_roundtrip_signal(trade_history: list, wfo_pf: Optional[float],
         from app.alerts import send_alert
         msg = (
             f"MOTOR-EDGE-ALARM: Die Trades, die der Bot selbst eroeffnet UND "
-            f"geschlossen hat, sind netto {s['net_usd']:+,.0f} USD "
-            f"(Profit-Faktor {s['pf']:.2f} vs WFO-Baseline {wfo_pf:.2f} = "
-            f"{drift:+.1f}%). n={s['n']} Round-Trips seit {since[:10]}, "
-            f"Trefferquote {s['win_rate']:.0f}%, "
+            f"geschlossen hat, sind netto {s['net_usd']:+,.0f} USD. "
+            f"Profit-Faktor {s['pf_pct']:.2f} liegt unter der Alarmgrenze "
+            f"{grenze:.2f} ({quantil}-Quantil bei n={s['n']}) — d.h. schlechter "
+            f"als {quantil[1:]}% aller Phasen, die ein gesundes System zeigt. "
+            f"Seit {since[:10]}, Trefferquote {s['win_rate']:.0f}%, "
             f"O Gewinn {s['avg_win']:+,.0f} vs O Verlust {s['avg_loss']:+,.0f}. "
             f"Hinweis: das Buch-Signal kann trotzdem gruen sein (geerbte "
             f"Positionen: {s['inherited']['net_usd']:+,.0f} USD). "
@@ -419,12 +503,12 @@ def _check_roundtrip_signal(trade_history: list, wfo_pf: Optional[float],
         result["roundtrip_alert"] = True
         rt["alert_triggered"] = True
         state["last_roundtrip_alert_at"] = datetime.now().isoformat()
-        state["last_roundtrip_pf"] = s["pf"]
+        state["last_roundtrip_pf_pct"] = s["pf_pct"]
         state["last_roundtrip_net_usd"] = s["net_usd"]
         _save_alert_state(state)
-        log.warning("Motor-Edge-Alert gesendet: PF %.2f vs %.2f (%.1f%%), "
-                    "netto %+.0f USD, n=%d",
-                    s["pf"], wfo_pf, drift, s["net_usd"], s["n"])
+        log.warning("Motor-Edge-Alert gesendet: PF%% %.2f < Grenze %.2f "
+                    "(%s bei n=%d), netto %+.0f USD",
+                    s["pf_pct"], grenze, quantil, s["n"], s["net_usd"])
     except Exception as e:  # nie den Haupt-Check kippen
         log.warning("Motor-Edge-Signal fehlgeschlagen (non-fatal): %s", e)
         result.setdefault("roundtrip", {})["error"] = str(e)

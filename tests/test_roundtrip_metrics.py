@@ -156,29 +156,42 @@ def test_empty_history_safe():
 # Zweitsignal im Watchdog
 # ============================================================
 
-def _collapsed_book(n_clean):
-    """n_clean saubere Round-Trips mit kaputter Oekonomie (PF ~0.3)."""
-    trades = []
-    for i in range(n_clean):
-        sym = f"C{i}"
-        pnl = 200.0 if i % 3 else -900.0     # 2/3 kleine Gewinne, 1/3 grosse Verluste
-        trades += [_buy(sym, "2026-07-05T10:00"),
-                   _close(sym, "2026-07-08T10:00", pnl)]
-    return trades
+EXIT_CFG = {"sl_pct": -8, "tp_pct": None, "trail_act_pct": 6.0,
+            "trail_pct": 4.0, "tranches": None}
+
+# Referenzverteilung: p05 = "so schlecht ist ein GESUNDES System noch in 5 %
+# der Faelle". Steigt mit n, weil die Streuung abnimmt.
+REFERENZ = {
+    "exit_config": EXIT_CFG,
+    "by_n": {"5": {"p05": 0.10}, "10": {"p05": 0.30},
+             "20": {"p05": 0.50}, "40": {"p05": 0.80}},
+}
+
+LIVE_CFG = {
+    "demo_trading": {"stop_loss_pct": -8, "take_profit_pct": 999},
+    "leverage": {"trailing_sl_activation_pct": 6.0, "trailing_sl_pct": 4.0,
+                 "tp_tranches": []},
+}
 
 
-def _signal(trades, **cfg):
+def _signal(trades, referenz=REFERENZ, live_cfg=LIVE_CFG, **cfg):
     """Ruft das Zweitsignal isoliert auf.
 
-    Alert-State wird gemockt: sonst throttelt ein Test den naechsten aus
-    (der Throttle ist persistent) und die Tests haengen voneinander ab.
+    Gemockt werden: Alert-State (sonst throttelt ein Test den naechsten aus),
+    die Referenzverteilung und die Live-Config (fuer den Staleness-Guard).
     """
     from app.wfo_drift_watchdog import _check_roundtrip_signal
     result = {}
     base = {"roundtrip_since": SINCE}
     base.update(cfg)
     alert_state = {}
+
+    def fake_load_json(name):
+        return referenz if name == "roundtrip_pf_reference.json" else None
+
     with patch("app.alerts.send_alert") as mock_alert, \
+         patch("app.config_manager.load_json", side_effect=fake_load_json), \
+         patch("app.config_manager.load_config", return_value=live_cfg), \
          patch("app.wfo_drift_watchdog._load_alert_state",
                side_effect=lambda: alert_state), \
          patch("app.wfo_drift_watchdog._save_alert_state",
@@ -187,63 +200,130 @@ def _signal(trades, **cfg):
     return result, mock_alert
 
 
-def test_signal_alerts_on_collapsed_motor_edge():
-    result, mock_alert = _signal(_collapsed_book(15), roundtrip_min_n=12)
+def _book(n, gewinn_usd, verlust_usd, einsatz=40000.0):
+    """n Round-Trips: 2 von 3 gewinnen. Einsatz gleich -> Prozent = USD/Einsatz."""
+    trades = []
+    for i in range(n):
+        sym = f"C{i}"
+        pnl = gewinn_usd if i % 3 else verlust_usd
+        trades += [dict(_buy(sym, "2026-07-05T10:00"), amount_usd=einsatz),
+                   _close(sym, "2026-07-08T10:00", pnl)]
+    return trades
+
+
+def _kaputt(n=15):
+    """PF% ~0.20 — klar unter dem p05 (0.40 bei n=15)."""
+    return _book(n, 200.0, -2000.0)
+
+
+def _gesund(n=15):
+    """PF% ~2.0 — klar ueber jedem p05 der Referenz."""
+    return _book(n, 900.0, -900.0)
+
+
+# ============================================================
+# Referenz-Schwelle: Interpolation
+# ============================================================
+
+def test_threshold_interpolates_between_grid_points():
+    """n=15 liegt zwischen 10 (p05 0.30) und 20 (p05 0.50) -> 0.40."""
+    from app.wfo_drift_watchdog import _reference_threshold
+    with patch("app.config_manager.load_json", return_value=REFERENZ):
+        grenze, _ = _reference_threshold(15)
+    assert grenze == pytest.approx(0.40)
+
+
+def test_threshold_clamps_below_and_above_grid():
+    from app.wfo_drift_watchdog import _reference_threshold
+    with patch("app.config_manager.load_json", return_value=REFERENZ):
+        unten, _ = _reference_threshold(2)
+        oben, _ = _reference_threshold(500)
+    assert unten == pytest.approx(0.10)
+    assert oben == pytest.approx(0.80)
+
+
+def test_threshold_none_without_reference():
+    from app.wfo_drift_watchdog import _reference_threshold
+    with patch("app.config_manager.load_json", return_value=None):
+        grenze, ref = _reference_threshold(15)
+    assert grenze is None and ref is None
+
+
+# ============================================================
+# Alarm-Verhalten
+# ============================================================
+
+def test_alerts_when_below_reference_quantile():
+    """DER KERN: Alarm nur, wenn schlechter als 95 % der gesunden Phasen."""
+    result, mock_alert = _signal(_kaputt(15))
     rt = result["roundtrip"]
     assert rt["n"] == 15
-    assert rt["pf"] < 1.0
-    assert rt["drift_pct"] < -30
+    assert rt["pf_pct"] < rt["alarm_grenze"]
     assert result.get("roundtrip_alert") is True
     mock_alert.assert_called_once()
     assert "MOTOR-EDGE-ALARM" in mock_alert.call_args[0][0]
 
 
-def test_signal_reports_but_stays_silent_below_min_sample():
-    """Mini-Sample: berichten ja, alarmieren nein (Cry-Wolf-Schutz)."""
-    result, mock_alert = _signal(_collapsed_book(9), roundtrip_min_n=12)
-    rt = result["roundtrip"]
-    assert rt["n"] == 9
-    assert rt["pf"] < 1.0                      # Wert wird berichtet
-    assert "Zu wenig saubere Round-Trips" in rt["skip_reason"]
-    assert result.get("roundtrip_alert") is not True
+def test_silent_when_above_reference_quantile():
+    result, mock_alert = _signal(_gesund(15))
+    assert result["roundtrip"]["pf_pct"] > result["roundtrip"]["alarm_grenze"]
     mock_alert.assert_not_called()
 
 
-def test_signal_silent_when_motor_healthy():
-    trades = []
-    for i in range(15):
-        sym = f"H{i}"
-        trades += [_buy(sym, "2026-07-05T10:00"),
-                   _close(sym, "2026-07-08T10:00", 400.0 if i % 4 else -100.0)]
-    result, mock_alert = _signal(trades, roundtrip_min_n=12)
-    assert result["roundtrip"]["pf"] > 1.71
-    mock_alert.assert_not_called()
+def test_small_sample_reports_with_wide_tolerance():
+    """Bei kleinem n wird berichtet — und die Toleranz ist entsprechend weit.
 
-
-def test_signal_can_be_disabled():
-    result, mock_alert = _signal(_collapsed_book(15),
-                                 roundtrip_signal_enabled=False)
-    assert "roundtrip" not in result
-    mock_alert.assert_not_called()
-
-
-def test_signal_never_raises_on_garbage():
-    """Ein Fehler im Zweitsignal darf den Haupt-Check nicht kippen."""
-    result, _ = _signal([{"action": "SCANNER_BUY"}, None, 42, "kaputt"])
-    assert isinstance(result, dict)   # kein Throw
-
-
-def test_signal_alert_is_throttled():
-    """Zweiter Alert innerhalb des Fensters wird unterdrueckt (Cry-Wolf-Schutz).
-
-    Eigener Throttle-Key: das Zweitsignal darf das Buch-Signal nicht
-    aussperren und umgekehrt.
+    Der alte Entwurf schwieg unter n=12 komplett. Jetzt darf frueh gesprochen
+    werden, weil die Grenze mit n mitwaechst (bei n=5 nur 0.10).
     """
+    result, mock_alert = _signal(_gesund(6))
+    rt = result["roundtrip"]
+    assert rt["n"] == 6
+    assert rt["alarm_grenze"] < 0.31, "Toleranz bei kleinem n muss weit sein"
+    mock_alert.assert_not_called()
+
+
+# ============================================================
+# Schutzmechanismen
+# ============================================================
+
+def test_no_reference_means_report_but_no_alert():
+    """Ohne Tabelle keine Grenze -> lieber schweigen als falsch alarmieren."""
+    result, mock_alert = _signal(_kaputt(15), referenz=None)
+    rt = result["roundtrip"]
+    assert rt["pf_pct"] is not None, "Wert muss trotzdem berichtet werden"
+    assert "Referenzverteilung fehlt" in rt["skip_reason"]
+    mock_alert.assert_not_called()
+
+
+def test_stale_reference_blocks_alert_and_flags():
+    """Referenz zu anderer Config -> falsche Grenzen -> kein Alarm, aber laut.
+
+    Ein still gewordenes Signal war der Fehler bei der Tages-Zusammenfassung
+    (R-B14) — hier wird der Grund explizit im Ergebnis vermerkt.
+    """
+    andere_cfg = {"demo_trading": {"stop_loss_pct": -5, "take_profit_pct": 12},
+                  "leverage": {"trailing_sl_activation_pct": 6.0,
+                               "trailing_sl_pct": 4.0, "tp_tranches": []}}
+    result, mock_alert = _signal(_kaputt(15), live_cfg=andere_cfg)
+    rt = result["roundtrip"]
+    assert rt.get("referenz_veraltet") is True
+    assert "passt nicht zur Live-Config" in rt["skip_reason"]
+    mock_alert.assert_not_called()
+
+
+def test_alert_is_throttled():
     from app.wfo_drift_watchdog import _check_roundtrip_signal
-    trades = _collapsed_book(15)
-    cfg = {"roundtrip_since": SINCE, "roundtrip_min_n": 12}
+    trades = _kaputt(15)
+    cfg = {"roundtrip_since": SINCE}
     alert_state = {}
+
+    def fake_load_json(name):
+        return REFERENZ if name == "roundtrip_pf_reference.json" else None
+
     with patch("app.alerts.send_alert") as mock_alert, \
+         patch("app.config_manager.load_json", side_effect=fake_load_json), \
+         patch("app.config_manager.load_config", return_value=LIVE_CFG), \
          patch("app.wfo_drift_watchdog._load_alert_state",
                side_effect=lambda: alert_state), \
          patch("app.wfo_drift_watchdog._save_alert_state",
@@ -255,17 +335,66 @@ def test_signal_alert_is_throttled():
     assert r2.get("roundtrip_alert") is not True
     assert "gethrottlet" in r2["roundtrip"]["skip_reason"]
     assert mock_alert.call_count == 1
-    # eigener Key -> Buch-Signal-Throttle bleibt unberuehrt
     assert "last_roundtrip_alert_at" in alert_state
-    assert "last_alert_at" not in alert_state
+    assert "last_alert_at" not in alert_state, "eigener Key, sperrt das Buch-Signal nicht"
 
 
-def test_signal_ignores_inherited_winners():
+def test_signal_can_be_disabled():
+    result, mock_alert = _signal(_kaputt(15), roundtrip_signal_enabled=False)
+    assert "roundtrip" not in result
+    mock_alert.assert_not_called()
+
+
+def test_signal_never_raises_on_garbage():
+    result, _ = _signal([{"action": "SCANNER_BUY"}, None, 42, "kaputt"])
+    assert isinstance(result, dict)
+
+
+def test_ignores_inherited_winners():
     """Buch gruen durch Alt-Gewinner, Motor trotzdem kaputt -> Alarm."""
-    trades = _collapsed_book(15)
-    trades += [_buy("OLD", "2026-06-01T10:00"),
+    trades = _kaputt(15)
+    trades += [dict(_buy("OLD", "2026-06-01T10:00"), amount_usd=40000.0),
                _close("OLD", "2026-07-17T10:00", 50000.0)]
-    result, mock_alert = _signal(trades, roundtrip_min_n=12)
+    result, mock_alert = _signal(trades)
     assert result["roundtrip"]["inherited_net_usd"] == 50000.0
-    assert result["roundtrip"]["pf"] < 1.0
     mock_alert.assert_called_once()
+
+
+def test_reports_both_usd_and_percent():
+    """USD = Gatekeeper (oekonomisch), Prozent = Alarm (vergleichbar)."""
+    result, _ = _signal(_kaputt(15))
+    rt = result["roundtrip"]
+    assert rt["pf"] is not None and rt["pf_pct"] is not None
+    assert rt["net_usd"] < 0
+    assert rt["avg_ret_pct"] is not None
+
+
+# ============================================================
+# Prozent-Basis in den Kennzahlen
+# ============================================================
+
+def test_invested_usd_accumulated_from_buys():
+    trades = [dict(_buy("AAA", "2026-07-05T10:00"), amount_usd=30000.0),
+              dict(_buy("AAA", "2026-07-06T10:00"), amount_usd=10000.0),
+              _close("AAA", "2026-07-08T10:00", 4000.0)]
+    s = clean_roundtrip_stats(trades, since_iso=SINCE)
+    assert s["n"] == 1
+    assert s["avg_ret_pct"] == pytest.approx(10.0)   # 4000 / 40000
+
+
+def test_pf_percent_differs_from_usd_when_sizes_differ():
+    """Grosser Verlierer neben kleinen Gewinnern: USD-PF schlechter als Prozent.
+
+    Genau dieser Effekt erklaerte am 21.07. einen Teil der Luecke zwischen
+    gemessenem USD-PF (0.38) und der Backtest-Basis (0.45).
+    """
+    trades = []
+    for i, (einsatz, pnl) in enumerate([(10000.0, 1000.0), (10000.0, 1000.0),
+                                        (100000.0, -5000.0)]):
+        sym = f"S{i}"
+        trades += [dict(_buy(sym, "2026-07-05T10:00"), amount_usd=einsatz),
+                   _close(sym, "2026-07-08T10:00", pnl)]
+    s = clean_roundtrip_stats(trades, since_iso=SINCE)
+    # USD: 2000 / 5000 = 0.40 ; Prozent: (10+10) / 5 = 4.00
+    assert s["pf"] == pytest.approx(0.40)
+    assert s["pf_pct"] == pytest.approx(4.00)
