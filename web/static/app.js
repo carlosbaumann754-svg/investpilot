@@ -273,6 +273,22 @@ function renderExitForecast(data) {
         const ntDist = nt ? distFmt(nt.distance_pct) : '--';
         const pnlCls = (p.pnl_pct || 0) >= 0 ? 'positive' : 'negative';
 
+        // R-B35: "Netz scharf"-Markierung. Ab +6% uebernimmt der Trailing-Stop
+        // die Fuehrung — das soll man SEHEN, inklusive wie viel Gewinn bereits
+        // gesichert ist. Vorher stand hier "Trailing-SL: --" und der Abstand
+        // zeigte auf den laengst irrelevanten -8%-Stop.
+        const trailTrig = (p.triggers || []).find(t => t.type === 'Trailing-SL');
+        const netzScharf = !!(trailTrig && trailTrig.armed);
+        const lockedTxt = (netzScharf && trailTrig.locked_pct != null)
+            ? `sichert ${trailTrig.locked_pct >= 0 ? '+' : ''}${trailTrig.locked_pct.toFixed(1)}%${trailTrig.estimated ? ' ~' : ''}`
+            : '';
+        const netzBadge = netzScharf
+            ? `<span title="Trailing-Stop aktiv: Netz liegt 4% unter dem Hoechststand und zieht nur nach oben mit. ${lockedTxt ? 'Es ' + lockedTxt + ' — die Position kann nicht mehr im Verlust enden.' : ''}${trailTrig.estimated ? ' (~ = Ratchet-Stand wird im naechsten Zyklus praezisiert)' : ''}" ` +
+              `style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:600;` +
+              `background:rgba(52,211,153,0.15);color:#34d399;border:1px solid rgba(52,211,153,0.35);cursor:help;">` +
+              `\u{1F6E1} NETZ${lockedTxt ? ' ' + lockedTxt : ''}</span>`
+            : '';
+
         // Alle Trigger als kompakte Liste
         const allTriggers = (p.triggers || []).map(t => {
             let txt;
@@ -300,7 +316,7 @@ function renderExitForecast(data) {
         // Asset-Kennung: Ticker mit Hover-Tooltip (voller Name)
         const ticker = p.symbol || ('#' + (p.instrument_id || '?'));
         const title = p.name ? `title="${p.name}"` : '';
-        const assetCell = `<span ${title} style="${p.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>`;
+        const assetCell = `<span ${title} style="${p.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>${netzBadge}`;
         return `
             <tr>
                 <td>${assetCell}</td>

@@ -1026,17 +1026,37 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     })
 
     # --- Trailing-SL ---
+    # R-B35 (21.07.2026, Carlos-Wunsch): scharfe Netze sichtbar machen + Abstand
+    # korrekt rechnen. Vorher zeigte die Karte fuer Positionen UEBER +6% "--" und
+    # den Stop-Loss als naechsten Trigger — obwohl der Ratchet-Stand im State lag.
+    # URSACHE: die Distanz-Rechnung brauchte current_price, den die IBKR-Position
+    # nicht immer mitliefert. Der Trader hat fuer genau diesen Fall einen
+    # Fallback (Kurs aus Einstand+PnL rekonstruieren, trader.py ~1212) — die
+    # Karte hatte ihn nicht. Live belegt: AOSL sl_price=32.01 im State, dist=None.
+    if not current_price and entry_price and pnl_pct:
+        current_price = round(entry_price * (1 + pnl_pct / 100), 6)
+    if not entry_price and current_price and pnl_pct:
+        entry_price = round(current_price / (1 + pnl_pct / 100), 6)
+
     trail_active = trail_enabled and pnl_pct >= trail_activation
     trail_distance = None
     trail_sl_price = None
+    trail_locked_pct = None   # so viel Gewinn ist durch das Netz bereits gesichert
+    trail_estimated = False   # True = Ratchet-Stand (noch) nicht im State, geschaetzt
     if trail_active and pid in trailing_state:
         trail_sl_price = trailing_state[pid].get("sl_level")
         if trail_sl_price and current_price:
-            # Distanz in % vom aktuellen Preis bis SL-Level
+            # Distanz in % vom aktuellen Preis bis zum Netz
             trail_distance = round((current_price - trail_sl_price) / current_price * 100, 2)
-    elif trail_active:
-        # Fallback: wenn kein State gespeichert, worst-case 1.8%
+            if entry_price:
+                trail_locked_pct = round((trail_sl_price / entry_price - 1) * 100, 2)
+    if trail_active and trail_distance is None:
+        # Ueber der Schwelle, aber (noch) kein verwertbarer Ratchet-Stand — der
+        # Scheduler schreibt ihn im naechsten Zyklus. Konservative Schaetzung:
+        # aktueller Kurs als Peak -> Netz liegt trail_pct darunter.
         trail_distance = trail_pct
+        trail_locked_pct = round(pnl_pct - trail_pct, 2)
+        trail_estimated = True
     triggers.append({
         "type": "Trailing-SL",
         "label": f"Trailing-SL (-{trail_pct:.1f}% vom Peak)",
@@ -1046,6 +1066,10 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
         "direction": "down",
         "sl_price": trail_sl_price,
         "activation_pct": trail_activation,
+        # Fuer die Dashboard-Markierung "Netz scharf":
+        "armed": trail_active,
+        "locked_pct": trail_locked_pct,
+        "estimated": trail_estimated,
     })
 
     # --- TP-Tranchen (aktuell 16 / 30, seit R-B15 ohne die +8er) ---
