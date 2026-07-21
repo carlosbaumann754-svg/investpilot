@@ -103,3 +103,20 @@ def test_ratchet_gewinner_kann_nicht_mehr_verlieren():
     assert t["locked_pct"] == pytest.approx(5.6)
     assert t["distance_pct"] == pytest.approx(0.56, abs=0.05)  # kurz vor Ausloesung
     assert r["next_trigger"]["type"] == "Trailing-SL"
+
+
+def test_einstand_kommt_notfalls_aus_dem_trailing_state():
+    """Der volle Live-Fall (AOSL, 2. Iteration): die IBKR-Position liefert WEDER
+    current_price NOCH entry_price — aber der State hat beides. Ohne den Griff
+    in den State bliebe die Anzeige auf 'geschaetzt', obwohl der exakte
+    Ratchet-Stand vorliegt."""
+    r = _forecast(
+        {"position_id": "74820280", "pnl_pct": 7.48,
+         "entry_price": 0, "current_price": 0},
+        {"74820280": {"sl_level": 32.0133, "entry_price": 30.9}},
+    )
+    t = _trail(r)
+    assert t["estimated"] is False                              # exakt, nicht geschaetzt
+    assert t["locked_pct"] == pytest.approx(3.6, abs=0.1)
+    assert t["distance_pct"] == pytest.approx(3.6, abs=0.2)
+    assert r["next_trigger"]["type"] == "Trailing-SL"

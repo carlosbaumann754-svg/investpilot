@@ -1033,6 +1033,12 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     # nicht immer mitliefert. Der Trader hat fuer genau diesen Fall einen
     # Fallback (Kurs aus Einstand+PnL rekonstruieren, trader.py ~1212) — die
     # Karte hatte ihn nicht. Live belegt: AOSL sl_price=32.01 im State, dist=None.
+    # Zweite Quelle fuer den Einstand: der Trailing-State speichert entry_price
+    # mit (leverage_manager schreibt ihn beim Armen). Live-Fall: die IBKR-Position
+    # liefert WEDER current_price NOCH entry_price — ohne diesen Griff in den
+    # State blieben AOSL/LPG trotz vorhandenem Ratchet-Stand auf "geschaetzt".
+    if not entry_price and pid in trailing_state:
+        entry_price = trailing_state[pid].get("entry_price") or 0
     if not current_price and entry_price and pnl_pct:
         current_price = round(entry_price * (1 + pnl_pct / 100), 6)
     if not entry_price and current_price and pnl_pct:
