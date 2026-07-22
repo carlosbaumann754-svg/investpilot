@@ -130,10 +130,25 @@ def test_no_portfolio_value_aborts(snap_env):
 
 
 def test_one_snapshot_per_day(snap_env):
-    first = es.take_snapshot("test")
-    second = es.take_snapshot("test")
+    # R-B36 (22.07.2026): "einmal pro Tag" gilt fuer SCHEDULER-Snapshots — nur
+    # die beenden den Tag. Ein Trigger ohne "scheduler"-Praefix (manueller
+    # Dashboard-Klick) darf den Tagesend-Lauf NICHT mehr blockieren; er wird
+    # per Upsert ersetzt. Live-Fall 21.07.: manueller 12:08-Snapshot verdraengte
+    # den Abendwert komplett aus der Monatstabelle.
+    first = es.take_snapshot("scheduler-daily-2230")
+    second = es.take_snapshot("scheduler-daily-2230")
     assert first is not None
-    assert second is None, "zweiter Snapshot am selben Tag muss geskippt werden"
+    assert second is None, "zweiter Scheduler-Snapshot am selben Tag muss geskippt werden"
+
+
+def test_manueller_snapshot_blockiert_abendlauf_nicht(snap_env):
+    """R-B36: manuell -> Eintrag; Scheduler danach -> ERSETZT ihn (ein Eintrag)."""
+    assert es.take_snapshot("manual-dashboard") is not None
+    snap = es.take_snapshot("scheduler-daily-2230")
+    assert snap is not None, "Abendlauf darf nicht am Mittags-Klick scheitern"
+    heutige = [h for h in snap_env[es.EQUITY_FILE] if h.get("date") == snap["date"]]
+    assert len(heutige) == 1, "Upsert: ersetzt statt dupliziert"
+    assert heutige[0]["source"] == "scheduler-daily-2230"
 
 
 def test_history_is_capped(snap_env):

@@ -208,8 +208,16 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
     today_iso = datetime.now().strftime("%Y-%m-%d")
     history = _load_history()
 
-    if _today_already_recorded(history, today_iso):
-        log.debug(f"Equity-Snapshot fuer {today_iso} existiert bereits — skip")
+    # R-B36 (22.07.2026): Nur ein SCHEDULER-Eintrag beendet den Tag. Vorher
+    # blockierte JEDER heutige Eintrag — ein manueller Dashboard-Klick am Mittag
+    # verhinderte damit den Tagesend-Snapshot (Live-Fall 21.07.: Eintrag von
+    # 12:08 CEST blieb als Tageswert stehen, der Abend-Lauf wurde uebersprungen).
+    # Jetzt: Scheduler-Eintrag vorhanden -> fertig fuer heute (auch fuer manuelle
+    # Klicks — der Tagesend-Wert ist der kanonische). Nur manuelle Eintraege
+    # vorhanden -> weiterlaufen, der Upsert unten ersetzt sie.
+    heutige = [h for h in history if h.get("date") == today_iso]
+    if any(str(h.get("source", "")).startswith("scheduler") for h in heutige):
+        log.debug(f"Equity-Snapshot fuer {today_iso} (Scheduler) existiert bereits — skip")
         return None
 
     comp = _fetch_portfolio_components()
@@ -242,6 +250,13 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
         c = _fetch_latest_close(sym)
         snap[key] = round(c, 4) if c is not None else None
 
+    # R-B36 (22.07.2026): UPSERT statt Append — der letzte Stand des Tages
+    # gewinnt. Vorher konnten manueller (Dashboard) und geplanter Snapshot
+    # zwei Eintraege fuer denselben Tag erzeugen; und da der manuelle den
+    # Tages-Guard mitschrieb, verdraengte ein Mittags-Klick den Tagesend-Wert
+    # komplett (Live-Fall 21.07.: manuell 12:08 CEST -> Abend-Lauf uebersprungen,
+    # in der Monatstabelle stand ein Mittagswert).
+    history = [h for h in history if h.get("date") != today_iso]
     history.append(snap)
     _save_history(history)
     log.info(
@@ -252,11 +267,16 @@ def take_snapshot(triggered_by: str = "scheduler-daily-2230") -> dict | None:
         f"AGG={snap.get('agg_close')}, IWM={snap.get('iwm_close')}"
     )
 
-    # Guard fuer Scheduler-Skip (entlastet load_json bei jedem 5-Min-Tick)
-    try:
-        get_data_path(DAILY_GUARD).write_text(today_iso)
-    except Exception:
-        pass
+    # Guard fuer Scheduler-Skip (entlastet load_json bei jedem 5-Min-Tick).
+    # R-B36: NUR Scheduler-Laeufe verbrauchen den Tages-Slot. Ein manueller
+    # Dashboard-Snapshot ist eine Momentaufnahme zwischendurch — er darf den
+    # geplanten Tagesend-Snapshot nicht verhindern (der Upsert oben sorgt
+    # dafuer, dass der Abendwert den Mittagswert ersetzt, nicht dupliziert).
+    if str(triggered_by).startswith("scheduler"):
+        try:
+            get_data_path(DAILY_GUARD).write_text(today_iso)
+        except Exception:
+            pass
 
     # Sofortiges Cloud-Backup, damit der Snapshot beim naechsten Render-Restart
     # nicht verloren geht (Persistent Disk ist da, aber doppelt haelt besser).

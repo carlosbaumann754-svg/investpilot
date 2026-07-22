@@ -58,6 +58,16 @@ def _tg_notify_enabled(event_type, config=None):
 
     event_type: 'trades', 'stop_loss', 'regime_change', 'daily_summary',
                 'weekly_report', 'optimizer'
+
+    ACHTUNG, GEWOLLTE DOPPELWIRKUNG (gelernt am 22.07.2026, R-B36): Bei
+    telegram.enabled=False blockiert dieses Gate die Info-Ereignisse
+    (erfolgreiche Trades, Weekly-Report, Optimizer) fuer Pushover-only-Nutzer —
+    das ist ABSICHT (Cry-Wolf-Disziplin: Stille = OK; FAILED-Pfade haben eigene
+    Bypaesse und alarmieren immer). Die TAGES-ZUSAMMENFASSUNG dagegen ist ein
+    bewusst bestellter Tages-Digest und haengt seit R-B36 NICHT mehr an diesem
+    Gate (send_daily_summary prueft nur noch das Ereignis-Opt-out). Wer hier
+    aendert: tests/test_alert_regime_bypass.py + test_alert_failed_bypass.py
+    kodieren das gewollte Verhalten.
     """
     tg_cfg = _tg_config(config)
     if not tg_cfg.get("enabled", False):
@@ -512,8 +522,16 @@ def send_daily_summary(portfolio_value, daily_pnl_pct, daily_pnl_usd,
     if config is None:
         config = load_config()
 
-    # Pruefe granulare Einstellung
-    if not _tg_notify_enabled("daily_summary", config):
+    # R-B36 (22.07.2026): NUR das Ereignis-Opt-out pruefen, NICHT das
+    # Telegram-Kanal-Gate (_tg_notify_enabled). Das Gate verlangt
+    # telegram.enabled=True — Telegram ist aber seit 28.04.2026 aus, und damit
+    # kam die Zusammenfassung auf KEINEM Kanal mehr an, obwohl Pushover aktiv
+    # ist und send_alert die Kanaele selbst routet. Der R-B14-Fix am Zeitfenster
+    # lief deshalb ins Leere (der zweite Blocker sass davor).
+    # Anders als Trade-/Weekly-/Optimizer-Info (dort ist die Stille fuer
+    # Pushover-only GEWOLLT, Cry-Wolf-Disziplin) ist der Tages-Digest bewusst
+    # bestellt: einmal taeglich, Stunde 21 (Container-UTC = 23:00 CH-Sommerzeit).
+    if _tg_config(config).get("notify_daily_summary", True) is False:
         return
 
     msg = (f"<b>Tages-Zusammenfassung</b>\n"
