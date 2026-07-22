@@ -530,7 +530,10 @@ def send_daily_summary(portfolio_value, daily_pnl_pct, daily_pnl_usd,
     # lief deshalb ins Leere (der zweite Blocker sass davor).
     # Anders als Trade-/Weekly-/Optimizer-Info (dort ist die Stille fuer
     # Pushover-only GEWOLLT, Cry-Wolf-Disziplin) ist der Tages-Digest bewusst
-    # bestellt: einmal taeglich, Stunde 21 (Container-UTC = 23:00 CH-Sommerzeit).
+    # bestellt: einmal taeglich, Stunde 21 SCHWEIZER ZEIT (der Container laeuft
+    # auf TZ=Europe/Zurich — nur die HOST-Crontab tickt auf UTC; verwechselt am
+    # 22.07.2026 und von Carlos korrigiert, als die erste Zusammenfassung
+    # planmaessig um 21:05 CH ankam).
     if _tg_config(config).get("notify_daily_summary", True) is False:
         return
 
