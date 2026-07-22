@@ -1843,7 +1843,10 @@ async def api_soak_progress(user=Depends(require_auth)):
             }
         days_running = None
         try:
-            y, m, d = (int(x) for x in SOAK_START.split("-"))
+            # R-B38: nur den Datums-Teil parsen. Seit SOAK_START eine Uhrzeit
+            # traegt ("...T12:00:00") lief int("21T12:00:00") in den Except-Pfad
+            # -> days_running None -> Headline zeigte "(?)" statt der Tage.
+            y, m, d = (int(x) for x in SOAK_START.split("T")[0].split("-"))
             days_running = (_d.today() - _d(y, m, d)).days
         except Exception:
             pass
@@ -1873,17 +1876,25 @@ async def api_soak_progress(user=Depends(require_auth)):
             # Referenzverteilung. Bei jeder Config-Aenderung mit anpassen —
             # ein Anzeigetext, der die Vorgaenger-Config beschreibt, ist
             # schlimmer als keiner.
-            "caveat": ("Exit-korrigierte Config (ab 21.07.): SL -8%, Trailing 6/4, "
-                       "Tranchen 16/30, KEIN festes Take-Profit, min_scanner_score 25, "
-                       "max 15 Positionen. Die +8%-Tranche und das TP bei +12% sind "
-                       "raus -- sie deckelten jeden Gewinner, waehrend Verlierer bis "
-                       "-8% liefen. Die ersten Abschluesse sind noch Uebergang (unter "
-                       "der alten Config eroeffnet). WICHTIG zur Einordnung: Der "
-                       "Gatekeeper sind die REALISIERTEN Round-Trips, die der Bot "
+            # R-B38 (22.07.2026): Text auf R-B28/29 nachgezogen (Tranchen KOMPLETT
+            # aus, Ziel 80 statt 100). Der Vorgaenger-Text beschrieb den Stand vom
+            # 21.07. vormittags — die eigene Regel gilt: bei jeder Config-Aenderung
+            # mit anpassen.
+            "caveat": ("Finale Config (ab 21.07. nachmittags): SL -8%, Trailing 6/4 "
+                       "als EINZIGER Gewinn-Mechanismus, Tranchen AUS, kein festes "
+                       "Take-Profit, min_scanner_score 25, max 15 Positionen. "
+                       "Teilverkaeufe gibt es nicht mehr — belegt ueber 27 "
+                       "Konfigurationen (9/9 besser ohne). Abschluesse von Positionen, "
+                       "die VOR dem Soak-Start gekauft wurden, zaehlen als 'geerbt' "
+                       "und nicht in den Zaehler (z.B. HRMY 22.07.: gekauft 14.07., "
+                       "Trailing-Netz +321 USD — erster Live-Beweis des Ernte-"
+                       "Mechanismus, aber Uebergangs-Trade). WICHTIG zur Einordnung: "
+                       "Der Gatekeeper sind die REALISIERTEN Round-Trips, die der Bot "
                        "selbst eroeffnet UND geschlossen hat -- nicht der Depotwert "
-                       "(der enthaelt Buchgewinne). Und laut Referenzverteilung "
-                       "braucht es ~100 solcher Round-Trips, bevor sich 'verdient "
-                       "kein Geld' statistisch von Pech unterscheiden laesst."),
+                       "(der enthaelt Buchgewinne). Laut Referenzverteilung der "
+                       "aktuellen Config braucht es 80 solcher Round-Trips (p05 des "
+                       "Profit-Faktors > 1.0), bevor sich 'verdient kein Geld' "
+                       "statistisch von Pech unterscheiden laesst."),
         }
     except Exception as e:
         log.error(f"Soak-Progress Error: {e}")
