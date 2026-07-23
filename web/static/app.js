@@ -2221,19 +2221,25 @@ async function loadWfoDriftStatus() {
 
         // Werte formatieren
         const fmt = (v, digits) => (v == null ? '--' : Number(v).toFixed(digits == null ? 2 : digits));
-        const targetSharpe = d.wfo_sharpe;
-        const liveSharpe = d.live_sharpe;
+        // R-B43: PF ist die Primaermetrik des Watchdogs (seit R-B5) — die Karte
+        // zeigte aber Sharpe-Werte neben der PF-Drift ("1.27 vs 11.92 => +33.8%"
+        // ergab rechnerisch keinen Sinn). Jetzt konsistent PF.
+        const targetPf = d.wfo_pf;
+        const livePf = d.live_pf;
         const driftPct = d.drift_pct;
 
-        if (targetEl) targetEl.textContent = fmt(targetSharpe, 2);
-        if (liveEl) liveEl.textContent = fmt(liveSharpe, 2);
+        if (targetEl) targetEl.textContent = fmt(targetPf, 2);
+        if (liveEl) liveEl.textContent = fmt(livePf, 2);
         if (tradesEl) tradesEl.textContent = d.n_trades ? '  (n=' + d.n_trades + ')' : '';
         if (driftEl) {
             driftEl.textContent = driftPct == null ? '--' : (driftPct > 0 ? '+' : '') + driftPct.toFixed(1) + '%';
+            // Richtungs-bewusst: positiver Drift = Live BESSER als Baseline = gruen.
+            // Nur negativer Drift faerbt sich Richtung rot.
             driftEl.style.color = driftPct == null ? ''
-                : (Math.abs(driftPct) < 15 ? '#10b981'
-                : (Math.abs(driftPct) < 30 ? '#f59e0b'
-                : '#ef4444'));
+                : (driftPct >= 0 ? '#10b981'
+                : (driftPct > -15 ? '#10b981'
+                : (driftPct > -30 ? '#f59e0b'
+                : '#ef4444')));
         }
         if (thresholdEl) thresholdEl.textContent = (d.threshold_pct || 30) + '%';
         if (checkedEl && d.checked_at) {
@@ -2241,11 +2247,21 @@ async function loadWfoDriftStatus() {
             checkedEl.textContent = dt.toLocaleTimeString('de-CH', {hour: '2-digit', minute: '2-digit'}) + ' Uhr';
         }
 
-        // Summary-Text
-        if (targetSharpe != null && liveSharpe != null && driftPct != null) {
-            summary.innerHTML = 'WFO-Backtest: <strong>' + fmt(targetSharpe, 2) +
-                '</strong> ⇄ Live: <strong>' + fmt(liveSharpe, 2) +
-                '</strong> ⇒ Drift <strong>' + (driftPct > 0 ? '+' : '') + driftPct.toFixed(1) + '%</strong>';
+        // Motor-Edge-Zeile (das strengere Zweitsignal, R-B18)
+        const rtEl = document.getElementById('wfo-drift-roundtrip');
+        if (rtEl) {
+            const rt = d.roundtrip || {};
+            rtEl.textContent = (rt.n > 0 && rt.pf_pct != null)
+                ? ('PF% ' + Number(rt.pf_pct).toFixed(2) + ' bei n=' + rt.n)
+                : (rt.skip_reason || 'wartet');
+        }
+
+        // Summary-Text (PF-basiert, R-B43)
+        if (targetPf != null && livePf != null && driftPct != null) {
+            summary.innerHTML = 'WFO-PF-Baseline: <strong>' + fmt(targetPf, 2) +
+                '</strong> ⇄ Live-PF: <strong>' + fmt(livePf, 2) +
+                '</strong> ⇒ Drift <strong>' + (driftPct > 0 ? '+' : '') + driftPct.toFixed(1) + '%</strong>' +
+                (driftPct >= 0 ? ' <span style="color:#10b981;">(Live besser als Backtest)</span>' : '');
         } else if (d.skip_reason) {
             summary.textContent = 'Skipped: ' + d.skip_reason;
         } else {

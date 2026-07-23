@@ -486,27 +486,32 @@
 
             <details id="wfo-drift-details">
                 <summary style="cursor:pointer;font-size:12px;opacity:0.75;margin-bottom:8px;list-style:revert;">
-                    Details (Sharpe-Vergleich + Trades + Threshold) — klicken zum Ausklappen
+                    Details (PF-Vergleich + Motor-Edge + Threshold) — klicken zum Ausklappen
                 </summary>
                 <div style="font-size:13px;line-height:1.7;">
                     <div>
-                        <strong>Target Sharpe (WFO-Baseline)</strong>
-                        <span class="tip" data-tip="Was der monatliche Walk-Forward-Backtest als 'realistisch erwartete Performance' ermittelt hat. Aus mehreren Out-of-Sample-Fenstern gemittelt. Update 1x/Monat.">?</span>:
+                        <strong>WFO-Baseline (OOS-Profit-Faktor)</strong>
+                        <span class="tip" data-tip="Was der Walk-Forward-Backtest des NEUEN Motors als realistische Erwartung ermittelt hat: Profit-Faktor ueber 7 Out-of-Sample-Jahresfenster (Re-Baseline 16.07.2026). Profit-Faktor = Summe Gewinne / Summe Verluste; 1.0 = Nullsumme. R-B43: Karte zeigte hier frueher Sharpe-Werte, obwohl der Watchdog laengst mit dem PF rechnet.">?</span>:
                         <span id="wfo-drift-target" style="font-weight:600;">--</span>
                     </div>
                     <div>
-                        <strong>Live Sharpe (letzte 30d)</strong>
-                        <span class="tip" data-tip="Die ECHTE Performance der letzten Wochen, gerechnet aus den Close-Trades (STOP_LOSS, TAKE_PROFIT, TIME_STOP, TRAILING). Mindestens 5 Trades noetig, sonst zu wenig Statistik. Update taeglich.">?</span>:
+                        <strong>Live-Profit-Faktor (Buch, letzte 30d)</strong>
+                        <span class="tip" data-tip="Die echte Performance der letzten ~30 Tage, gerechnet aus allen Close-Trades des Buchs (inkl. geerbter Positionen — deshalb 'Buch-Signal'). Der strengere Massstab ist das Motor-Edge-Signal darunter: NUR saubere Round-Trips, die der neue Motor selbst eroeffnet UND geschlossen hat.">?</span>:
                         <span id="wfo-drift-live" style="font-weight:600;">--</span>
                         <span id="wfo-drift-trades" style="opacity:0.7;font-size:0.9em;"></span>
                     </div>
                     <div>
                         <strong>Drift</strong>
-                        <span class="tip" data-tip="(Live - WFO) / WFO * 100. Negativ = Live schlechter als Backtest verspricht. Positiv = Live besser. Threshold 30% = Pushover-Alert.">?</span>:
+                        <span class="tip" data-tip="(Live-PF - Baseline-PF) / Baseline-PF * 100. POSITIV = Live laeuft BESSER als der Backtest versprach (gut!). Alarmiert wird NUR bei negativem Drift unter -30% — Outperformance ist kein Alarmgrund. R-B43: die Karte zeigte frueher auch fuer positive Abweichung 'Drift signifikant'.">?</span>:
                         <span id="wfo-drift-pct" style="font-weight:600;">--</span>
                     </div>
                     <div style="margin-top:8px;opacity:0.7;font-size:0.9em;">
                         <strong>Threshold:</strong> <span id="wfo-drift-threshold">--</span> | <strong>Letzter Check:</strong> <span id="wfo-drift-checked-at">--</span>
+                    </div>
+                    <div style="margin-top:6px;">
+                        <strong>Motor-Edge (saubere Round-Trips)</strong>
+                        <span class="tip" data-tip="Das strengere Zweitsignal: nur Positionen, die der neue Motor seit Soak-Start selbst eroeffnet UND geschlossen hat. Alarm, wenn deren PF% unter das 5%-Quantil der Referenzverteilung faellt. Wartet, bis die ersten sauberen Round-Trips existieren.">?</span>:
+                        <span id="wfo-drift-roundtrip" style="font-weight:600;">--</span>
                     </div>
                     <div id="wfo-drift-skip-block" style="display:none;margin-top:10px;padding:8px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:6px;font-size:0.85em;">
                         <strong>Skipped:</strong> <span id="wfo-drift-skip-reason">--</span>

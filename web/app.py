@@ -5186,15 +5186,24 @@ async def api_wfo_drift_status():
         elif drift_pct is None:
             status_color = "gray"
             status_label = "Wartet auf Trades"
-        elif abs(drift_pct) < threshold_pct * 0.5:  # < 15% (halbe Threshold)
+        # R-B43 (23.07.2026): RICHTUNGS-BEWUSST statt Betrag. Vorher fuehrte
+        # abs(drift) dazu, dass die Karte bei +41.9% (Live BESSER als die
+        # Baseline!) das Alarm-Badge "Drift signifikant" zeigte. Der Watchdog
+        # existiert, um EDGE-ZERFALL zu melden — Outperformance ist kein
+        # Alarmgrund (der Pushover-Alert im Backend feuerte korrekt nie; nur
+        # das Badge war falsch herum).
+        elif drift_pct >= 0:
+            status_color = "green"
+            status_label = "Live ueber Baseline"
+        elif drift_pct > -threshold_pct * 0.5:  # 0 bis -15%
             status_color = "green"
             status_label = "OK"
-        elif abs(drift_pct) < threshold_pct:  # 15-30%
+        elif drift_pct > -threshold_pct:  # -15 bis -30%
             status_color = "yellow"
             status_label = "Wait-and-See"
-        else:  # > 30%
+        else:  # unter -30%
             status_color = "orange"
-            status_label = "Drift signifikant"
+            status_label = "Drift signifikant (unter Baseline)"
 
         result["status_color"] = status_color
         result["status_label"] = status_label
@@ -5515,30 +5524,58 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
             "last_check": None,
         })
 
-    # --- Gate #2: WFO Sharpe > 2.0 ---
+    # --- Gate #2: WFO-Baseline NEUER MOTOR (OOS-Profit-Faktor) ---
+    # R-B43 (23.07.2026): KOMPLETT UMGESTELLT. Vorher las das Gate
+    # runs[-1].mean_oos_sharpe aus der ALT-TA-WFO-Historie (-1.84) und
+    # verlangte "Sharpe > 2.0" — eine Anforderung an einen Motor, der seit
+    # dem 09.06. gar nicht mehr handelt. Der neue Motor hat seit 16.07. eine
+    # eigene Baseline (wfo_status.json, Task #4 Re-Baseline), und zwar
+    # PF-basiert: der Sharpe ist als absolute Baseline unbrauchbar (R-B5 —
+    # Return-Glaettung + explosives Compounding machten ihn zum Artefakt).
+    # Das Gate prueft jetzt: Neu-Motor-Baseline VORHANDEN, PROFITABEL
+    # (OOS-PF > 1.0) und FRISCH (< 60 Tage). Den LIVE-Beweis erbringt
+    # Kriterium 3 (Gatekeeper) — nicht dieses Gate; der laufende Abgleich
+    # Live-vs-Baseline ist Sache des WFO-Drift-Watchdogs (jeder Zyklus).
     try:
-        from app.config_manager import load_json
-        wfo = load_json("wfo_history.json") or {}
-        runs = wfo.get("runs", []) if isinstance(wfo, dict) else []
-        if runs:
-            last_sharpe = runs[-1].get("mean_oos_sharpe", 0)
-            sharpe_ok = last_sharpe > 2.0
+        from app.config_manager import load_json as _lj2
+        w2 = _lj2("wfo_status.json") or {}
+        oos_pf = w2.get("mean_oos_pf")
+        gen_for = str(w2.get("generated_for") or "")
+        gen_at = str(w2.get("generated_at") or "")
+        ist_neuer_motor = "signal_stack" in gen_for
+        frisch = False
+        try:
+            from datetime import datetime as _dt2, timezone as _tz2
+            alter_tage = (_dt2.now(_tz2.utc)
+                          - _dt2.fromisoformat(gen_at)).days
+            frisch = alter_tage < 60
+        except Exception:
+            pass
+        if ist_neuer_motor and oos_pf and oos_pf > 1.0 and frisch:
             gates.append({
-                "nr": 2, "title": "WFO ehrlicher Sharpe > 2.0",
-                "status": "green" if sharpe_ok else "yellow",
-                "detail": f"Letzter OOS-Sharpe: {last_sharpe:.2f}",
-                "last_check": runs[-1].get("timestamp"),
+                "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
+                "status": "green",
+                "detail": (f"OOS-PF {oos_pf:.2f} ueber "
+                           f"{w2.get('windows_total', '?')} Jahres-Fenster "
+                           f"(Re-Baseline 16.07., signal_stack_backtester). "
+                           "Ersetzt das Alt-Motor-Gate 'Sharpe > 2.0' (R-B43); "
+                           "Live-Abgleich uebernimmt der Drift-Watchdog, den "
+                           "Live-BEWEIS Kriterium 3."),
+                "last_check": gen_at[:10] or None,
             })
         else:
+            grund = ("keine Neu-Motor-Baseline" if not ist_neuer_motor
+                     else f"OOS-PF {oos_pf}" if not (oos_pf and oos_pf > 1.0)
+                     else "Baseline aelter als 60 Tage — Re-Run noetig")
             gates.append({
-                "nr": 2, "title": "WFO ehrlicher Sharpe > 2.0",
-                "status": "green",
-                "detail": "WFO 28.04. OOS-Sharpe 4.80 (Decay 89.9%)",
-                "last_check": "2026-04-28",
+                "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
+                "status": "yellow",
+                "detail": f"Nicht erfuellt: {grund}.",
+                "last_check": gen_at[:10] or None,
             })
     except Exception:
         gates.append({
-            "nr": 2, "title": "WFO ehrlicher Sharpe > 2.0",
+            "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
             "status": "yellow", "detail": "Status nicht ladbar",
         })
 
