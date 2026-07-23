@@ -5581,7 +5581,12 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
 
     # --- Gate #3: Kelly-Sweep auf IBKR-Daten ---
     try:
-        kelly = load_json("kelly_sweep_results.json") or {}
+        # R-B43-Hotfix: eigener Import. Vorher lieh sich dieses Gate den
+        # load_json-Import aus dem try-Block des ALTEN Gate #2 — der R-B43-
+        # Umbau benannte ihn dort um (_lj2) und Gate #3 fiel mit NameError
+        # auf 'Status nicht ladbar'. Geteilter Scope zwischen Gates = Falle.
+        from app.config_manager import load_json as _lj3
+        kelly = _lj3("kelly_sweep_results.json") or {}
         last_run = kelly.get("timestamp") if isinstance(kelly, dict) else None
         if last_run:
             try:
