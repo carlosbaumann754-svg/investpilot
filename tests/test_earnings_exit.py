@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -154,15 +155,82 @@ def test_vola_unavailable_falls_back_to_position_only():
 # ============================================================
 
 # ============================================================
+# Zeit- und Isolations-Fixtures (Fix 25.07.2026)
+# ============================================================
+#
+# Warum eingefrorene Uhr: Die v37y-Cleanup-Tests bauten ihre Fixture-Daten
+# mit der LOKALEN Uhr (datetime.now()), waehrend cleanup_expired_exemptions()
+# gegen datetime.now(timezone.utc).date() vergleicht. Zwischen 00:00 und
+# 02:00 CH-Sommerzeit (CEST=UTC+2) ist das lokale Datum dem UTC-Datum einen
+# Tag voraus — "gestern" (lokal) == "heute" (UTC) und der Cleanup feuerte
+# nicht. Genau so kippte die Suite Sa 25.07.2026 ~01:30, obwohl sie
+# Do 20:10 gruen war. Die Szenarien simulieren gutartige UND boese
+# Systemzeiten, damit die Tests zu JEDER Uhrzeit dasselbe pruefen.
+
+_CLOCK_SCENARIOS = [
+    # (lokale naive Zeit, UTC-Offset in Stunden)
+    pytest.param((datetime(2026, 7, 23, 20, 10), 2), id="werktag-abend-sommer"),
+    pytest.param((datetime(2026, 7, 25, 1, 30), 2), id="samstag-0130-lokal-vor-utc"),
+    pytest.param((datetime(2026, 1, 4, 0, 30), 1), id="sonntag-0030-winter"),
+]
+
+
+@pytest.fixture(params=_CLOCK_SCENARIOS)
+def frozen_clock(request, monkeypatch):
+    """Friert die Uhr NUR in app.earnings_exit ein (kein Zusatz-Package noetig).
+
+    Warum datetime-Subclass statt Mock: fromisoformat()/strftime() muessen
+    weiter funktionieren, nur now() soll stillstehen. Liefert .local (naive,
+    wie datetime.now()) und .utc (aware, wie datetime.now(timezone.utc)) —
+    Fixture-Daten IMMER relativ zu der Uhr erzeugen, die der Produktionscode
+    fuer den jeweiligen Vergleich nutzt.
+    """
+    local_naive, utc_offset_h = request.param
+    aware_local = local_naive.replace(tzinfo=timezone(timedelta(hours=utc_offset_h)))
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return local_naive
+            return aware_local.astimezone(tz)
+
+    monkeypatch.setattr("app.earnings_exit.datetime", _FrozenDatetime)
+    return SimpleNamespace(local=local_naive, utc=aware_local.astimezone(timezone.utc))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_module_caches():
+    """Warum: earnings_exit haelt Modul-Level-Caches (_earnings_date_cache,
+    _vola_cache), die Testgrenzen ueberleben. Ein Test der ROKU->morgen
+    cached, wuerde einem spaeteren Test mit gepatchtem Fetch=None sonst einen
+    "stale_cache"-Treffer unterschieben (Defensive-Mode triggert faelschlich).
+    """
+    from app import earnings_exit
+    earnings_exit._earnings_date_cache.clear()
+    earnings_exit._vola_cache.clear()
+    yield
+    earnings_exit._earnings_date_cache.clear()
+    earnings_exit._vola_cache.clear()
+
+
+# ============================================================
 # v37x: Exemption-Liste
 # ============================================================
 
 @pytest.fixture
 def temp_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("INVESTPILOT_DATA_DIR", str(tmp_path))
-    import importlib
+    """Isoliertes data/-Verzeichnis pro Test — via DATA_DIR-Attribut-Patch.
+
+    Warum setattr statt setenv+importlib.reload (alte Variante): reload()
+    liess config_manager.DATA_DIR nach dem Teardown auf dem tmp_path des
+    VORHERIGEN Tests haengen (monkeypatch raeumt nur die Env-Var auf, nicht
+    den reloadeten Modul-Zustand). Folge: fixture-lose Tests wie
+    test_pending_earnings_watchlist lasen fremden Test-State.
+    monkeypatch.setattr stellt den Original-Wert garantiert wieder her.
+    """
     from app import config_manager
-    importlib.reload(config_manager)
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
     yield tmp_path
 
 
@@ -218,11 +286,16 @@ def test_exempt_audit_trail(temp_data_dir):
 # v37y: One-shot Auto-Cleanup
 # ============================================================
 
-def test_auto_cleanup_removes_expired_exemption(temp_data_dir):
-    """Earnings vorbei (gestern) -> Symbol wird auto-entfernt."""
+def test_auto_cleanup_removes_expired_exemption(temp_data_dir, frozen_clock):
+    """Earnings vorbei (gestern) -> Symbol wird auto-entfernt.
+
+    Warum "gestern" relativ zur UTC-Uhr: cleanup_expired_exemptions()
+    vergleicht gegen datetime.now(timezone.utc).date(). Mit der lokalen Uhr
+    gebaute Daten kippten den Test im Fenster 00:00-02:00 CH-Zeit.
+    """
     from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
     from app.config_manager import load_json
-    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = frozen_clock.utc - timedelta(days=1)
     add_exemption("ROKU", reason="hold-thru-earnings",
                   auto_cleanup_after_earnings=True, earnings_date=yesterday)
     # Pre-cleanup state direkt aus File lesen (load_exemptions triggert cleanup)
@@ -234,30 +307,34 @@ def test_auto_cleanup_removes_expired_exemption(temp_data_dir):
     assert "ROKU" not in load_exemptions()
 
 
-def test_auto_cleanup_keeps_future_exemption(temp_data_dir):
+def test_auto_cleanup_keeps_future_exemption(temp_data_dir, frozen_clock):
     """Earnings noch in der Zukunft -> Symbol bleibt exempt."""
     from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
-    tomorrow = datetime.now() + timedelta(days=1)
+    tomorrow = frozen_clock.utc + timedelta(days=1)
     add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=tomorrow)
     removed = cleanup_expired_exemptions()
     assert removed == []
     assert "ROKU" in load_exemptions()
 
 
-def test_auto_cleanup_keeps_today_exemption(temp_data_dir):
-    """Earnings heute -> Symbol bleibt exempt (erst NACH Earnings clean-up)."""
+def test_auto_cleanup_keeps_today_exemption(temp_data_dir, frozen_clock):
+    """Earnings heute -> Symbol bleibt exempt (erst NACH Earnings clean-up).
+
+    Warum frozen_clock.utc: "heute" muss das Heute der Cleanup-Uhr (UTC)
+    sein, sonst testet man je nach Uhrzeit versehentlich morgen/gestern.
+    """
     from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
-    today = datetime.now()
+    today = frozen_clock.utc
     add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=today)
     removed = cleanup_expired_exemptions()
     assert removed == []
     assert "ROKU" in load_exemptions()
 
 
-def test_persistent_exemption_no_auto_cleanup(temp_data_dir):
+def test_persistent_exemption_no_auto_cleanup(temp_data_dir, frozen_clock):
     """auto_cleanup_after_earnings=False -> persistent (legacy)."""
     from app.earnings_exit import add_exemption, cleanup_expired_exemptions, load_exemptions
-    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = frozen_clock.utc - timedelta(days=1)
     add_exemption("ROKU", auto_cleanup_after_earnings=False, earnings_date=yesterday)
     removed = cleanup_expired_exemptions()
     # Symbol bleibt weil nicht in auto_cleanup-Map
@@ -265,10 +342,12 @@ def test_persistent_exemption_no_auto_cleanup(temp_data_dir):
     assert removed == []
 
 
-def test_audit_trail_includes_auto_remove(temp_data_dir):
+def test_audit_trail_includes_auto_remove(temp_data_dir, frozen_clock):
+    """Auto-Remove hinterlaesst AUTO_REMOVE im Audit-Trail (Uhr-Details:
+    siehe test_auto_cleanup_removes_expired_exemption)."""
     from app.earnings_exit import add_exemption, cleanup_expired_exemptions
     from app.config_manager import load_json
-    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = frozen_clock.utc - timedelta(days=1)
     add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=yesterday)
     cleanup_expired_exemptions()
     data = load_json("earnings_exit_exemptions.json") or {}
@@ -277,10 +356,11 @@ def test_audit_trail_includes_auto_remove(temp_data_dir):
     assert "AUTO_REMOVE" in actions
 
 
-def test_load_exemptions_triggers_auto_cleanup(temp_data_dir):
-    """load_exemptions() ruft cleanup_expired_exemptions() implicit auf."""
+def test_load_exemptions_triggers_auto_cleanup(temp_data_dir, frozen_clock):
+    """load_exemptions() ruft cleanup_expired_exemptions() implicit auf
+    (Uhr-Details: siehe test_auto_cleanup_removes_expired_exemption)."""
     from app.earnings_exit import add_exemption, load_exemptions
-    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = frozen_clock.utc - timedelta(days=1)
     add_exemption("ROKU", auto_cleanup_after_earnings=True, earnings_date=yesterday)
     # Direkter load_exemptions() Aufruf (ohne expliziten cleanup_call)
     result = load_exemptions()
@@ -288,10 +368,19 @@ def test_load_exemptions_triggers_auto_cleanup(temp_data_dir):
     assert "ROKU" not in result
 
 
-def test_pending_earnings_watchlist():
+def test_pending_earnings_watchlist(temp_data_dir, frozen_clock):
+    """Watchlist: Earnings <= 7 Tage erscheinen, would_exit wird korrekt gesetzt.
+
+    Warum temp_data_dir: check_earnings_exit() liest die Exemption-Liste.
+    Ohne isoliertes data/ las dieser Test den geleakten State des Vortests
+    (ROKU noch exempt) -> would_exit war False statt True.
+    Warum frozen_clock: das 7-Tage-Fenster rechnet mit datetime.now();
+    Fixture-Daten werden relativ zur eingefrorenen LOKALEN Uhr erzeugt
+    (get_pending nutzt die naive Uhr, nicht UTC).
+    """
     from app.earnings_exit import get_pending_earnings_for_positions
-    tomorrow = datetime.now() + timedelta(days=1)
-    far_future = datetime.now() + timedelta(days=30)
+    tomorrow = frozen_clock.local + timedelta(days=1)
+    far_future = frozen_clock.local + timedelta(days=30)
 
     positions = [
         {"symbol": "ROKU", "amount": 150_000},
