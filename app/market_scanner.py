@@ -907,6 +907,63 @@ def apply_regime_strategy_modifier(score, analysis, sector, config=None):
 
 
 # ============================================================
+# SCAN-DEADLINE (R-B44, 25.07.2026)
+# ============================================================
+# VORFALL 24.07.: Der Trading-Zyklus hing ab 20:41 CH fuer 3h35min — mitten in
+# der letzten Handelsstunde. Letzte Log-Zeile: "MARKET SCANNER — Signal-Stack-
+# Modus", die Scan-Ergebnis-Zeile kam nie. Ein Netzwerk-Abruf in der
+# Kandidaten-Analyse (yfinance/Fallbacks) blockierte ohne Timeout; der
+# ib_insync-Thread lief weiter (Portfolio-Updates im Log), aber Herzschlag,
+# SL/TP-Checks, Tages-Zusammenfassung und Abend-Snapshot standen still, bis
+# der Socket um 00:16 von selbst starb. Der Watchdog alarmierte korrekt alle
+# 10 Minuten — heilen konnte er nichts.
+#
+# DIE SCHRANKE: SIGALRM-Deadline um den GESAMTEN Scan (normal ~18s, Limit
+# grosszuegig). Reisst sie, wird TimeoutError geworfen -> der bestehende
+# FAIL-SAFE-Faenger am Funktionsende greift -> keine Kaeufe in diesem Zyklus,
+# Zyklus laeuft weiter, Herzschlag + Exit-Checks bleiben am Leben. Ein
+# uebersprungener Kauf-Scan kostet nichts (naechster Zyklus in 5 Min);
+# eine stehende Handelsschleife kostet die Aufsicht ueber 15 Positionen.
+#
+# SIGALRM gibt es nur auf POSIX und nur im Main-Thread — genau dort laeuft
+# der Scheduler-Zyklus. Ueberall sonst (Windows-Tests, Neben-Threads)
+# degradiert der Guard bewusst zum No-Op statt zu crashen.
+SCAN_DEADLINE_SEC = 600
+
+
+class _ScanDeadline:
+    def __init__(self, seconds: int):
+        self.seconds = seconds
+        self.armed = False
+
+    def __enter__(self):
+        try:
+            import signal as _sig
+            if hasattr(_sig, "SIGALRM"):
+                def _abbruch(signum, frame):
+                    raise TimeoutError(
+                        f"Scan-Deadline {self.seconds}s gerissen — ein Abruf "
+                        "blockiert (vgl. Vorfall 24.07.: 3h35min Haenger)")
+                self._alt = _sig.signal(_sig.SIGALRM, _abbruch)
+                _sig.alarm(self.seconds)
+                self.armed = True
+        except (ValueError, OSError):
+            # ValueError = nicht im Main-Thread -> No-Op ist sicherer als Crash
+            self.armed = False
+        return self
+
+    def __exit__(self, *exc):
+        if self.armed:
+            import signal as _sig
+            _sig.alarm(0)
+            try:
+                _sig.signal(_sig.SIGALRM, self._alt)
+            except (ValueError, OSError):
+                pass
+        return False
+
+
+# ============================================================
 # SCANNER HAUPTFUNKTION
 # ============================================================
 
@@ -923,6 +980,9 @@ def _scan_via_signal_stack(max_per_class=None):
     unabhaengig weiter. exc_info -> Sentry erfasst Tracebacks.
     """
     try:
+      # R-B44: harte Zeitschranke um den gesamten Scan (siehe _ScanDeadline oben).
+      # Einrueckung: der with-Block umschliesst den kompletten bisherigen Koerper.
+      with _ScanDeadline(SCAN_DEADLINE_SEC):
         from datetime import datetime, timezone
         from app import sp600_universe
         from app.config_manager import load_json
