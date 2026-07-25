@@ -26,7 +26,12 @@ def test_extract_now_ref_exact_boundary():
 
 
 # --- run_shadow_scan (injizierte facts+prices -> kein Netzwerk) -------------
-def test_run_shadow_scan_injected():
+# Warum temp_data_dir (conftest, Fix 25.07.2026): run_shadow_scan schreibt
+# REAL drei Dateien (signal_stack_shadow.json, signal_score_history.json,
+# universe_health.json). Ohne Isolation landeten die Test-Payloads
+# ('AAA'/'BBB', asof 2024-06-30) im echten data/ des Repos bzw.
+# ueberschrieben dort die gitignorierten Runtime-Outputs.
+def test_run_shadow_scan_injected(temp_data_dir):
     facts = {
         "AAA": {
             "StockholdersEquity": [_pt(None, "2023-12-31", "2024-02-15", 800)],
@@ -54,7 +59,7 @@ def test_run_shadow_scan_injected():
     assert res["asof"] == "2024-06-30"
 
 
-def test_run_shadow_scan_empty_universe():
+def test_run_shadow_scan_empty_universe(temp_data_dir):
     res = r.run_shadow_scan([], asof="2024-06-30", facts={}, prices={})
     assert res["scored"] == 0
 

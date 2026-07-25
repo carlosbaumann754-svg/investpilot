@@ -58,3 +58,26 @@ def _enforce_no_pushover_credentials_in_test_env(monkeypatch):
     monkeypatch.setenv("PUSHOVER_USER_KEY", "")
     monkeypatch.setenv("PUSHOVER_API_TOKEN", "")
     yield
+
+
+@pytest.fixture
+def temp_data_dir(tmp_path, monkeypatch):
+    """Isoliertes data/-Verzeichnis pro Test — via DATA_DIR-Attribut-Patch.
+
+    Geteilte Variante der gleichnamigen Datei-Fixtures (25.07.2026): Tests,
+    die Bot-Code mit Datei-Schreibpfaden ausführen, fordern diese Fixture an,
+    damit NICHTS im echten data/ des Repos landet. Lokale gleichnamige
+    Fixtures shadowen diese hier (identische Implementierung, ok).
+
+    Warum setattr statt setenv+importlib.reload: reload() liess
+    config_manager.DATA_DIR nach dem Teardown auf dem tmp_path des
+    VORHERIGEN Tests hängen — fixture-lose Tests lasen fremden Test-State
+    und der geleakte Pfad wirkte als unbeabsichtigter globaler Sandkasten.
+    Historie + Details: temp_data_dir in tests/test_earnings_exit.py.
+
+    BEWUSST NICHT autouse: manche Tests lesen absichtlich das echte
+    data/config.json (load_config wirft sonst FileNotFoundError).
+    """
+    from app import config_manager
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
+    yield tmp_path

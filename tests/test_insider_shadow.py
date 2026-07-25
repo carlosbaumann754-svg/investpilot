@@ -89,16 +89,26 @@ def test_summary_respects_age_window(temp_data_dir):
     assert stats_60d["total_candidates_tracked"] == 2  # OLD + NEW
 
 
-def test_log_swallow_exception_no_raise(monkeypatch):
-    """Shadow-Log darf Bot NIE durch Exception unterbrechen."""
+def test_log_swallow_exception_no_raise(temp_data_dir, monkeypatch):
+    """Shadow-Log darf Bot NIE durch Exception unterbrechen.
+
+    Warum Patch auf app.config_manager (Fix 25.07.2026): log_shadow_decision
+    importiert get_data_path FUNKTIONS-LOKAL aus config_manager. Der alte
+    Patch auf app.insider_shadow.get_data_path (raising=False kaschierte das
+    fehlende Attribut) ging ins Leere — der Test testete nichts und schrieb
+    bei jedem Suite-Lauf Symbol 'X' ins ECHTE data/. temp_data_dir plus
+    Datei-Assert beweisen jetzt, dass der Fehlerpfad wirklich greift.
+    """
     from app import insider_shadow
 
     def _broken(*args, **kwargs):
         raise IOError("disk full")
 
-    monkeypatch.setattr("app.insider_shadow.get_data_path", _broken, raising=False)
+    monkeypatch.setattr("app.config_manager.get_data_path", _broken)
     # Sollte SILENT durchgehen, keine Exception
     insider_shadow.log_shadow_decision("X", 50, 0, False, -1)
+    # Beweis dass der kaputte Pfad durchlaufen wurde: nichts geschrieben
+    assert not (temp_data_dir / "insider_shadow_log.jsonl").exists()
 
 
 def test_histogram_by_insider_score(temp_data_dir):

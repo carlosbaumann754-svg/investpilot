@@ -104,10 +104,15 @@ def test_load_symbols_from_file_handles_empty_lines(tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.network
-def test_download_history_date_range_returns_aligned_data():
+def test_download_history_date_range_returns_aligned_data(temp_data_dir):
     """Date-Range-Pfad: 3 Symbole + VIX, erwarte gleiche Anzahl Tage.
 
     Skip-bar via `pytest -m "not slow"` wenn keine Internetverbindung.
+
+    Warum temp_data_dir (conftest, Fix 25.07.2026): _download_histories
+    schreibt als Nebeneffekt universe_health.json — ohne Isolation
+    ueberschrieb jeder Suite-Lauf die (gitignorierte) Runtime-Datei im
+    echten data/ mit dem Test-Universum AAPL/MSFT/SPY.
     """
     hists = download_history(
         symbols=["AAPL", "MSFT", "SPY"],

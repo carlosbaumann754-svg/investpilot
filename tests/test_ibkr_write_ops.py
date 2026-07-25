@@ -135,6 +135,17 @@ class TestContractResolver:
 
 class TestIbkrBrokerOrders:
 
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, tmp_path, monkeypatch):
+        """Warum (Fix 25.07.2026): broker.buy() loest nach dem Fill einen
+        Brain-Snapshot aus (brain.record_snapshot -> brain_state.json).
+        Ohne DATA_DIR-Umleitung mutierte test_buy_returns_etoro_compatible_
+        response bei jedem Suite-Lauf das ECHTE data/brain_state.json.
+        Autouse fuer die ganze Klasse: alle Order-Pfade koennen schreiben.
+        """
+        from app import config_manager
+        monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
+
     def _make_broker_with_mock_ib(self, monkeypatch, tmp_path):
         """Hilfsmethode: IbkrBroker mit gemockter IB-Connection."""
         from app import ibkr_contract_resolver

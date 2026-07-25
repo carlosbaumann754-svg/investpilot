@@ -37,3 +37,10 @@ data/universe_health_counters.json
 data/universe_health_suggestions.json
 data/wfo_drift_alert_state.json
 data/roundtrip_pf_reference.json
+
+# Test-Hygiene 25.07.2026: weitere Runtime-Outputs (VPS schreibt sie unter
+# /data, Cloud-Backup sichert sie — lokal sind Kopien nur Dev-/Test-Noise;
+# gleiche R-B20-Begruendung wie oben).
+data/signal_score_history.json
+data/insider_shadow_log.jsonl
+data/audits/

@@ -19,9 +19,17 @@ from app.scheduler import _check_github_token_validity as _ORIGINAL_TOKEN_CHECK
 
 
 @pytest.fixture(autouse=True)
-def reset_state(monkeypatch):
-    """Reset _BG_MAINT_LAST_RUN zwischen Tests + stub Token-Check (sonst HTTP)."""
-    from app import scheduler
+def reset_state(monkeypatch, tmp_path):
+    """Reset _BG_MAINT_LAST_RUN zwischen Tests + stub Token-Check (sonst HTTP).
+
+    Warum zusaetzlich DATA_DIR->tmp_path (Fix 25.07.2026):
+    _run_background_maintenance ruft intern den Universe-Health-Watcher auf,
+    der universe_health_counters.json + universe_health_suggestions.json
+    REAL schreibt — ohne Umleitung ueberschrieb jeder Suite-Lauf diese
+    (gitignorierten) Runtime-Dateien im echten data/ des Repos.
+    """
+    from app import config_manager, scheduler
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
     scheduler._BG_MAINT_LAST_RUN.clear()
     scheduler._BG_TOKEN_FAIL_COUNT.update({"count": 0, "alerted_at": 0.0})
     # Stub Token-Check damit Tests keine echten GH-API-Calls machen

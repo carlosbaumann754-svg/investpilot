@@ -41,7 +41,17 @@ def test_api_keys_finnhub_missing(monkeypatch):
 # ============================================================
 
 @pytest.fixture
-def mock_state():
+def mock_state(tmp_path, monkeypatch):
+    """In-Memory-State fuer load_json/save_json + isoliertes DATA_DIR.
+
+    Warum zusaetzlich DATA_DIR->tmp_path (Fix 25.07.2026): run_full_audit
+    schreibt den Markdown-Report via get_data_path (data/audits/...) AN den
+    load_json/save_json-Mocks VORBEI — ohne Umleitung landete er bei jedem
+    Suite-Lauf im echten data/ des Repos (Symbole 'y'/'z' als Beweis).
+    """
+    from app import config_manager
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
+
     state = {}
 
     def fake_load(filename):
