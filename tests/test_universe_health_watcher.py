@@ -11,12 +11,15 @@ import pytest
 
 
 def _setup_data_dir(monkeypatch, tmp_path):
-    """Patch DATA_DIR to a tmpdir so tests don't touch real data/."""
-    monkeypatch.setenv("INVESTPILOT_DATA_DIR", str(tmp_path))
-    # Force config_manager to re-resolve DATA_DIR
-    import importlib
+    """Isoliertes data/-Verzeichnis pro Test — via DATA_DIR-Attribut-Patch.
+
+    Warum setattr statt setenv+importlib.reload: reload() liess
+    config_manager.DATA_DIR nach dem Teardown auf dem tmp_path des
+    VORHERIGEN Tests haengen — fixture-lose Tests lasen fremden Test-State.
+    Details: temp_data_dir in tests/test_earnings_exit.py (Fix 25.07.2026).
+    """
     from app import config_manager
-    importlib.reload(config_manager)
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
     return tmp_path
 
 

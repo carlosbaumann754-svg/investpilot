@@ -12,10 +12,18 @@ import pytest
 
 @pytest.fixture
 def temp_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("INVESTPILOT_DATA_DIR", str(tmp_path))
-    import importlib
+    """Isoliertes data/-Verzeichnis pro Test — via DATA_DIR-Attribut-Patch.
+
+    Warum setattr statt setenv+importlib.reload: reload() liess
+    config_manager.DATA_DIR nach dem Teardown auf dem tmp_path des
+    VORHERIGEN Tests haengen — fixture-lose Tests lasen fremden Test-State.
+    Die scheduler-Reloads in den Tests bleiben noetig (TRADING_FLAG wird
+    beim scheduler-Import via get_data_path gebunden) und funktionieren,
+    weil get_data_path DATA_DIR zur Laufzeit aus config_manager liest.
+    Details: temp_data_dir in tests/test_earnings_exit.py (Fix 25.07.2026).
+    """
     from app import config_manager
-    importlib.reload(config_manager)
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
     yield tmp_path
 
 

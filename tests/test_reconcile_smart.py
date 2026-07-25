@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-import importlib
-
 import pytest
 
 
 @pytest.fixture
 def temp_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("INVESTPILOT_DATA_DIR", str(tmp_path))
+    """Isoliertes data/-Verzeichnis pro Test — via DATA_DIR-Attribut-Patch.
+
+    Warum setattr statt setenv+importlib.reload: reload() liess
+    config_manager.DATA_DIR nach dem Teardown auf dem tmp_path des
+    VORHERIGEN Tests haengen — fixture-lose Tests lasen fremden Test-State.
+    Das fruehere del sys.modules["scripts.ibkr_reconcile"] ist damit
+    obsolet: das Modul importiert config_manager nur funktions-lokal
+    (zur Laufzeit aufgeloest) und haelt keinen eigenen DATA_DIR-Stand.
+    Details: temp_data_dir in tests/test_earnings_exit.py (Fix 25.07.2026).
+    """
     from app import config_manager
-    importlib.reload(config_manager)
-    # reconcile-Modul nutzt config_manager via from-import — neu importieren
-    import sys
-    if "scripts.ibkr_reconcile" in sys.modules:
-        del sys.modules["scripts.ibkr_reconcile"]
+    monkeypatch.setattr(config_manager, "DATA_DIR", tmp_path)
     yield tmp_path
 
 
