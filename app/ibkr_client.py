@@ -389,6 +389,40 @@ def _position_pnl_pct(qty, avg_cost, unrealized_pnl):
 # Dark-ship: per Default AUS (config.risk_management.catastrophic_stop.enabled).
 _CATASTROPHIC_ORDER_REF = "E6_CATASTROPHIC"
 
+# Boersen-Codes, auf denen KEINE Orders moeglich sind. 'VALUE' ist IBKRs reiner
+# Bewertungs-Platz: ib.positions() liefert Kontrakte teils mit exchange='VALUE'
+# (oder leer) — wer darauf eine Order legt, bekommt Error 201 'No trading for
+# non-tradable valuation-only contracts'.
+_NICHT_HANDELBARE_EXCHANGES = ("", "VALUE")
+
+
+def _orderfaehiger_kontrakt(contract):
+    """Kontrakt fuer eine ORDER aufbereiten: notfalls auf SMART umrouten.
+
+    R-B46 (28.07.2026): Der E6-Katastrophen-Stop fuer AVNS (die groesste
+    Position, 99.5k) wurde DREI TAGE lang taeglich abgelehnt — Phase 2 des
+    E6-Abgleichs reichte den Positions-Kontrakt unveraendert an placeOrder
+    weiter, und der kam von IBKR mit exchange='VALUE'. Der Kauf-Pfad
+    qualifiziert immer auf SMART; Orders muessen das ueberall tun.
+    Ausgerechnet die Absturz-Versicherung fehlte damit fuer die groesste
+    Position — entdeckt via Sentry (10x Error 201), waehrend der Freitag-
+    Vorfall gerade gezeigt hatte, wofuer E6 existiert.
+
+    conId bleibt erhalten (eindeutig), nur das Routing wird handelbar.
+
+    Bewusst per copy statt ib_insync.Stock-Neubau: funktioniert identisch mit
+    echten Contract-Objekten UND mit den Test-Fakes (die Suite mockt ib_insync
+    komplett — ein Stock-Import hier liefe im Test ins Leere und wuerde den
+    E6-Abgleich still lahmlegen, exakt die Fehlerklasse, die wir fixen).
+    """
+    ex = getattr(contract, "exchange", "") or ""
+    if ex not in _NICHT_HANDELBARE_EXCHANGES:
+        return contract
+    import copy as _copy
+    o = _copy.copy(contract)
+    o.exchange = "SMART"
+    return o
+
 
 def _catastrophic_stop_price(ref_price, pct):
     """E6: Stop-Preis = ref * (1 - pct/100), 2-Dezimal gerundet.
@@ -1616,7 +1650,8 @@ class IbkrBroker(BrokerBase):
                         new_o.tif = "GTC"
                         new_o.outsideRth = True  # v37dt Audit#7: sonst nach Tranchen-Close kein Off-Hours-Schutz
                         new_o.orderRef = _CATASTROPHIC_ORDER_REF
-                        ib.placeOrder(t.contract, new_o)
+                        # R-B46: nie auf VALUE/leer routen — sonst Error 201
+                        ib.placeOrder(_orderfaehiger_kontrakt(t.contract), new_o)
                         covered.add(cid)
                     result["resized"] += 1
                     log.info("E6 reconcile: Catastrophic-Stop verkleinert "
@@ -1644,7 +1679,9 @@ class IbkrBroker(BrokerBase):
                     new_o.tif = "GTC"
                     new_o.outsideRth = True
                     new_o.orderRef = _CATASTROPHIC_ORDER_REF
-                    ib.placeOrder(p.contract, new_o)
+                    # R-B46: Positions-Kontrakte kommen teils mit exchange=
+                    # 'VALUE' (AVNS-Fall, 3 Tage taeglich abgelehnt) -> SMART
+                    ib.placeOrder(_orderfaehiger_kontrakt(p.contract), new_o)
                     result["added"] += 1
                     sym = getattr(p.contract, "symbol", "?")
                     log.info("E6 reconcile: fehlenden Catastrophic-Stop nachgezogen "
