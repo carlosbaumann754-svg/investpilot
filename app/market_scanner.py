@@ -15,13 +15,13 @@ log = logging.getLogger("Scanner")
 
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
-    "purpose": "Market-Scanner: ASSET_UNIVERSE-Iteration, Score-Computation, Signal-Klassifikation, expand_symbol_for_match (Bot<->IBKR); Sizing-TA via yfinance primaer + IBKR-OHLCV-Fallback (v37dz, Resilienz)",
+    "purpose": "Market-Scanner: ASSET_UNIVERSE-Iteration, Score-Computation, Signal-Klassifikation, expand_symbol_for_match (Bot<->IBKR); Sizing-TA via yfinance primaer + IBKR-OHLCV-Fallback (v37dz, Resilienz); Scan-Deadline 600s (R-B44, Stufe 1 der Verteidigung): SIGALRM-Zeitlimit um den ganzen Signal-Stack-Scan — ein haengender Netzwerk-Abruf (Vorfall 24.07.2026, 3h35min) laeuft in den FAIL-SAFE 'kein Buy' statt die Schleife zu blockieren",
     "config_section": "scanner",
     "state_files": ["scanner_state.json"],
     "self_tests": ["tc_yfinance_freshness"],
     "scheduler_hooks": [],
     "health_check": None,
-    "added_in": "v1 (Foundation), v37de Symbol-Mapping",
+    "added_in": "v1 (Foundation), v37de Symbol-Mapping, R-B44 Scan-Deadline (25.07.2026)",
 }
 
 try:

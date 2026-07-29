@@ -51,6 +51,26 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Zurich")
 
+# R-B50 (29.07.2026): Marker fuer den Bauplan-Generator. Bewusst ein
+# HOST-Skript ausserhalb von app/ — laeuft per Host-Cron, nicht im
+# Container (ein haengender Prozess kann sich nicht selbst neu starten).
+AUDIT_METADATA = {
+    "purpose": (
+        "Zyklus-Supervisor (Selbstheilung, Stufe 2 der Verteidigung): Host-Cron "
+        "alle 5 Min liest den Herzschlag direkt vom gemounteten Volume; steht die "
+        "Handelsschleife >20 Min -> automatischer docker restart + Pushover. "
+        "Schutz gegen Restart-Schleifen: 30-Min-Cooldown, max 3 Neustarts/6h, "
+        "danach EINMALIGE Emergency-Eskalation statt Endlos-Durchstarten. "
+        "Scharf-Test bestanden 29.07.2026 23:05 (Heilung nach 21 Min Stillstand)."
+    ),
+    "config_section": "alerts.pushover (nur lesend, fuer Meldungen)",
+    "state_files": ["supervisor_state.json (Host-Ebene, gitignored)"],
+    "self_tests": [],
+    "scheduler_hooks": [],
+    "health_check": None,
+    "added_in": "R-B49/50 (29.07.2026)",
+}
+
 STALE_SEC = 20 * 60          # Herzschlag aelter -> Eingriff
 COOLDOWN_SEC = 30 * 60       # nach einem Neustart: erst mal wirken lassen
 MAX_RESTARTS = 3             # ... in ROLLING_WINDOW_SEC, danach aufgeben
