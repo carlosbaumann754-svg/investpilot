@@ -44,3 +44,6 @@ data/roundtrip_pf_reference.json
 data/signal_score_history.json
 data/insider_shadow_log.jsonl
 data/audits/
+
+# R-B49: Host-lokaler Supervisor-Zustand (kein Repo-Inhalt)
+supervisor_state.json
