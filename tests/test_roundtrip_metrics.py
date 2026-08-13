@@ -398,3 +398,127 @@ def test_pf_percent_differs_from_usd_when_sizes_differ():
     # USD: 2000 / 5000 = 0.40 ; Prozent: (10+10) / 5 = 4.00
     assert s["pf"] == pytest.approx(0.40)
     assert s["pf_pct"] == pytest.approx(4.00)
+
+
+# ============================================================
+# R-B54 (13.08.2026): Status-Filter + fehlende Exit-Actions.
+# Audit-Beleg: 5 stornierte Trailing-Closes zaehlten als echte
+# Abschluesse -> Soak-Zaehler 19 statt 16 (Phantom-Round-Trips).
+# ============================================================
+
+def _t(ts, action, sym, status=None, pnl=None, amt=None, **kw):
+    d = {"timestamp": ts, "action": action, "symbol": sym}
+    if status is not None: d["status"] = status
+    if pnl is not None: d["pnl_usd"] = pnl
+    if amt is not None: d["amount_usd"] = amt
+    d.update(kw)
+    return d
+
+
+class TestStatusFilter:
+    def test_cancelled_close_beendet_episode_nicht(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, still_open = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "AAA", status="executed", amt=1000),
+            _t("2026-08-02T10:00", "TRAILING_SL_CLOSE", "AAA",
+               status="cancelled", pnl=50.0),
+        ])
+        assert closed == []
+        assert len(still_open) == 1 and still_open[0]["symbol"] == "AAA"
+        assert still_open[0]["pnl_usd"] == 0.0  # Phantom-PnL nicht verbucht
+
+    def test_cancelled_close_dann_echter_close_zaehlt_einmal(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, still_open = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "AAA", status="executed", amt=1000),
+            _t("2026-08-02T10:00", "STOP_LOSS_CLOSE", "AAA",
+               status="cancelled", pnl=-80.0),
+            _t("2026-08-02T11:00", "STOP_LOSS_CLOSE", "AAA",
+               status="executed", pnl=-95.0),
+        ])
+        assert len(closed) == 1 and still_open == []
+        assert closed[0]["pnl_usd"] == -95.0  # nur der echte Fill
+
+    def test_cancelled_buy_eroeffnet_keine_episode(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, still_open = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "BBB", status="cancelled", amt=5000),
+        ])
+        assert closed == [] and still_open == []
+
+    def test_partial_fill_zaehlt(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, _ = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "CCC", status="partial", amt=1000),
+            _t("2026-08-05T10:00", "TRAILING_SL_CLOSE", "CCC",
+               status="executed", pnl=120.0),
+        ])
+        assert len(closed) == 1
+
+    def test_status_fehlt_wird_gezaehlt(self):
+        # Alt-Eintraege ohne status-Feld (vor E27) duerfen nicht wegfallen.
+        from app.roundtrip_metrics import build_episodes
+        closed, _ = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "DDD", amt=1000),
+            _t("2026-08-05T10:00", "STOP_LOSS_CLOSE", "DDD", pnl=-80.0),
+        ])
+        assert len(closed) == 1
+
+
+class TestNeueExitActions:
+    def test_scanner_sell_und_manual_sell_schliessen(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, still_open = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "AAA", status="executed", amt=1000),
+            _t("2026-08-03T10:00", "SCANNER_SELL", "AAA", status="executed", pnl=30.0),
+            _t("2026-08-01T10:00", "SCANNER_BUY", "BBB", status="executed", amt=1000),
+            _t("2026-08-03T10:00", "MANUAL_SELL", "BBB", status="executed", pnl=-10.0),
+        ])
+        assert len(closed) == 2 and still_open == []
+        assert {e["exit_action"] for e in closed} == {"SCANNER_SELL", "MANUAL_SELL"}
+
+    def test_manual_sell_verhindert_episoden_vermischung(self):
+        # Vorher: MANUAL_SELL unsichtbar -> Re-Buy merged in stale Episode.
+        from app.roundtrip_metrics import build_episodes
+        closed, _ = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "AAA", status="executed", amt=1000),
+            _t("2026-08-05T10:00", "MANUAL_SELL", "AAA", status="executed", pnl=40.0),
+            _t("2026-08-20T10:00", "SCANNER_BUY", "AAA", status="executed", amt=2000),
+            _t("2026-08-25T10:00", "STOP_LOSS_CLOSE", "AAA", status="executed", pnl=-160.0),
+        ])
+        assert len(closed) == 2
+        assert closed[1]["entry_ts"] == "2026-08-20T10:00"  # zweiter Zyklus eigenstaendig
+        assert closed[1]["invested_usd"] == 2000
+
+    def test_partial_signal_ist_kein_kauf(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, still_open = build_episodes([
+            _t("2026-08-01T10:00", "PARTIAL_SIGNAL", "GEERBT", pnl=5.0),
+            _t("2026-08-02T10:00", "TRAILING_SL_CLOSE", "GEERBT",
+               status="executed", pnl=200.0),
+        ])
+        assert len(closed) == 1
+        assert closed[0]["entry_ts"] is None  # bleibt geerbt, nicht "frisch"
+
+
+class TestEpisodenSchema:
+    def test_exit_action_und_pnl_pct_befuellt(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, _ = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "AAA", status="executed", amt=2000),
+            _t("2026-08-05T10:00", "TRAILING_SL_CLOSE", "AAA",
+               status="executed", pnl=100.0),
+        ])
+        assert closed[0]["exit_action"] == "TRAILING_SL_CLOSE"
+        assert closed[0]["pnl_pct"] == 5.0
+
+    def test_amount_usd_actual_schlaegt_zielbetrag(self):
+        from app.roundtrip_metrics import build_episodes
+        closed, _ = build_episodes([
+            _t("2026-08-01T10:00", "SCANNER_BUY", "AAA", status="partial",
+               amt=45000, amount_usd_actual=27000),
+            _t("2026-08-05T10:00", "STOP_LOSS_CLOSE", "AAA",
+               status="executed", pnl=-2160.0),
+        ])
+        assert closed[0]["invested_usd"] == 27000
+        assert closed[0]["pnl_pct"] == -8.0

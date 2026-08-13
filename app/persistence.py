@@ -48,6 +48,16 @@ BACKUP_FILES = [
     "equity_history.json",
     "cash_dca_state.json",
     "backtest_history.json",
+    # R-B54 (13.08.2026, Audit): Signal-Stack-Kerndateien fehlten in der
+    # Cloud-Ebene komplett. Hier NUR die kleinen (dieser Gist wird ~550x/Tag
+    # gepusht!) — die zwei grossen UNERSETZLICHEN (signal_score_history 476KB,
+    # signal_pit_snapshots 1.8MB) sichert scripts/wochen_archiv_push.py
+    # woechentlich in ein eigenes Gist (So 04:30 UTC Host-Cron).
+    "stack_wfo_baseline.json",
+    "manual_lock_overrides.json",
+    "roundtrip_pf_reference.json",
+    "cutover_confirmations.json",
+    "zwischencheck25_state.json",
 ]
 
 # Dateien die zwar gesichert werden, aber nie aus der Cloud RESTORED werden duerfen.

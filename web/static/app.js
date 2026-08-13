@@ -337,7 +337,10 @@ function renderExitForecast(data) {
         const trailAct = c.trail_activation ?? 0.8;
         const tsDays = c.time_stop?.max_days_stale ?? 10;
         const tranches = (c.tp_tranches || []).map(t => `+${t.profit_target_pct}%`).join(', ') || '--';
-        meta.textContent = `Config: SL ${sl}% | TP-Final +${tp}% | Trailing -${trailPct}% ab +${trailAct}% | Tranchen: ${tranches} | Time-Stop ${tsDays}d`;
+        // R-B54 (Audit): Sentinel 999 = TP aus — vorher leckte "TP-Final
+        // +999%" roh in die Zeile, direkt unter dem korrekten "aus"-Label.
+        const tpTxt = (tp >= 100) ? 'aus' : `+${tp}%`;
+        meta.textContent = `Config: SL ${sl}% | TP-Final ${tpTxt} | Trailing -${trailPct}% ab +${trailAct}% | Tranchen: ${tranches} | Time-Stop ${tsDays}d`;
     }
 }
 
@@ -361,11 +364,13 @@ function renderPnlPeriods(data) {
 
     grid.innerHTML = data.periods.map(p => {
         const cls = (p.pnl_usd || 0) >= 0 ? 'positive' : 'negative';
-        // v37h Tab-Audit-Day-2: HEUTE/7T sind in BASE (equity_delta-Mode), 30T+
-        // realized aus trade_history sind technisch in USD. fmtBase ist
-        // pragmatisch: zeigt Symbol der Account-Currency (CHF bei IBKR, $ bei
-        // eToro). Drift fuer 30T+ ist <1% und beide Werte sind nah beieinander.
-        const usdTxt = (p.pnl_usd == null) ? '--' : fmtBase(p.pnl_usd);
+        // R-B54 (Audit): 30T+ sind realisierte USD aus trade_history — das
+        // CHF-Symbol davor ueberzeichnete den CHF-Wert um die FX-Rate (~23%).
+        // HEUTE/7T bleiben BASE (equity_delta-Mode = hybrid). Der alte
+        // Kommentar ("Drift <1%") verwechselte Wertdrift mit dem FX-Niveau.
+        const isHybrid = (p.mode === 'hybrid' || p.mode === 'hybrid_fallback');
+        const usdTxt = (p.pnl_usd == null) ? '--'
+            : (isHybrid ? fmtBase(p.pnl_usd) : fmtUsd(p.pnl_usd));
         const pctTxt = (p.pnl_pct == null) ? '' : fmtPct(p.pnl_pct);
         const modeIcon = (p.mode === 'hybrid' || p.mode === 'hybrid_fallback') ? '*' : '';
         return `
@@ -669,7 +674,10 @@ async function loadDashboard() {
                 const s = await sectorRes.json();
                 const card = document.getElementById('sector-card');
                 const badges = document.getElementById('sector-badges');
-                if (card && badges && s.sectors) {
+                // R-B54 (Audit): {} ist truthy — die Karte war seit dem
+                // Motor-Switch sichtbar aber dauerhaft leer (sp600-Symbole
+                // haben keinen ASSET_UNIVERSE-Sektor-Eintrag). Leer = weg.
+                if (card && badges && s.sectors && Object.keys(s.sectors).length) {
                     card.style.display = 'block';
                     badges.innerHTML = Object.entries(s.sectors)
                         .map(([name, data]) => {
@@ -708,8 +716,12 @@ async function killSwitch() {
         const res = await apiFetch('/api/trading/killswitch', { method: 'POST' });
         if (res && res.ok) {
             const data = await res.json();
-            const closed = data.closed_positions || 0;
-            showToast(`KILL SWITCH AKTIV - ${closed} Positionen geschlossen`);
+            // R-B54 (Audit): Backend-Key heisst "closed" — der alte Key
+            // "closed_positions" existierte nie -> Toast log IMMER "0".
+            const closed = (data.closed != null) ? data.closed : 0;
+            const failed = data.failed || 0;
+            showToast(`KILL SWITCH AKTIV - ${closed} Positionen geschlossen`
+                      + (failed ? ` (${failed} FEHLGESCHLAGEN!)` : ''));
             document.getElementById('trading-toggle').checked = false;
             document.getElementById('toggle-label').textContent = 'OFF';
             const badge = document.getElementById('trading-status-badge');
@@ -1083,11 +1095,18 @@ async function saveSettings(e) {
     // sowieso ueberschreiben. Spart einen unnoetigen Round-Trip durch
     // den enforce_locks-Code-Pfad.
     const update = {
-        take_profit_pct: parseFloat(document.getElementById('cfg-tp').value),
         rebalance_threshold_pct: parseFloat(document.getElementById('cfg-rebalance').value),
         default_leverage: parseInt(document.getElementById('cfg-leverage').value),
         max_single_trade_pct_of_portfolio: parseFloat(document.getElementById('cfg-max-trade-pct').value),
     };
+    // R-B54 (Audit): TP steht per Lock auf Sentinel 999 (= aus, Trailing ist
+    // die Gewinnmitnahme). Der Validator (0-100) lehnte dadurch JEDEN
+    // Settings-Save mit 422 ab. TP nur mitsenden, wenn ein echter Wert
+    // (<=100) im Feld steht — sonst bleibt der Lock unangetastet.
+    const tpRaw = parseFloat(document.getElementById('cfg-tp').value);
+    if (!isNaN(tpRaw) && tpRaw > 0 && tpRaw <= 100) {
+        update.take_profit_pct = tpRaw;
+    }
 
     const res = await apiFetch('/api/config/strategy', {
         method: 'PUT',
@@ -2153,7 +2172,12 @@ async function loadWfoStatus() {
             'historisch <strong>' + posYears + '/' + years.length + '</strong> Jahre positiv &middot; ' +
             'PF <strong>' + pf + '</strong> &middot; Excess-Sharpe <strong>' + sh + '</strong> &middot; IC ' + ic +
             (decay ? ' &middot; <span style="color:#fbbf24;">&#9888; Recent-Decay</span>' : '') +
-            '<br><span style="font-size:11px;opacity:0.75;">Modest + zuletzt verblassend — Live-Validierung accruiert im Soak.</span>';
+            // R-B54 (Audit): Fazit-Satz war hartkodiert und haette den Daten
+            // irgendwann widersprochen — jetzt an das Decay-Flag gekoppelt.
+            '<br><span style="font-size:11px;opacity:0.75;">' +
+            (decay ? 'Modest + zuletzt verblassend — Live-Validierung accruiert im Soak.'
+                   : 'Historisch modest positiv — Live-Validierung accruiert im Soak.') +
+            '</span>';
         const fmt = (st) => 'PF ' + (st.pf != null ? st.pf.toFixed(2) : '--') +
             ' / Sharpe ' + (st.sharpe != null ? st.sharpe.toFixed(2) : '--') +
             ' / IC ' + (st.ic != null ? (st.ic >= 0 ? '+' : '') + st.ic.toFixed(3) : '--');
@@ -2523,7 +2547,8 @@ async function loadBrokerStatus() {
             title += ` · not connected`;
         }
         if (s.equity != null) {
-            title += ` · Equity $${Math.round(s.equity).toLocaleString()}`;
+            // R-B54 (Audit): Equity kommt in Kontowaehrung (CHF) — kein '$'.
+            title += ` · Equity ${_symbolFor(_botCurrency)}${Math.round(s.equity).toLocaleString()}`;
         }
         // REAL-Modus = oranger Border (Warnsignal)
         const realClass = mode === 'REAL' ? ' broker-badge-real' : '';

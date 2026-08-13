@@ -15,6 +15,12 @@ from app.broker_base import get_broker
 
 log = logging.getLogger("Trader")
 
+# R-B54 (Audit F1): Fehlschlag-Streaks der Schutz-Pfade — Alert beim ersten
+# Fehlschlag, danach gedrosselt (Scheduler-Prozess lebt lang, in-memory reicht;
+# nach Neustart alarmiert ein anhaltender Fehler einfach erneut = gewollt).
+_E6_RECONCILE_FAILS = {"streak": 0}
+_EARNINGS_CHECK_FAILS = {"streak": 0}
+
 # R-B11/S2 (07.06.2026): trade_history.json wird im selben Prozess von MEHREREN
 # Threads geschrieben — dem Bot-Main-Loop (save_trade) UND dem ib_insync-
 # orderStatusEvent-Callback (OrderStatusTracker._update_trade_history). Ohne Lock
@@ -294,6 +300,15 @@ def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
     """
     if not isinstance(broker_result, dict):
         return trade_entry
+    # R-B54 (13.08.2026): tatsaechlich gefuellter USD-Betrag mitschreiben —
+    # bei Teilfuellungen ueberzeichnete der Order-Zielbetrag (amount_usd) den
+    # Einsatz in der Round-Trip-Rendite (Audit-Finding F5).
+    try:
+        actual = broker_result.get("_amount_usd_actual")
+        if actual and float(actual) > 0:
+            trade_entry["amount_usd_actual"] = round(float(actual), 2)
+    except (TypeError, ValueError):
+        pass
     order = broker_result.get("orderForOpen") or {}
     if not isinstance(order, dict):
         return trade_entry
@@ -552,11 +567,15 @@ def _check_close_idempotent(client, instrument_id, is_partial=False) -> tuple[bo
                             f"Anti-Loop: Open Trade fuer {instrument_id} "
                             f"bereits in Status '{status}' bei IBKR"
                         )
-    except Exception:
+    except Exception as e:
         # Wenn IB-Check fehlschlaegt: nicht skippen, Trader sollte trotzdem
         # versuchen (Fallback auf normalen Pfad). Pending-Tracker oben
         # ist primaerer Schutz.
-        pass
+        # R-B54 (Audit F11): war nacktes `pass` — fielen BEIDE Anti-Oversell-
+        # Schichten gleichzeitig aus, gab es keinerlei Spur (04.05.-Loop:
+        # BA 19x / CPER 55x SELL). Mindestens sichtbar machen.
+        log.warning(f"Anti-Oversell Schicht 2 (IB-openTrades-Check) "
+                    f"fehlgeschlagen — Fallback auf Pending-Tracker: {e}")
 
     return False, ""
 
@@ -586,7 +605,10 @@ def _track_pending_close(instrument_id, result, is_partial=False):
         # robust + status-aware (Filled/Cancelled sofort raus statt 24h warten).
         _cleanup_pending_closes()
     except Exception as e:
-        log.debug(f"Pending-Close-Track fehlgeschlagen (non-fatal): {e}")
+        # R-B54 (Audit F11): war DEBUG — faellt der File-Tracker aus, traegt
+        # nur noch der IB-Check den Anti-Oversell-Schutz. Sichtbar machen.
+        log.warning(f"Pending-Close-Track fehlgeschlagen (non-fatal, "
+                    f"Anti-Oversell Schicht 1 ohne Persistenz): {e}")
 
 
 def _close_position_safe(client, position_id, instrument_id, action_name="CLOSE"):
@@ -1193,7 +1215,27 @@ def check_stop_loss_take_profit(client, config):
                                                extra={"earnings_reason": reason})
                             # Kein continue — bei Close-Failure den Rest weiterpruefen
                 except Exception as e:
-                    log.debug(f"Earnings-Exit-Check {sym} fehlgeschlagen: {e}")
+                    # R-B54 (Audit F3): war log.debug — wirft die Pruefung
+                    # dauerhaft (z.B. API-Schema-Aenderung), ist der Earnings-
+                    # Blackout-Schutz KOMPLETT still deaktiviert (E6-Klasse).
+                    _EARNINGS_CHECK_FAILS["streak"] += 1
+                    streak = _EARNINGS_CHECK_FAILS["streak"]
+                    log.error(f"Earnings-Exit-Check {sym} fehlgeschlagen "
+                              f"(Streak {streak}): {e}")
+                    # Streak zaehlt pro Position (bis ~15/Zyklus): erster Alert
+                    # bei 3, danach ca. alle 6h (288 ≈ 15 Pos × 12 Zyklen/h × 1.6h).
+                    if streak == 3 or streak % 288 == 0:
+                        try:
+                            from app.alerts import send_alert
+                            send_alert(
+                                f"Earnings-Blackout-Pruefung schlaegt wiederholt "
+                                f"fehl (Streak {streak}, zuletzt {sym}: {e}) — "
+                                "der Earnings-Exit-Schutz ist womoeglich blind.",
+                                level="ERROR", config=config)
+                        except Exception as alert_err:
+                            log.error(f"Earnings-Alert fehlgeschlagen: {alert_err}")
+                else:
+                    _EARNINGS_CHECK_FAILS["streak"] = 0
 
         # Market-Hours Guard
         if is_asset_class_tradeable is not None:
@@ -2977,8 +3019,26 @@ def run_trading_cycle():
     if hasattr(client, "reconcile_protective_stops"):
         try:
             client.reconcile_protective_stops()
+            _E6_RECONCILE_FAILS["streak"] = 0
         except Exception as e:
-            log.debug(f"E6 reconcile_protective_stops (non-fatal): {e}")
+            # R-B54 (Audit F1): war log.debug — ein dauerhafter Ausfall der
+            # Stop-Nachfuehrung (Orphan-Cancel + Nachziehen) blieb unsichtbar.
+            # Praezedenz: AVNS-Stop wurde 3 Tage still abgelehnt (R-B46).
+            # Jetzt: ERROR + Pushover beim 1. Fehlschlag, dann alle 12 (~1h).
+            _E6_RECONCILE_FAILS["streak"] += 1
+            streak = _E6_RECONCILE_FAILS["streak"]
+            log.error(f"E6 reconcile_protective_stops FEHLGESCHLAGEN "
+                      f"(Streak {streak}): {e}")
+            if streak == 1 or streak % 12 == 0:
+                try:
+                    from app.alerts import send_alert
+                    send_alert(
+                        f"E6 Schutz-Stop-Nachfuehrung schlaegt fehl "
+                        f"(Streak {streak}): {e} — Katastrophen-Stops werden "
+                        "aktuell nicht nachgezogen/aufgeraeumt.",
+                        level="ERROR", config=config)
+                except Exception as alert_err:
+                    log.error(f"E6-Alert selbst fehlgeschlagen: {alert_err}")
 
     # 6b. Trailing SL State bereinigen (geschlossene Positionen entfernen)
     lm = _import_leverage_manager()

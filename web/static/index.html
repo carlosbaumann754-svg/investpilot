@@ -132,7 +132,7 @@
         <div class="card" id="soak-progress-card" style="border-left:4px solid #f59e0b;">
             <div class="card-title">
                 Soak-Fortschritt (neuer Motor)
-                <span class="tip" data-tip="Wie weit ist der Live-Test des neuen 5-Signal-Stack-Motors? Seit dem Motor-Switch (09.06.2026) sammelt der Bot echte, ABGESCHLOSSENE Trades. Ab 30 geschlossenen Trades schalten wir die Phase-3-Feintuning-Schritte frei; ab 50 faellt die Go/No-Go-Entscheidung fuer echtes Geld (Ziel 04.08.2026). WICHTIG: der Test misst 'neuer Kopf + alte Beine' — die Ausstiegs-Regeln (Stop-Loss/Time-Stop) sind noch alt eingestellt, darum wird die echte Staerke hier eher UNTERSCHAETZT.">?</span>
+                <span class="tip" data-tip="Wie weit ist der Live-Test des neuen 5-Signal-Stack-Motors? Gezaehlt werden nur SAUBERE Round-Trips: Positionen, die der neue Motor selbst gekauft UND komplett verkauft hat (Soak-Start 21.07.2026, finale Exit-Config: Stop -8%, Trailing als Gewinnmitnahme, keine Tranchen). Bei 25 Round-Trips gibt es einen Zwischencheck (erste Orientierung, vorregistriertes Protokoll), bei 80 das Go/No-Go-Urteil fuer echtes Geld — die Marke, ab der sich Koennen statistisch von Glueck trennen laesst. Es gibt bewusst KEIN festes Datum mehr: der Zaehler entscheidet, nicht der Kalender.">?</span>
                 <span id="soak-badge" style="float:right;font-size:13px;padding:4px 10px;border-radius:12px;background:rgba(245,158,11,0.15);color:#fcd34d;">--</span>
             </div>
             <div id="soak-headline" class="card-sub" style="margin-bottom:8px;font-size:14px;">Lade Status...</div>
@@ -261,14 +261,14 @@
 
         <!-- Exit-Forecast: Abstand jeder offenen Position zum naechsten Exit-Trigger -->
         <div class="card">
-            <div class="card-title">Exit-Forecast<span class="tip" data-tip="Fuer jede offene Position: Wie weit ist sie vom naechsten Exit entfernt? Der Bot hat 7 moegliche Ausstiegs-Typen (Stop-Loss, Trailing-SL, drei TP-Tranchen, Final-TP, Time-Stop). Diese Tabelle zeigt fuer jede Position den naechsten, nahesten Trigger und wie viele Prozent fehlen. Beantwortet die Frage: Warum schliesst der Bot gerade nichts?">?</span></div>
+            <div class="card-title">Exit-Forecast<span class="tip" data-tip="Fuer jede offene Position: Wie weit ist sie vom naechsten Exit entfernt? Aktive Ausstiegs-Typen der finalen Config: Stop-Loss (-8%), Trailing-SL (ab +6%, Abstand 4% — die einzige Gewinnmitnahme), Time-Stop und Earnings-Blackout. Take-Profit und Tranchen sind bewusst AUS (belegt ueber 27 Konfigurationen: 9/9 besser ohne). Die Tabelle zeigt je Position den nahesten Trigger. Beantwortet: Warum schliesst der Bot gerade nichts?">?</span></div>
             <div id="exit-forecast-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">--</div>
             <div id="exit-forecast-table-wrap" style="overflow:visible;">
                 <table class="data-table" id="exit-forecast-table" style="display:none;width:100%;">
                     <thead>
                         <tr>
                             <th>Asset<span class="tip" data-tip="Das Wertpapier (z.B. Aktie, ETF). Gleiches Symbol = gleiches Wertpapier, auch wenn der Bot mehrmals nachgekauft hat.">?</span></th>
-                            <th>Alter<span class="tip" data-tip="Tage seit Oeffnung der Position. Wichtig fuer den Time-Stop (ab 10 Tagen relevant).">?</span></th>
+                            <th>Alter<span class="tip" data-tip="Tage seit Oeffnung der Position. Wichtig fuer den Time-Stop — dessen aktuelle Schwelle steht in der Config-Zeile unter der Tabelle.">?</span></th>
                             <th>PnL %<span class="tip" data-tip="Aktuelle Rendite der Position in Prozent. Grundlage fuer fast alle Trigger-Berechnungen.">?</span></th>
                             <th>Naechster Trigger<span class="tip" data-tip="Der Exit-Typ, dessen Ausloesung am naechsten ist. Pfeil zeigt die Richtung: Hoch = Kurs muss noch steigen (Take-Profit), Runter = Kurs muesste fallen (Stop-Loss oder Trailing).">?</span></th>
                             <th>Abstand<span class="tip" data-tip="Wie viel Prozent fehlen bis der Trigger feuert. Je kleiner, desto waehrscheinlicher passiert bald was. '0.1%' heisst: ein winziger Move reicht.">?</span></th>
@@ -895,7 +895,7 @@
                     <div class="card-value" style="font-size:20px" id="rpt-return">--</div>
                 </div>
                 <div>
-                    <div class="card-sub">Win Rate<span class="tip" data-tip="Anteil profitabler Trades in der Woche. 60% = 6 von 10 waren im Plus.">?</span></div>
+                    <div class="card-sub">Win Rate<span class="tip" data-tip="Anteil POSITIVER TAGE ueber die gesamte Tracking-Historie (Schnappschuss-basiert) — NICHT der Anteil gewonnener Trades und NICHT nur diese Woche. Die Trade-Trefferquote des neuen Motors steht auf der Soak-Karte.">?</span></div>
                     <div class="card-value" style="font-size:20px" id="rpt-winrate">--</div>
                 </div>
                 <div>
@@ -1194,7 +1194,7 @@
                      Strategie. Andere Strategien werden in separate Bots ausgegliedert. -->
                 <div class="grid-2">
                     <div class="form-group">
-                        <label>🔒 Stop-Loss (%)</label><span class="tip" data-tip="Die Notbremse: Wenn eine Position so viel ins Minus faellt, wird sie automatisch verkauft. Aktuell WFO-LOCKED auf -3.0%: die Walk-Forward-Optimization hat diesen Wert als konservativsten Punkt ueber 5 Validierungs-Windows bestaetigt. Manuelle Aenderungen werden beim Speichern automatisch wieder zurueckgesetzt — das schuetzt vor versehentlichem Loosen waehrend Real-Money-Phase. Ueberschreibung nur durch erneutes WFO-Run (1. So im Monat).">?</span>
+                        <label>🔒 Stop-Loss (%)</label><span class="tip" data-tip="Die Notbremse: Wenn eine Position so viel ins Minus faellt, wird sie automatisch verkauft. Der Wert im Feld ist der aktuell GELOCKTE Wert (bewusste Rekalibrierung 02.07.2026, backtest-belegt fuer den neuen Motor; Lock via manual_lock_overrides). Manuelle Aenderungen werden beim Speichern automatisch zurueckgesetzt — das schuetzt vor versehentlichem Verstellen. Aenderung nur durch bewussten, dokumentierten Entscheid.">?</span>
                         <input type="number" id="cfg-sl" step="0.5" min="-50" max="0" readonly style="opacity:0.6;cursor:not-allowed;">
                         <div class="card-sub" style="margin-top:4px;font-size:11px;color:var(--text-dim);">WFO-locked, Override nur via Monthly WFO-Run</div>
                     </div>
@@ -1227,13 +1227,13 @@
                         <div class="card-sub" style="margin-top:4px;font-size:12px;">Aktuell effektiv: <span id="cfg-max-trade-effective" style="font-weight:700;">--</span> bei Portfolio <span id="cfg-portfolio-value">--</span></div>
                     </div>
                     <div class="form-group">
-                        <label>🔒 Min. Scanner-Score</label><span class="tip" data-tip="Mindest-Score den ein Asset im Scanner erreichen muss damit der Bot ueberhaupt einen Trade in Betracht zieht. Aktuell WFO-LOCKED auf 30: ueber 5 Validierungs-Windows wurde dieser Schwellwert als optimal bestaetigt. Hoeher = strenger Filter = weniger aber qualitativ bessere Trades. Manuelle Aenderungen werden beim Speichern zurueckgesetzt.">?</span>
+                        <label>🔒 Min. Scanner-Score</label><span class="tip" data-tip="Mindest-Score den ein Asset im Scanner erreichen muss damit der Bot ueberhaupt einen Trade in Betracht zieht. Der Wert im Feld ist der aktuell GELOCKTE Wert (Rekalibrierung 02.07.2026 — der alte Alt-Motor-Wert 40 strangulierte den Fundamental-Motor auf 11 Positionen). Hoeher = strenger Filter = weniger Trades. Manuelle Aenderungen werden beim Speichern zurueckgesetzt.">?</span>
                         <input type="number" id="cfg-min-score" step="1" min="0" max="100" readonly style="opacity:0.6;cursor:not-allowed;">
                         <div class="card-sub" style="margin-top:4px;font-size:11px;color:var(--text-dim);">WFO-locked, Override nur via Monthly WFO-Run</div>
                     </div>
                 </div>
                 <div class="card-sub" style="margin-top:14px;padding:10px;background:rgba(59,130,246,0.08);border-left:3px solid var(--blue);border-radius:4px;font-size:12px;line-height:1.5;">
-                    💡 <strong>Position-Sizing (Kelly-Faktor)</strong> wird im <a href="javascript:showTab('backtest')" style="color:var(--blue);text-decoration:underline;">Backtest-Tab → Kelly-Sweep-Card</a> verwaltet. Dort kann der k-Wert getestet und der Live-Wert angepasst werden. Aktuell <code>k=0.04</code> (Mai 2026 Sweep-bestaetigt).
+                    💡 <strong>Position-Sizing (Kelly-Faktor)</strong> ist gelockt — der aktuelle Wert steht in der Cutover-Readiness-Karte (Gate #3). Zuletzt bestaetigt durch die Neu-Motor-Analyse vom 22.07.2026 (Sharpe skaleninvariant, k=4% als Risiko-Regler unter der MaxDD-8%-Grenze).
                 </div>
                 <button type="submit" class="btn btn-primary" style="margin-top:14px;">Speichern</button>
             </form>

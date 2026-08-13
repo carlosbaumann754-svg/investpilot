@@ -65,6 +65,25 @@ FILES=(
     "partial_close_state.json"       # welche Tranchen je Position schon feuerten
                                      # (Tranchen sind aus, Historie bleibt).
     "buy_cooldown.json"              # verhindert Sofort-Rueckkauf nach Exit.
+
+    # R-B54 (13.08.2026, Audit-Finding — DRITTES Einfrieren dieser Liste):
+    # seit R-B30 neu entstandene Dateien. Strukturelle Absicherung jetzt via
+    # tests/test_backup_liste_vollstaendig.py (kritische Datei fehlt -> Suite rot).
+    # (1) UNERSETZLICH:
+    "signal_pit_snapshots.json"      # Point-in-Time-Kurs/Signal-Cache (1.8 MB)
+                                     # der monatlichen Stack-Karte — laut R-B41
+                                     # nicht look-ahead-frei rekonstruierbar.
+    # (2) TEUER / lebendige Anzeige-Quellen:
+    "stack_wfo_baseline.json"        # monatlich regenerierte Stack-Baseline —
+                                     # der Namens-Zwilling wfo_signal_stack_
+                                     # baseline.json (oben) ist der TOTE Stand.
+    "signal_ic_report.json"          # woechentlicher IC-Report (So 08:00 CH).
+    "signal_stack_shadow.json"       # aktuelle Kauf-Rangliste (Mo-Fr 23:30 CH).
+    "health_audit_state.json"        # Sa-Audit-Befunde (R-A12-Historie).
+    "alert_state.json"               # Herzschlag + last_daily_summary — auch
+                                     # forensisch nuetzlich (Audit-Finding D-F5).
+    # (3) MEILENSTEIN-ZUSTAND:
+    "zwischencheck25_state.json"     # Einmal-Marker des 25er-Weckers (R-B53).
 )
 
 # Sammle nur Dateien die existieren (some erst spaeter angelegt)
@@ -82,6 +101,16 @@ fi
 
 # tar.gz mit relativen Pfaden
 tar -czf "$ARCHIVE" -C "$SOURCE_DIR" "${EXISTING_FILES[@]}"
+
+# R-B54: supervisor_state.json liegt bewusst auf HOST-Ebene (/opt/investpilot,
+# ausserhalb von data/ — der Supervisor lebt ausserhalb des Containers) und
+# fehlte deshalb im Backup. Separat anhaengen (tar -r geht nicht auf .gz,
+# darum eigener kleiner Tarball daneben).
+if [ -f /opt/investpilot/supervisor_state.json ]; then
+    tar -czf "${BACKUP_DIR}/host_state_${TIMESTAMP}.tar.gz" \
+        -C /opt/investpilot supervisor_state.json
+    find "$BACKUP_DIR" -name "host_state_*.tar.gz" -mtime +${RETENTION_DAYS} -delete
+fi
 SIZE=$(stat -c%s "$ARCHIVE")
 echo "[$(date -u +%FT%TZ)] Backup OK: ${ARCHIVE} (${SIZE} bytes, ${#EXISTING_FILES[@]} Dateien)"
 

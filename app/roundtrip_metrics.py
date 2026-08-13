@@ -53,13 +53,26 @@ AUDIT_METADATA = {
 # (wfo_drift_watchdog.roundtrip_since) ueberschrieben, wenn dort gesetzt.
 DEFAULT_REGIME_START = "2026-07-21T12:00"
 
-BUY_ACTIONS = {"SCANNER_BUY", "PARTIAL_SIGNAL"}
+# R-B54 (13.08.2026): PARTIAL_SIGNAL ist ein EXIT-Ereignis (Tranchen-Signal),
+# kein Kauf — als BUY machte es geerbte Positionen faelschlich "frisch".
+BUY_ACTIONS = {"SCANNER_BUY"}
 FULL_CLOSE_ACTIONS = {
     "TRAILING_SL_CLOSE", "STOP_LOSS_CLOSE", "TAKE_PROFIT_CLOSE",
     "TIME_STOP_CLOSE", "EARNINGS_BLACKOUT_CLOSE",
+    # R-B54: bisher fehlend — diese Exits schlossen Episoden NIE, wodurch
+    # ein Re-Buy in die stale Episode gemerged wurde (vermischtes PnL):
+    "SCANNER_SELL", "MANUAL_SELL", "OVERNIGHT_CLOSE", "PROFIT_LOCK_CLOSE",
 }
-PARTIAL_CLOSE_ACTIONS = {"PARTIAL_CLOSE"}
+PARTIAL_CLOSE_ACTIONS = {"PARTIAL_CLOSE", "PARTIAL_SIGNAL"}
 CLOSE_ACTIONS = FULL_CLOSE_ACTIONS | PARTIAL_CLOSE_ACTIONS
+
+# R-B54: Auftraege OHNE Fuellung duerfen keine Episoden bewegen. Audit-Beleg
+# 13.08.: 5 stornierte Trailing-Closes (0 Aktien gefuellt) zaehlten als echte
+# Abschluesse -> Soak-Zaehler 19 statt 16, netto -307 statt -1'657 USD.
+# "submitted" konservativ ebenfalls raus (Fill nicht belegt); "partial" und
+# "executed" zaehlen. Gleiche Liste wie der Close-Filter der Soak-Karte.
+NICHT_GEFUELLT = {"cancelled", "rejected", "failed", "close_failed",
+                  "skipped", "submitted"}
 
 
 def _symbol_resolver(trades: list) -> callable:
@@ -110,6 +123,11 @@ def build_episodes(trade_history: list) -> tuple[list[dict], list[dict]]:
         sym = resolve(t)
         ts = str(t.get("timestamp", ""))
 
+        # R-B54: Nicht gefuellte Auftraege (cancelled/rejected/...) sind
+        # KEINE Positions-Ereignisse — die Position hat sich nicht bewegt.
+        if str(t.get("status", "")).lower() in NICHT_GEFUELLT:
+            continue
+
         if action in BUY_ACTIONS:
             ep = open_eps.setdefault(sym, {
                 "symbol": sym, "entry_ts": ts, "exit_ts": None,
@@ -121,7 +139,9 @@ def build_episodes(trade_history: list) -> tuple[list[dict], list[dict]]:
             # NICHT mit dem Backtest vergleichbar (der gewichtet gleich).
             # Gemessen am 21.07.: USD-PF 0.38 vs Prozent-PF 0.45 auf denselben
             # 9 Trades. Fuer Alarm-Entscheidungen zaehlt die Prozent-Basis.
-            amt = t.get("amount_usd")
+            # R-B54: tatsaechlich gefuellter Betrag (falls geloggt) schlaegt
+            # den Order-Zielbetrag — Teilfuellungen verzerrten den Einsatz.
+            amt = t.get("amount_usd_actual") or t.get("amount_usd")
             if isinstance(amt, (int, float)) and amt > 0:
                 ep["invested_usd"] += float(amt)
         elif action in CLOSE_ACTIONS:
@@ -138,6 +158,12 @@ def build_episodes(trade_history: list) -> tuple[list[dict], list[dict]]:
                 ep["n_partials"] += 1
             else:
                 ep["exit_ts"] = ts
+                # R-B54 (Audit K1): Exit-Typ + Prozent-Rendite ins Episoden-
+                # Schema — beides las bisher jeder Konsument als None/leer,
+                # und die fehlende exit_action verdeckte Klassifikationsfehler.
+                ep["exit_action"] = action
+                ep["pnl_pct"] = (round(ep["pnl_usd"] / ep["invested_usd"] * 100, 2)
+                                 if ep.get("invested_usd") else None)
                 closed.append(ep)
                 del open_eps[sym]
 

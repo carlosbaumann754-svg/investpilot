@@ -1642,20 +1642,33 @@ class IbkrBroker(BrokerBase):
                     log.info("E6 reconcile: orphan Catastrophic-Stop gecancelt "
                              "(conId=%s, keine Position)", cid)
                 elif decision == "resize":
-                    aux = getattr(order, "auxPrice", None)
-                    ib.cancelOrder(order)
-                    if aux:
-                        from ib_insync import StopOrder  # nur hier noetig
-                        new_o = StopOrder("SELL", have, aux)
-                        new_o.tif = "GTC"
-                        new_o.outsideRth = True  # v37dt Audit#7: sonst nach Tranchen-Close kein Off-Hours-Schutz
-                        new_o.orderRef = _CATASTROPHIC_ORDER_REF
-                        # R-B46: nie auf VALUE/leer routen — sonst Error 201
-                        ib.placeOrder(_orderfaehiger_kontrakt(t.contract), new_o)
-                        covered.add(cid)
-                    result["resized"] += 1
-                    log.info("E6 reconcile: Catastrophic-Stop verkleinert "
-                             "(conId=%s, %d -> %d)", cid, stop_qty, have)
+                    # R-B54 (Audit F2): Reihenfolge gedreht — NEUEN Stop zuerst
+                    # platzieren, DANN den alten canceln. Vorher: cancel zuerst;
+                    # schlug placeOrder fehl (Error-201-Klasse), war die Position
+                    # ungeschuetzt UND die Exception brach Phase 2 fuer alle
+                    # weiteren Positionen ab. Kurze Doppelabdeckung zweier
+                    # GTC-Stops ist harmlos (beide weit unter Markt); Fehler
+                    # bleiben jetzt pro Trade isoliert.
+                    try:
+                        aux = getattr(order, "auxPrice", None)
+                        if aux:
+                            from ib_insync import StopOrder  # nur hier noetig
+                            new_o = StopOrder("SELL", have, aux)
+                            new_o.tif = "GTC"
+                            new_o.outsideRth = True  # v37dt Audit#7: sonst nach Tranchen-Close kein Off-Hours-Schutz
+                            new_o.orderRef = _CATASTROPHIC_ORDER_REF
+                            # R-B46: nie auf VALUE/leer routen — sonst Error 201
+                            ib.placeOrder(_orderfaehiger_kontrakt(t.contract), new_o)
+                            covered.add(cid)
+                        ib.cancelOrder(order)
+                        result["resized"] += 1
+                        log.info("E6 reconcile: Catastrophic-Stop verkleinert "
+                                 "(conId=%s, %d -> %d)", cid, stop_qty, have)
+                    except Exception as e:
+                        result["errors"] = result.get("errors", 0) + 1
+                        log.error("E6 reconcile: Resize fehlgeschlagen "
+                                  "(conId=%s, alter Stop bleibt stehen): %s",
+                                  cid, e)
                 else:
                     result["kept"] += 1
                     covered.add(cid)

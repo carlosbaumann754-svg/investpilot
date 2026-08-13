@@ -4700,8 +4700,11 @@ async def api_trailing_sl(user=Depends(require_auth)):
         positions.append({
             "position_id": pos_id,
             "sl_level": data.get("sl_level"),
-            "peak_price": data.get("peak_price"),
-            "activated": data.get("activated", False),
+            # R-B54 (Audit): echte State-Keys statt Phantomfelder — peak_price
+            # existierte nie (immer null), activated ist ein ISO-Zeitstempel.
+            "entry_price": data.get("entry_price"),
+            "activated_at": data.get("activated"),
+            "updated_at": data.get("updated"),
         })
     return {"positions": positions}
 
@@ -4825,13 +4828,20 @@ async def api_v12_status(user=Depends(require_auth)):
         config = load_config()
 
         # --- Universe ---
+        # R-B54 (Audit): zeigte das TOTE Alt-Universum (82er ASSET_UNIVERSE
+        # minus 49 disabled = "33", davon 25 gar nicht im Universum) und
+        # widersprach der Universe-Health-Zeile (ok=304/309) im SELBEN Payload.
+        # Jetzt: das Universum, aus dem der aktive Motor wirklich kauft.
+        disabled = list(config.get("disabled_symbols") or [])
         try:
-            from app.market_scanner import ASSET_UNIVERSE
-            total_universe = len(ASSET_UNIVERSE)
+            from app.sp600_universe import get_symbols as _sp600_symbols
+            _syms = _sp600_symbols() or []
+            total_universe = len(_syms)
+            _dis = {str(d).upper() for d in disabled}
+            active_universe = sum(1 for s in _syms if str(s).upper() not in _dis)
         except Exception:
             total_universe = None
-        disabled = list(config.get("disabled_symbols") or [])
-        active_universe = (total_universe - len(disabled)) if total_universe else None
+            active_universe = None
 
         # --- Universe Health (letzter yfinance Download-Report) ---
         # Die Datei wird vom Backtester (app/backtester.py) geschrieben:
@@ -5712,7 +5722,11 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
 
     # --- Gate #7: Code-Security (Semgrep) ---
     try:
-        sem = load_json("semgrep_latest.json") or {}
+        # R-B54 (Audit): war nacktes load_json -> NameError -> das Gate fiel
+        # IMMER in den except-Pfad und war hartkodiert gruen (konnte nie
+        # warnen). Gleiche Falle wie beim R-B43-Hotfix an Gate #3.
+        from app.config_manager import load_json as _lj7
+        sem = _lj7("semgrep_latest.json") or {}
         results = sem.get("results", []) if isinstance(sem, dict) else []
         errors = sum(1 for r in results if r.get("extra", {}).get("severity") == "ERROR")
         if errors == 0:
@@ -5788,7 +5802,10 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
 
     # Cost-Model
     try:
-        cal = load_json("cost_model_calibration.json") or {}
+        # R-B54 (Audit): war nacktes load_json -> NameError -> Submodul zeigte
+        # immer "Defaults aktiv / 0 Fills" statt der echten Kalibrierung.
+        from app.config_manager import load_json as _ljcm
+        cal = _ljcm("cost_model_calibration.json") or {}
         submodules["cost_model"] = {
             "fills_analyzed": cal.get("total_fills_analyzed", 0),
             "overrides_active": cal.get("overrides_active_count", 0),

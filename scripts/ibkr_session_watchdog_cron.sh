@@ -43,9 +43,13 @@ elif [ "$EXIT" = "42" ]; then
     PRIO=2; TITLE="IBKR-Session Auto-Recovery FAIL"
     MSG="Restart durchgefuehrt aber Verify failed (rc=$VERIFY_RC). Manuell pruefen!"
   fi
+  # R-B54 (Audit): send_alert kennt KEIN title-Argument — der alte Aufruf
+  # crashte seit 05.05. mit TypeError (224x im Log), jede Recovery blieb
+  # stumm, und auch der FAIL-Zweig haette stumm versagt. Signatur:
+  # send_alert(message, level="INFO", config=None).
   docker exec investpilot python -c "
 from app.alerts import send_alert
-send_alert(title='$TITLE', message='$MSG', level='WARNING' if $PRIO == 0 else 'ERROR')
+send_alert('$TITLE — $MSG', level='WARNING' if $PRIO == 0 else 'ERROR')
 " 2>&1 | tee -a "$LOG" >/dev/null
 else
   echo "[$TS] OTHER (rc=$EXIT) — result:" >> "$LOG"
@@ -53,10 +57,11 @@ else
   # Bei rate_limited einmal Pushover (max 1x pro Stunde via marker)
   RATE_MARKER=/tmp/ibkr-watchdog-rate-warned
   if echo "$RESULT" | grep -q "rate_limited" && [ ! -f "$RATE_MARKER" -o $(($(date +%s) - $(stat -c %Y "$RATE_MARKER" 2>/dev/null || echo 0))) -gt 3600 ]; then
+    # R-B54: gleicher Signatur-Fix wie oben (title-kwarg existiert nicht).
     docker exec investpilot python -c "
 from app.alerts import send_alert
-send_alert(title='IBKR-Session Watchdog Rate-Limit',
-           message='6 Restart-Versuche in letzter Stunde — manuell pruefen ob Gateway oder Konto Problem hat.',
+send_alert('IBKR-Session Watchdog Rate-Limit — 6 Restart-Versuche in '
+           'letzter Stunde, manuell pruefen ob Gateway oder Konto Problem hat.',
            level='ERROR')
 " 2>&1 | tee -a "$LOG" >/dev/null
     touch "$RATE_MARKER"
