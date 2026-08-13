@@ -20,6 +20,7 @@ log = logging.getLogger("Trader")
 # nach Neustart alarmiert ein anhaltender Fehler einfach erneut = gewollt).
 _E6_RECONCILE_FAILS = {"streak": 0}
 _EARNINGS_CHECK_FAILS = {"streak": 0}
+_TP_GATES_OFF_LOGGED = {"done": False}  # R-B55: Einmal-Log "Gates inaktiv, TP aus"
 
 # R-B11/S2 (07.06.2026): trade_history.json wird im selben Prozess von MEHREREN
 # Threads geschrieben — dem Bot-Main-Loop (save_trade) UND dem ib_insync-
@@ -267,7 +268,11 @@ def _has_recent_earnings_close(symbol: str, hours: int = 24) -> bool:
             try:
                 ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                    # R-B55 (Audit K2): naive Timestamps stammen aus
+                    # datetime.now() = CONTAINER-LOKAL (Europe/Zurich), nicht
+                    # UTC — die alte UTC-Annahme machte das Duplikat-Fenster
+                    # ~26h statt 24h. astimezone() haengt die Lokalzone an.
+                    ts = ts.astimezone()
                 if ts >= cutoff_ts:
                     return True
             except Exception:
@@ -315,6 +320,16 @@ def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
     avg = order.get("avgFillPrice")
     intended = order.get("intendedPrice")
     ref_quote = order.get("refQuote")
+    # R-B55 (Audit F5, Datensammlung): gefuellte Stueckzahl mitschreiben —
+    # zusammen mit avg_fill_price die Basis, um Exit-PnL kuenftig aus der
+    # FILL-Realitaet statt dem Entscheidungs-Schnappschuss zu rechnen
+    # (Umrechnung selbst kommt als eigener PR, siehe Roadmap R-B55).
+    try:
+        fq = order.get("filledQuantity")
+        if fq and int(fq) > 0:
+            trade_entry["filled_qty"] = int(fq)
+    except (TypeError, ValueError):
+        pass
     try:
         if avg and float(avg) > 0:
             trade_entry["avg_fill_price"] = float(avg)
@@ -2528,18 +2543,36 @@ def execute_scanner_trades(client, config, scan_results):
                         tp_check = ac.get("tp_pct", tp_check)
                     # Erwarteter Return = WinRate * TP - (1-WinRate) * |SL|
                     # Vereinfacht: TP muss > min_return sein
-                    if tp_check < min_return:
+                    # R-B55 (Audit F10): tp>=100 ist der Sentinel "TP aus"
+                    # (Trailing ist die Gewinnmitnahme). 999 bestand diesen
+                    # Filter trivially IMMER — er war formal konfiguriert,
+                    # faktisch tot. Jetzt ehrlich uebersprungen + einmal
+                    # geloggt (verhaltensgleich, nur keine Schein-Pruefung).
+                    if tp_check >= 100:
+                        if not _TP_GATES_OFF_LOGGED["done"]:
+                            log.info("  Kosten-Filter + R/R-Gate inaktiv: "
+                                     "TP aus (Sentinel %s) — Trailing ist die "
+                                     "Gewinnmitnahme", tp_check)
+                            _TP_GATES_OFF_LOGGED["done"] = True
+                    elif tp_check < min_return:
                         log.info(f"  SKIP {symbol}: TP {tp_check}% < min {min_return}% (Kosten-Filter)")
                         continue
                 except ImportError:
                     pass
 
                 # Risk/Reward Check
-                if lm:
+                # R-B55 (Audit F10): mit TP=999 ergab R/R 999/8 ≈ 125 — das
+                # Gate (der '3. Blocker' vom 06.07.) liess trivially alles
+                # durch. Bei TP-aus ist ein TP-basiertes R/R sinnlos definiert
+                # -> ehrlich ueberspringen (verhaltensgleich). Ob ein
+                # Trailing-basiertes R/R-Gate sinnvoll ist: Design-Entscheid,
+                # siehe Roadmap R-B55.
+                _tp_raw = dt_config.get("take_profit_pct", 5)
+                if lm and _tp_raw < 100:
                     entry_price = analysis.get("price", 0)
                     if entry_price > 0:
                         sl_price = entry_price * (1 + stop_loss_pct / 100)
-                        tp_price = entry_price * (1 + dt_config.get("take_profit_pct", 5) / 100)
+                        tp_price = entry_price * (1 + _tp_raw / 100)
                         rr_ok, rr_ratio, rr_reason = lm.check_risk_reward(
                             entry_price, sl_price, tp_price,
                             config.get("leverage", {}).get("min_risk_reward_ratio", 2.0))

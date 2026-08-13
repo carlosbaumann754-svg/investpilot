@@ -368,10 +368,13 @@ def check_earnings_exit(
         return False, None  # weder API noch Cache verwertbar
 
     # Tage bis Earnings (negativ = Earnings schon vorbei)
-    now = datetime.now()
-    if earnings_dt.tzinfo is not None and now.tzinfo is None:
-        # earnings_dt ist tz-aware, now nicht — angleichen
-        now = datetime.now(earnings_dt.tzinfo)
+    # R-B55 (Audit K2): naive Earnings-Zeitstempel stammen aus UTC-Quellen
+    # (API/Cache) — der alte Vergleich gegen lokale Zeit verschob das
+    # Trigger-Fenster um die Zonendifferenz (~2h).
+    from datetime import timezone as _tz_utc
+    if earnings_dt.tzinfo is None:
+        earnings_dt = earnings_dt.replace(tzinfo=_tz_utc.utc)
+    now = datetime.now(earnings_dt.tzinfo)
     days_until = (earnings_dt - now).days
 
     if days_until < 0 or days_until > max_days:

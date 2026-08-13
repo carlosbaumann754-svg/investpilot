@@ -37,7 +37,11 @@ TRADING_DEFAULTS = {
     "leverage": {
         "trailing_sl_activation_pct": 0.5,
         "trailing_sl_trail_pct": -2.5,
-        "tp_tranches": [0.04, 0.08, 0.15],
+        # R-B55 (Audit K3): war [0.04, 0.08, 0.15] — doppelt gefaehrlich:
+        # (a) Tranchen sind seit R-B28 bewusst AUS, ein Default darf sie
+        # nicht wiederbeleben; (b) Float-Schema ist veraltet — trader.py
+        # erwartet Dicts (tranche.get(...)), Floats crashten den Exit-Loop.
+        "tp_tranches": [],
     },
     "time_stop": {
         "enabled": True,

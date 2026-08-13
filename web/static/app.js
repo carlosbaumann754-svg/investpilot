@@ -605,7 +605,7 @@ async function loadDashboard() {
                 regimeBadge.className = 'badge ' + (regimeMap[b.market_regime] || 'badge-blue');
                 regimeBadge.textContent = (b.market_regime || 'unknown').toUpperCase();
                 document.getElementById('brain-stats').textContent =
-                    `Win: ${b.win_rate?.toFixed(1) || 0}% | Sharpe: ${b.sharpe_estimate?.toFixed(2) || 0}`;
+                    `Win: ${b.win_rate?.toFixed(1) || 0}% | Sharpe: ${b.sharpe_estimate?.toFixed(2) || 0} (all-time inkl. Alt-Motor — Soak-Zahlen: siehe Soak-Karte)`;
             }
         }
 

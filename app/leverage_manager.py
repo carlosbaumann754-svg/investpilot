@@ -245,11 +245,10 @@ def calculate_tp_tranches(entry_price, total_amount, config=None):
         config = load_config()
     lev_cfg = config.get("leverage", {})
 
-    tranches = lev_cfg.get("tp_tranches", [
-        {"pct_of_position": 50, "profit_target_pct": 3},
-        {"pct_of_position": 30, "profit_target_pct": 6},
-        {"pct_of_position": 20, "profit_target_pct": 10},
-    ])
+    # R-B55 (Audit K3): Default war eine volle Tranchen-Liste — wer diese
+    # (aktuell aufruferlose) Funktion verdrahtet, haette die seit R-B28
+    # bewusst abgeschalteten Tranchen still wiederbelebt. Default = aus.
+    tranches = lev_cfg.get("tp_tranches", [])
 
     result = []
     for tranche in tranches:
