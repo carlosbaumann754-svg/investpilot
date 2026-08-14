@@ -21,6 +21,7 @@ log = logging.getLogger("Trader")
 _E6_RECONCILE_FAILS = {"streak": 0}
 _EARNINGS_CHECK_FAILS = {"streak": 0}
 _TP_GATES_OFF_LOGGED = {"done": False}  # R-B55: Einmal-Log "Gates inaktiv, TP aus"
+_EXIT_LOOP_FAILS = {"streak": 0}  # R-B55c: Per-Position-Crashes im SL/TP-Loop
 
 # R-B11/S2 (07.06.2026): trade_history.json wird im selben Prozess von MEHREREN
 # Threads geschrieben — dem Bot-Main-Loop (save_trade) UND dem ib_insync-
@@ -1171,432 +1172,458 @@ def check_stop_loss_take_profit(client, config):
 
     actions = []
     for pos in portfolio.get("positions", []):
-        p = EtoroClient.parse_position(pos)
-        if p["invested"] <= 0:
-            continue
-
-        # Earnings-Exit-Filter (v37v): vor allen anderen Checks
-        # — wenn Earnings naht und Risk-Profil triggert, sofort schliessen.
-        if check_earnings_exit is not None and portfolio_value_usd > 0:
-            sym = pos.get("symbol")
-            if sym:
-                try:
-                    pos_value = float(pos.get("amount", 0) or p.get("invested", 0))
-                    should_exit, reason = check_earnings_exit(
-                        sym, pos_value, portfolio_value_usd, config,
-                    )
-                    # v37aa: Duplicate-Prevention. Heute morgen 30.04. wurden zwei
-                    # EARNINGS_BLACKOUT_CLOSE fuer ROKU geschrieben (09:10 + 10:21
-                    # CEST), weil close_position() submitted aber IBKR erst Pre-
-                    # Market fillt. Naechster Cycle sieht Position immer noch open
-                    # -> Filter triggered erneut. Skip wenn bereits in den letzten
-                    # N Stunden ein EARNINGS_BLACKOUT_CLOSE fuer dieses Symbol da war.
-                    if should_exit and _has_recent_earnings_close(sym, hours=24):
-                        log.info(f"  EARNINGS-EXIT skip {sym}: bereits in den "
-                                 f"letzten 24h geschlossen (vermeidet Duplikat)")
-                        should_exit = False
-                    if should_exit:
-                        log.warning(f"  EARNINGS-EXIT: {sym} — {reason}")
-                        result = _close_position_safe(
-                            client, p["position_id"], p.get("instrument_id"),
-                            "EARNINGS-EXIT")
-                        if _is_skipped_idempotent(result):
-                            continue
-                        if _is_already_closed(result):
-                            log.info(f"  EARNINGS-EXIT skip {sym}: bei IBKR bereits "
-                                     f"geschlossen (stale Bot-Cache)")
-                            continue
-                        if result:
-                            trade_entry = {
-                                "timestamp": datetime.now().isoformat(),
-                                "action": "EARNINGS_BLACKOUT_CLOSE",
-                                "symbol": sym,
-                                "instrument_id": p["instrument_id"],
-                                "position_id": p["position_id"],
-                                "pnl_pct": p["pnl_pct"],
-                                "pnl_usd": p["pnl"],
-                                "leverage": p["leverage"],
-                                "earnings_reason": reason,
-                                "status": _trade_status_from_result(result),  # v37dh
-                                "ibkr_status_raw": _ibkr_status_raw_from_result(result),
-                            }
-                            save_trade(_attach_fill_prices(trade_entry, result))
-                            actions.append("EARNINGS_BLACKOUT_CLOSE")
-                            if al:
-                                al.alert_trade_executed(trade_entry)
-                            continue  # Position zu, naechste Pruefung skippen
-                        else:
-                            _log_close_failure("EARNINGS_BLACKOUT_CLOSE", p, al,
-                                               extra={"earnings_reason": reason})
-                            # Kein continue — bei Close-Failure den Rest weiterpruefen
-                except Exception as e:
-                    # R-B54 (Audit F3): war log.debug — wirft die Pruefung
-                    # dauerhaft (z.B. API-Schema-Aenderung), ist der Earnings-
-                    # Blackout-Schutz KOMPLETT still deaktiviert (E6-Klasse).
-                    _EARNINGS_CHECK_FAILS["streak"] += 1
-                    streak = _EARNINGS_CHECK_FAILS["streak"]
-                    log.error(f"Earnings-Exit-Check {sym} fehlgeschlagen "
-                              f"(Streak {streak}): {e}")
-                    # Streak zaehlt pro Position (bis ~15/Zyklus): erster Alert
-                    # bei 3, danach ca. alle 6h (288 ≈ 15 Pos × 12 Zyklen/h × 1.6h).
-                    if streak == 3 or streak % 288 == 0:
-                        try:
-                            from app.alerts import send_alert
-                            send_alert(
-                                f"Earnings-Blackout-Pruefung schlaegt wiederholt "
-                                f"fehl (Streak {streak}, zuletzt {sym}: {e}) — "
-                                "der Earnings-Exit-Schutz ist womoeglich blind.",
-                                level="ERROR", config=config)
-                        except Exception as alert_err:
-                            log.error(f"Earnings-Alert fehlgeschlagen: {alert_err}")
-                else:
-                    _EARNINGS_CHECK_FAILS["streak"] = 0
-
-        # Market-Hours Guard
-        if is_asset_class_tradeable is not None:
-            asset_class = _lookup_asset_class(p.get("instrument_id"))
-            if not is_asset_class_tradeable(asset_class):
-                if asset_class not in skipped_off_hours:
-                    log.info(
-                        f"  Markt geschlossen fuer Klasse '{asset_class}' — "
-                        f"SL/TP-Checks fuer betroffene Positionen werden uebersprungen "
-                        f"(Position bleibt offen, retry zum naechsten RTH-Open)."
-                    )
-                    skipped_off_hours.add(asset_class)
+        try:
+            p = EtoroClient.parse_position(pos)
+            if p["invested"] <= 0:
                 continue
 
-        # Trailing SL: Fallback current_price aus PnL + entry_price berechnen
-        if not p.get("current_price") and p.get("entry_price") and p["invested"] > 0:
-            # current_price = entry_price * (1 + pnl_pct/100)
-            p["current_price"] = round(p["entry_price"] * (1 + p["pnl_pct"] / 100), 6)
-        if not p.get("entry_price") and p.get("current_price") and p["invested"] > 0 and p["pnl_pct"] != 0:
-            # entry_price = current_price / (1 + pnl_pct/100)
-            p["entry_price"] = round(p["current_price"] / (1 + p["pnl_pct"] / 100), 6)
-
-        # Trailing SL Update + Trigger Check
-        if lm and p.get("current_price"):
-            lm.update_trailing_stop_loss(
-                p["position_id"], p["current_price"], p.get("entry_price", p["current_price"]),
-                p["leverage"], config)
-
-            # Pruefe ob Trailing SL ausgeloest wurde
-            triggered = lm.check_trailing_stop_losses([{
-                "position_id": p["position_id"],
-                "instrument_id": p["instrument_id"],
-                "current_price": p["current_price"],
-            }])
-            if triggered:
-                result = _close_position_safe(client, p["position_id"], p["instrument_id"], "TRAILING-SL")
-                if _is_skipped_idempotent(result):
-                    continue
-                if _is_already_closed(result):
-                    log.info(f"  TRAILING-SL skip {p['instrument_id']}: bei IBKR bereits "
-                             f"geschlossen (stale Bot-Cache)")
-                    continue
-                if result:
-                    trade_entry = {
-                        "timestamp": datetime.now().isoformat(),
-                        "action": "TRAILING_SL_CLOSE",
-                        "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
-                        "instrument_id": p["instrument_id"],
-                        "position_id": p["position_id"],
-                        "pnl_pct": p["pnl_pct"],
-                        "pnl_usd": p["pnl"],
-                        "leverage": p["leverage"],
-                        "trailing_sl_level": triggered[0]["sl_level"],
-                        "status": _trade_status_from_result(result),  # v37dh
-                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
-                    }
-                    save_trade(_attach_fill_prices(trade_entry, result))
-                    actions.append("TRAILING_SL_CLOSE")
-                    if al:
-                        al.alert_trade_executed(trade_entry)
-                else:
-                    _log_close_failure("TRAILING_SL_CLOSE", p, al,
-                                       extra={"trailing_sl_level": triggered[0]["sl_level"]})
-                continue  # Trailing SL hat Prioritaet, Skip fixed SL/TP
-
-        # --- v12: Time-Stop / Staleness Exit ---
-        # Schliesst Positionen die zu lange "stuck" sind und kaum P/L generieren.
-        # Opportunitaetskosten-Schutz: gebundenes Kapital waere woanders besser.
-        if ts_enabled:
-            _, age_days = _find_position_open_time(
-                p["position_id"], p.get("open_time"), symbol=p.get("symbol"))
-            if age_days is not None and age_days >= ts_max_days \
-                    and age_days >= ts_min_days \
-                    and abs(p["pnl_pct"]) < ts_stale_thr:
-                log.info(f"  TIME_STOP: Position {p['position_id']} "
-                         f"(Instrument {p['instrument_id']}) — "
-                         f"{age_days:.1f}d offen, PnL {p['pnl_pct']:+.2f}% < {ts_stale_thr}%")
-                # v37h+2 (Q3-11, 15.05.2026): TIME_STOP nutzt jetzt
-                # _close_position_safe statt direktem close_position-Call.
-                # Vorher: kein _check_close_idempotent / pending_closes-Tracker
-                # -> bei langsamem Fill (off-hours, partial) feuerte Time-Stop
-                # alle 5 Min eine neue Close-Order. Gleicher Anti-Loop-Bug-
-                # Pattern wie BA/CPER vom 04.05.
-                result = _close_position_safe(
-                    client, p["position_id"], p["instrument_id"], "TIME-STOP")
-                if _is_skipped_idempotent(result):
-                    continue  # Anti-Loop-Skip
-                if _is_already_closed(result):
-                    log.info(f"  TIME_STOP skip {p['instrument_id']}: bei IBKR bereits "
-                             f"geschlossen (stale Bot-Cache)")
-                    continue
-                if result:
-                    trade_entry = {
-                        "timestamp": datetime.now().isoformat(),
-                        "action": "TIME_STOP_CLOSE",
-                        "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
-                        "instrument_id": p["instrument_id"],
-                        "position_id": p["position_id"],
-                        "pnl_pct": p["pnl_pct"],
-                        "pnl_usd": p["pnl"],
-                        "leverage": p["leverage"],
-                        "age_days": round(age_days, 2),
-                        "status": _trade_status_from_result(result),  # v37dh
-                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
-                    }
-                    save_trade(_attach_fill_prices(trade_entry, result))
-                    actions.append("TIME_STOP_CLOSE")
-                    if al:
-                        al.alert_trade_executed(trade_entry)
-                    continue  # Position ist zu, Rest skippen
-                else:
-                    _log_close_failure("TIME_STOP_CLOSE", p, al,
-                                       extra={"age_days": round(age_days, 2)})
-                    # WICHTIG: KEIN continue — naechster Zyklus versucht erneut,
-                    # aber innerhalb dieses Zyklus nicht noch SL/TP drueberlegen.
-
-        # --- Profit-Locking: Partial Close (TP-Tranchen) ---
-        lev_cfg = config.get("leverage", {})
-        tp_tranches = lev_cfg.get("tp_tranches", [])
-        if tp_tranches and p["pnl_pct"] > 0:
-            partial_state = load_json("partial_close_state.json") or {}
-            pid_key = str(p["position_id"])
-            triggered_tranches = partial_state.get(pid_key, {}).get("triggered", [])
-
-            for tranche_idx, tranche in enumerate(tp_tranches):
-                target_pct = tranche.get("profit_target_pct", 0)
-                close_pct = tranche.get("pct_of_position", 0)
-
-                if tranche_idx in triggered_tranches:
-                    continue  # Diese Tranche wurde bereits ausgeloest
-
-                if p["pnl_pct"] >= target_pct:
-                    close_amount = round(p["invested"] * close_pct / 100, 2)
-                    if close_amount >= 1:
-                        log.info(f"  PARTIAL_CLOSE: Position {p['position_id']} "
-                                 f"(Instrument {p['instrument_id']}) — "
-                                 f"Tranche {tranche_idx+1}: {close_pct}% bei +{target_pct}% "
-                                 f"(PnL: {p['pnl_pct']:+.1f}%, Betrag: ${close_amount:,.2f})")
-
-                        # Berechne neue kumulierte Summe (noch nicht persistiert!)
-                        prev_total = partial_state.get(pid_key, {}).get("total_closed_pct", 0)
-                        new_total = prev_total + close_pct
-                        # v37dt Audit#2: close_pct ist %-vom-ORIGINAL, partial_close rechnet
-                        # aber %-vom-REST -> auf Rest-Prozent umrechnen, damit real close_pct%
-                        # der ORIGINAL-Position geschlossen wird (sonst schrumpfen die
-                        # Zwischen-Tranchen geometrisch -> zu wenig Profit-Locking + falsche
-                        # Betraege in trade_history). Finale Tranche geht eh ueber new_total>=100
-                        # in close_position (kompletter Rest).
-                        _remaining_frac = max(1e-6, (100.0 - prev_total) / 100.0)
-                        effective_pct = min(100.0, close_pct / _remaining_frac)
-
-                        # v37h Tab-Audit-Day-2 (12.05.2026): bei IBKR jetzt
-                        # ECHTER partial_close statt nur Log-Signal! eToro-
-                        # Fallback bleibt fuer Legacy-Pfad. Bei kumuliert
-                        # >=100% nutzen wir close_position() (komplett raus),
-                        # sonst partial_close(close_pct) (Teil-Schliessung).
-                        action_kind = None
-                        if new_total >= 100:
-                            log.info(f"  PROFIT_LOCK_CLOSE: Alle Tranchen erreicht "
-                                     f"({new_total}%) — schliesse Position komplett")
-                            result = _close_position_safe(client, p["position_id"], p["instrument_id"], "PROFIT_LOCK")
-                            if _is_skipped_idempotent(result):
-                                continue
-                            trade_status = _trade_status_from_result(result) if result else "failed"
-                            action_kind = "PROFIT_LOCK_CLOSE"
-                            if not result:
-                                log.warning(f"  PROFIT_LOCK_CLOSE FEHLGESCHLAGEN — "
-                                            f"Tranche wird NICHT als erledigt markiert")
-                        elif hasattr(client, "partial_close"):
-                            # IBKR-Pfad: echter Teil-Verkauf via partial_close
-                            # v37h+2 (Q3-16, 15.05.2026): nutzt _partial_close_safe
-                            # Wrapper statt direkten Call — _check_close_idempotent
-                            # verhindert doppelte Tranchen-Close-Orders.
-                            try:
-                                result = _partial_close_safe(
-                                    client, p["position_id"], effective_pct,
-                                    p["instrument_id"], "PARTIAL_CLOSE",
-                                )
-                            except Exception as e:
-                                log.error(f"  PARTIAL_CLOSE Exception: {e}")
-                                result = None
-                            if _is_skipped_idempotent(result):
-                                # Anti-Loop: vorheriger Versuch ist noch pending,
-                                # Tranche NICHT als verbraucht markieren
-                                log.info(f"  PARTIAL_CLOSE skip (idempotent): "
-                                         f"Tranche {tranche_idx+1} wartet auf "
-                                         f"pending close-Resolution")
-                                continue
-                            if result and result.get("_unsupported"):
-                                # eToro-Fallback: nur Signal loggen
-                                log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} "
-                                         f"erreicht (Broker unterstuetzt kein partial-close — "
-                                         f"kumuliert {new_total}%)")
-                                trade_status = "signal_logged"
-                                result = True
-                                action_kind = "PARTIAL_SIGNAL"
-                            elif result and result.get("_skipped_too_small"):
-                                log.info(f"  PARTIAL_CLOSE skipped (qty too small): "
-                                         f"Tranche {tranche_idx+1}, full_qty="
-                                         f"{result.get('_full_qty')}, pct={close_pct}")
-                                trade_status = "skipped_small"
-                                action_kind = "PARTIAL_SKIP"
-                            elif result and result.get("_already_closed"):
-                                log.info(f"  PARTIAL_CLOSE skip: Position bereits geschlossen")
-                                trade_status = "already_closed"
-                                action_kind = "PARTIAL_SKIP"
-                            elif result:
-                                # Echter partial-close erfolgreich
-                                close_qty = result.get("_close_qty", "?")
-                                remaining = result.get("_remaining_qty", "?")
-                                log.info(f"  PARTIAL_CLOSE OK: {close_qty} shares "
-                                         f"verkauft, {remaining} bleiben (Tranche "
-                                         f"{tranche_idx+1}, kumuliert {new_total}%)")
-                                trade_status = _trade_status_from_result(result)
-                                action_kind = "PARTIAL_CLOSE"
-                            else:
-                                # v37h Pushover-Eskalation: nutze _log_close_failure
-                                # statt nur Warning. Bringt: ERROR-Log + Trade-History-
-                                # Persist mit _FAILED-Suffix + Pushover als WARNING-
-                                # Level via alerts_mod.alert_trade_executed. Wichtig
-                                # weil PARTIAL_CLOSE_FAILED = Real-Money-Risiko
-                                # (Tranche blockt sich selbst, Position bleibt offen
-                                # mit zu wenig Profit-Locking).
-                                _log_close_failure("PARTIAL_CLOSE", p, al, extra={
-                                    "tranche_index": tranche_idx,
-                                    "tranche_close_pct": close_pct,
-                                    "tranche_target_pct": target_pct,
-                                    "total_closed_pct": new_total,
-                                    "reason": "client.partial_close returnte falsy/None",
-                                })
-                                trade_status = "failed"
-                                action_kind = "PARTIAL_CLOSE_FAILED"
-                        else:
-                            # Legacy-Pfad (eToro-Client ohne partial_close-Methode)
-                            log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} erreicht "
-                                     f"(legacy: kumuliert {new_total}%)")
-                            trade_status = "signal_logged"
-                            result = True
-                            action_kind = "PARTIAL_SIGNAL"
-
-                        # Tranche NUR bei Erfolg/Signal als ausgeloest markieren
-                        # (bei API-Fehler/Skip bleibt Tranche offen fuer naechsten Zyklus)
-                        tranche_consumed = (
-                            action_kind in ("PROFIT_LOCK_CLOSE", "PARTIAL_CLOSE", "PARTIAL_SIGNAL")
-                            and result is not None and result is not False
+            # Earnings-Exit-Filter (v37v): vor allen anderen Checks
+            # — wenn Earnings naht und Risk-Profil triggert, sofort schliessen.
+            if check_earnings_exit is not None and portfolio_value_usd > 0:
+                sym = pos.get("symbol")
+                if sym:
+                    try:
+                        pos_value = float(pos.get("amount", 0) or p.get("invested", 0))
+                        should_exit, reason = check_earnings_exit(
+                            sym, pos_value, portfolio_value_usd, config,
                         )
-                        if tranche_consumed:
-                            if pid_key not in partial_state:
-                                partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
-                            partial_state[pid_key]["triggered"].append(tranche_idx)
-                            partial_state[pid_key]["total_closed_pct"] = new_total
-                            save_json("partial_close_state.json", partial_state)
+                        # v37aa: Duplicate-Prevention. Heute morgen 30.04. wurden zwei
+                        # EARNINGS_BLACKOUT_CLOSE fuer ROKU geschrieben (09:10 + 10:21
+                        # CEST), weil close_position() submitted aber IBKR erst Pre-
+                        # Market fillt. Naechster Cycle sieht Position immer noch open
+                        # -> Filter triggered erneut. Skip wenn bereits in den letzten
+                        # N Stunden ein EARNINGS_BLACKOUT_CLOSE fuer dieses Symbol da war.
+                        if should_exit and _has_recent_earnings_close(sym, hours=24):
+                            log.info(f"  EARNINGS-EXIT skip {sym}: bereits in den "
+                                     f"letzten 24h geschlossen (vermeidet Duplikat)")
+                            should_exit = False
+                        if should_exit:
+                            log.warning(f"  EARNINGS-EXIT: {sym} — {reason}")
+                            result = _close_position_safe(
+                                client, p["position_id"], p.get("instrument_id"),
+                                "EARNINGS-EXIT")
+                            if _is_skipped_idempotent(result):
+                                continue
+                            if _is_already_closed(result):
+                                log.info(f"  EARNINGS-EXIT skip {sym}: bei IBKR bereits "
+                                         f"geschlossen (stale Bot-Cache)")
+                                continue
+                            if result:
+                                trade_entry = {
+                                    "timestamp": datetime.now().isoformat(),
+                                    "action": "EARNINGS_BLACKOUT_CLOSE",
+                                    "symbol": sym,
+                                    "instrument_id": p["instrument_id"],
+                                    "position_id": p["position_id"],
+                                    "pnl_pct": p["pnl_pct"],
+                                    "pnl_usd": p["pnl"],
+                                    "leverage": p["leverage"],
+                                    "earnings_reason": reason,
+                                    "status": _trade_status_from_result(result),  # v37dh
+                                    "ibkr_status_raw": _ibkr_status_raw_from_result(result),
+                                }
+                                save_trade(_attach_fill_prices(trade_entry, result))
+                                actions.append("EARNINGS_BLACKOUT_CLOSE")
+                                if al:
+                                    al.alert_trade_executed(trade_entry)
+                                continue  # Position zu, naechste Pruefung skippen
+                            else:
+                                _log_close_failure("EARNINGS_BLACKOUT_CLOSE", p, al,
+                                                   extra={"earnings_reason": reason})
+                                # Kein continue — bei Close-Failure den Rest weiterpruefen
+                    except Exception as e:
+                        # R-B54 (Audit F3): war log.debug — wirft die Pruefung
+                        # dauerhaft (z.B. API-Schema-Aenderung), ist der Earnings-
+                        # Blackout-Schutz KOMPLETT still deaktiviert (E6-Klasse).
+                        _EARNINGS_CHECK_FAILS["streak"] += 1
+                        streak = _EARNINGS_CHECK_FAILS["streak"]
+                        log.error(f"Earnings-Exit-Check {sym} fehlgeschlagen "
+                                  f"(Streak {streak}): {e}")
+                        # Streak zaehlt pro Position (bis ~15/Zyklus): erster Alert
+                        # bei 3, danach ca. alle 6h (288 ≈ 15 Pos × 12 Zyklen/h × 1.6h).
+                        if streak == 3 or streak % 288 == 0:
+                            try:
+                                from app.alerts import send_alert
+                                send_alert(
+                                    f"Earnings-Blackout-Pruefung schlaegt wiederholt "
+                                    f"fehl (Streak {streak}, zuletzt {sym}: {e}) — "
+                                    "der Earnings-Exit-Schutz ist womoeglich blind.",
+                                    level="ERROR", config=config)
+                            except Exception as alert_err:
+                                log.error(f"Earnings-Alert fehlgeschlagen: {alert_err}")
+                    else:
+                        _EARNINGS_CHECK_FAILS["streak"] = 0
 
+            # Market-Hours Guard
+            if is_asset_class_tradeable is not None:
+                asset_class = _lookup_asset_class(p.get("instrument_id"))
+                if not is_asset_class_tradeable(asset_class):
+                    if asset_class not in skipped_off_hours:
+                        log.info(
+                            f"  Markt geschlossen fuer Klasse '{asset_class}' — "
+                            f"SL/TP-Checks fuer betroffene Positionen werden uebersprungen "
+                            f"(Position bleibt offen, retry zum naechsten RTH-Open)."
+                        )
+                        skipped_off_hours.add(asset_class)
+                    continue
+
+            # Trailing SL: Fallback current_price aus PnL + entry_price berechnen
+            if not p.get("current_price") and p.get("entry_price") and p["invested"] > 0:
+                # current_price = entry_price * (1 + pnl_pct/100)
+                p["current_price"] = round(p["entry_price"] * (1 + p["pnl_pct"] / 100), 6)
+            if not p.get("entry_price") and p.get("current_price") and p["invested"] > 0 and p["pnl_pct"] != 0:
+                # entry_price = current_price / (1 + pnl_pct/100)
+                p["entry_price"] = round(p["current_price"] / (1 + p["pnl_pct"] / 100), 6)
+
+            # Trailing SL Update + Trigger Check
+            if lm and p.get("current_price"):
+                lm.update_trailing_stop_loss(
+                    p["position_id"], p["current_price"], p.get("entry_price", p["current_price"]),
+                    p["leverage"], config)
+
+                # Pruefe ob Trailing SL ausgeloest wurde
+                triggered = lm.check_trailing_stop_losses([{
+                    "position_id": p["position_id"],
+                    "instrument_id": p["instrument_id"],
+                    "current_price": p["current_price"],
+                }])
+                if triggered:
+                    result = _close_position_safe(client, p["position_id"], p["instrument_id"], "TRAILING-SL")
+                    if _is_skipped_idempotent(result):
+                        continue
+                    if _is_already_closed(result):
+                        log.info(f"  TRAILING-SL skip {p['instrument_id']}: bei IBKR bereits "
+                                 f"geschlossen (stale Bot-Cache)")
+                        continue
+                    if result:
                         trade_entry = {
                             "timestamp": datetime.now().isoformat(),
-                            "action": action_kind,
+                            "action": "TRAILING_SL_CLOSE",
+                            "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
                             "instrument_id": p["instrument_id"],
                             "position_id": p["position_id"],
                             "pnl_pct": p["pnl_pct"],
-                            "pnl_usd": round(p["pnl"] * close_pct / 100, 2),
+                            "pnl_usd": p["pnl"],
                             "leverage": p["leverage"],
-                            "tranche_index": tranche_idx,
-                            "tranche_close_pct": close_pct,
-                            "tranche_target_pct": target_pct,
-                            "close_amount_usd": close_amount,
-                            "total_closed_pct": new_total,
-                            "status": trade_status,
+                            "trailing_sl_level": triggered[0]["sl_level"],
+                            "status": _trade_status_from_result(result),  # v37dh
+                            "ibkr_status_raw": _ibkr_status_raw_from_result(result),
                         }
                         save_trade(_attach_fill_prices(trade_entry, result))
-                        actions.append(action_kind)
-
-                        # Bei voller Schliessung: Rest der Tranchen-Pruefung ueberspringen
-                        if new_total >= 100 and result:
-                            break
-
-                        # v37h: alert_trade_executed nur bei Erfolg-Pfaden senden.
-                        # PARTIAL_CLOSE_FAILED ruft schon _log_close_failure auf
-                        # (ERROR-Alert via WARNING-Level) — kein Doppel-Push.
-                        # PARTIAL_SKIP ist ein "saubere Skip", kein Alert noetig.
-                        if al and action_kind in ("PROFIT_LOCK_CLOSE", "PARTIAL_CLOSE", "PARTIAL_SIGNAL"):
+                        actions.append("TRAILING_SL_CLOSE")
+                        if al:
                             al.alert_trade_executed(trade_entry)
+                    else:
+                        _log_close_failure("TRAILING_SL_CLOSE", p, al,
+                                           extra={"trailing_sl_level": triggered[0]["sl_level"]})
+                    continue  # Trailing SL hat Prioritaet, Skip fixed SL/TP
 
-        # Stop-Loss Check
-        if p["pnl_pct"] <= sl_pct:
-            log.warning(f"  STOP-LOSS: Position {p['position_id']} "
-                        f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
-            result = _close_position_safe(client, p["position_id"], p["instrument_id"], "STOP-LOSS")
-            if _is_skipped_idempotent(result):
-                continue  # Anti-Loop-Skip, naechster Position pruefen
-            if _is_already_closed(result):
-                log.info(f"  STOP-LOSS skip {p['instrument_id']}: bei IBKR bereits "
-                         f"geschlossen (stale Bot-Cache)")
-            elif result:
-                trade_entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "action": "STOP_LOSS_CLOSE",
-                    "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
-                    "instrument_id": p["instrument_id"],
-                    "position_id": p["position_id"],
-                    "pnl_pct": p["pnl_pct"],
-                    "pnl_usd": p["pnl"],
-                    "leverage": p["leverage"],
-                    "status": _trade_status_from_result(result),  # v37dh
-                    "ibkr_status_raw": _ibkr_status_raw_from_result(result),
-                }
-                save_trade(_attach_fill_prices(trade_entry, result))
-                actions.append("STOP_LOSS_CLOSE")
-                if al:
-                    al.alert_trade_executed(trade_entry)
-            else:
-                _log_close_failure("STOP_LOSS_CLOSE", p, al)
+            # --- v12: Time-Stop / Staleness Exit ---
+            # Schliesst Positionen die zu lange "stuck" sind und kaum P/L generieren.
+            # Opportunitaetskosten-Schutz: gebundenes Kapital waere woanders besser.
+            if ts_enabled:
+                _, age_days = _find_position_open_time(
+                    p["position_id"], p.get("open_time"), symbol=p.get("symbol"))
+                if age_days is not None and age_days >= ts_max_days \
+                        and age_days >= ts_min_days \
+                        and abs(p["pnl_pct"]) < ts_stale_thr:
+                    log.info(f"  TIME_STOP: Position {p['position_id']} "
+                             f"(Instrument {p['instrument_id']}) — "
+                             f"{age_days:.1f}d offen, PnL {p['pnl_pct']:+.2f}% < {ts_stale_thr}%")
+                    # v37h+2 (Q3-11, 15.05.2026): TIME_STOP nutzt jetzt
+                    # _close_position_safe statt direktem close_position-Call.
+                    # Vorher: kein _check_close_idempotent / pending_closes-Tracker
+                    # -> bei langsamem Fill (off-hours, partial) feuerte Time-Stop
+                    # alle 5 Min eine neue Close-Order. Gleicher Anti-Loop-Bug-
+                    # Pattern wie BA/CPER vom 04.05.
+                    result = _close_position_safe(
+                        client, p["position_id"], p["instrument_id"], "TIME-STOP")
+                    if _is_skipped_idempotent(result):
+                        continue  # Anti-Loop-Skip
+                    if _is_already_closed(result):
+                        log.info(f"  TIME_STOP skip {p['instrument_id']}: bei IBKR bereits "
+                                 f"geschlossen (stale Bot-Cache)")
+                        continue
+                    if result:
+                        trade_entry = {
+                            "timestamp": datetime.now().isoformat(),
+                            "action": "TIME_STOP_CLOSE",
+                            "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
+                            "instrument_id": p["instrument_id"],
+                            "position_id": p["position_id"],
+                            "pnl_pct": p["pnl_pct"],
+                            "pnl_usd": p["pnl"],
+                            "leverage": p["leverage"],
+                            "age_days": round(age_days, 2),
+                            "status": _trade_status_from_result(result),  # v37dh
+                            "ibkr_status_raw": _ibkr_status_raw_from_result(result),
+                        }
+                        save_trade(_attach_fill_prices(trade_entry, result))
+                        actions.append("TIME_STOP_CLOSE")
+                        if al:
+                            al.alert_trade_executed(trade_entry)
+                        continue  # Position ist zu, Rest skippen
+                    else:
+                        _log_close_failure("TIME_STOP_CLOSE", p, al,
+                                           extra={"age_days": round(age_days, 2)})
+                        # WICHTIG: KEIN continue — naechster Zyklus versucht erneut,
+                        # aber innerhalb dieses Zyklus nicht noch SL/TP drueberlegen.
 
-        # Take-Profit Check (nur fuer verbleibende Position nach Partial Closes)
-        elif p["pnl_pct"] >= tp_pct:
-            partial_state_tp = load_json("partial_close_state.json") or {}
-            pid_tp_key = str(p["position_id"])
-            closed_pct_total = partial_state_tp.get(pid_tp_key, {}).get("total_closed_pct", 0)
-            remaining_label = f" (Rest nach {closed_pct_total}% Partial Close)" if closed_pct_total > 0 else ""
-            log.info(f"  TAKE-PROFIT: Position {p['position_id']} "
-                     f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%{remaining_label}")
-            result = _close_position_safe(client, p["position_id"], p["instrument_id"], "TAKE-PROFIT")
-            if _is_skipped_idempotent(result):
-                continue
-            if _is_already_closed(result):
-                log.info(f"  TAKE-PROFIT skip {p['instrument_id']}: bei IBKR bereits "
-                         f"geschlossen (stale Bot-Cache)")
-            elif result:
-                trade_entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "action": "TAKE_PROFIT_CLOSE",
-                    "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
-                    "instrument_id": p["instrument_id"],
-                    "position_id": p["position_id"],
-                    "pnl_pct": p["pnl_pct"],
-                    "pnl_usd": p["pnl"],
-                    "leverage": p["leverage"],
-                    "status": _trade_status_from_result(result),  # v37dh
-                    "ibkr_status_raw": _ibkr_status_raw_from_result(result),
-                }
-                save_trade(_attach_fill_prices(trade_entry, result))
-                actions.append("TAKE_PROFIT_CLOSE")
-                if al:
-                    al.alert_trade_executed(trade_entry)
-            else:
-                _log_close_failure("TAKE_PROFIT_CLOSE", p, al)
+            # --- Profit-Locking: Partial Close (TP-Tranchen) ---
+            lev_cfg = config.get("leverage", {})
+            tp_tranches = lev_cfg.get("tp_tranches", [])
+            if tp_tranches and p["pnl_pct"] > 0:
+                partial_state = load_json("partial_close_state.json") or {}
+                pid_key = str(p["position_id"])
+                triggered_tranches = partial_state.get(pid_key, {}).get("triggered", [])
 
+                for tranche_idx, tranche in enumerate(tp_tranches):
+                    target_pct = tranche.get("profit_target_pct", 0)
+                    close_pct = tranche.get("pct_of_position", 0)
+
+                    if tranche_idx in triggered_tranches:
+                        continue  # Diese Tranche wurde bereits ausgeloest
+
+                    if p["pnl_pct"] >= target_pct:
+                        close_amount = round(p["invested"] * close_pct / 100, 2)
+                        if close_amount >= 1:
+                            log.info(f"  PARTIAL_CLOSE: Position {p['position_id']} "
+                                     f"(Instrument {p['instrument_id']}) — "
+                                     f"Tranche {tranche_idx+1}: {close_pct}% bei +{target_pct}% "
+                                     f"(PnL: {p['pnl_pct']:+.1f}%, Betrag: ${close_amount:,.2f})")
+
+                            # Berechne neue kumulierte Summe (noch nicht persistiert!)
+                            prev_total = partial_state.get(pid_key, {}).get("total_closed_pct", 0)
+                            new_total = prev_total + close_pct
+                            # v37dt Audit#2: close_pct ist %-vom-ORIGINAL, partial_close rechnet
+                            # aber %-vom-REST -> auf Rest-Prozent umrechnen, damit real close_pct%
+                            # der ORIGINAL-Position geschlossen wird (sonst schrumpfen die
+                            # Zwischen-Tranchen geometrisch -> zu wenig Profit-Locking + falsche
+                            # Betraege in trade_history). Finale Tranche geht eh ueber new_total>=100
+                            # in close_position (kompletter Rest).
+                            _remaining_frac = max(1e-6, (100.0 - prev_total) / 100.0)
+                            effective_pct = min(100.0, close_pct / _remaining_frac)
+
+                            # v37h Tab-Audit-Day-2 (12.05.2026): bei IBKR jetzt
+                            # ECHTER partial_close statt nur Log-Signal! eToro-
+                            # Fallback bleibt fuer Legacy-Pfad. Bei kumuliert
+                            # >=100% nutzen wir close_position() (komplett raus),
+                            # sonst partial_close(close_pct) (Teil-Schliessung).
+                            action_kind = None
+                            if new_total >= 100:
+                                log.info(f"  PROFIT_LOCK_CLOSE: Alle Tranchen erreicht "
+                                         f"({new_total}%) — schliesse Position komplett")
+                                result = _close_position_safe(client, p["position_id"], p["instrument_id"], "PROFIT_LOCK")
+                                if _is_skipped_idempotent(result):
+                                    continue
+                                trade_status = _trade_status_from_result(result) if result else "failed"
+                                action_kind = "PROFIT_LOCK_CLOSE"
+                                if not result:
+                                    log.warning(f"  PROFIT_LOCK_CLOSE FEHLGESCHLAGEN — "
+                                                f"Tranche wird NICHT als erledigt markiert")
+                            elif hasattr(client, "partial_close"):
+                                # IBKR-Pfad: echter Teil-Verkauf via partial_close
+                                # v37h+2 (Q3-16, 15.05.2026): nutzt _partial_close_safe
+                                # Wrapper statt direkten Call — _check_close_idempotent
+                                # verhindert doppelte Tranchen-Close-Orders.
+                                try:
+                                    result = _partial_close_safe(
+                                        client, p["position_id"], effective_pct,
+                                        p["instrument_id"], "PARTIAL_CLOSE",
+                                    )
+                                except Exception as e:
+                                    log.error(f"  PARTIAL_CLOSE Exception: {e}")
+                                    result = None
+                                if _is_skipped_idempotent(result):
+                                    # Anti-Loop: vorheriger Versuch ist noch pending,
+                                    # Tranche NICHT als verbraucht markieren
+                                    log.info(f"  PARTIAL_CLOSE skip (idempotent): "
+                                             f"Tranche {tranche_idx+1} wartet auf "
+                                             f"pending close-Resolution")
+                                    continue
+                                if result and result.get("_unsupported"):
+                                    # eToro-Fallback: nur Signal loggen
+                                    log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} "
+                                             f"erreicht (Broker unterstuetzt kein partial-close — "
+                                             f"kumuliert {new_total}%)")
+                                    trade_status = "signal_logged"
+                                    result = True
+                                    action_kind = "PARTIAL_SIGNAL"
+                                elif result and result.get("_skipped_too_small"):
+                                    log.info(f"  PARTIAL_CLOSE skipped (qty too small): "
+                                             f"Tranche {tranche_idx+1}, full_qty="
+                                             f"{result.get('_full_qty')}, pct={close_pct}")
+                                    trade_status = "skipped_small"
+                                    action_kind = "PARTIAL_SKIP"
+                                elif result and result.get("_already_closed"):
+                                    log.info(f"  PARTIAL_CLOSE skip: Position bereits geschlossen")
+                                    trade_status = "already_closed"
+                                    action_kind = "PARTIAL_SKIP"
+                                elif result:
+                                    # Echter partial-close erfolgreich
+                                    close_qty = result.get("_close_qty", "?")
+                                    remaining = result.get("_remaining_qty", "?")
+                                    log.info(f"  PARTIAL_CLOSE OK: {close_qty} shares "
+                                             f"verkauft, {remaining} bleiben (Tranche "
+                                             f"{tranche_idx+1}, kumuliert {new_total}%)")
+                                    trade_status = _trade_status_from_result(result)
+                                    action_kind = "PARTIAL_CLOSE"
+                                else:
+                                    # v37h Pushover-Eskalation: nutze _log_close_failure
+                                    # statt nur Warning. Bringt: ERROR-Log + Trade-History-
+                                    # Persist mit _FAILED-Suffix + Pushover als WARNING-
+                                    # Level via alerts_mod.alert_trade_executed. Wichtig
+                                    # weil PARTIAL_CLOSE_FAILED = Real-Money-Risiko
+                                    # (Tranche blockt sich selbst, Position bleibt offen
+                                    # mit zu wenig Profit-Locking).
+                                    _log_close_failure("PARTIAL_CLOSE", p, al, extra={
+                                        "tranche_index": tranche_idx,
+                                        "tranche_close_pct": close_pct,
+                                        "tranche_target_pct": target_pct,
+                                        "total_closed_pct": new_total,
+                                        "reason": "client.partial_close returnte falsy/None",
+                                    })
+                                    trade_status = "failed"
+                                    action_kind = "PARTIAL_CLOSE_FAILED"
+                            else:
+                                # Legacy-Pfad (eToro-Client ohne partial_close-Methode)
+                                log.info(f"  PARTIAL_SIGNAL: Tranche {tranche_idx+1} erreicht "
+                                         f"(legacy: kumuliert {new_total}%)")
+                                trade_status = "signal_logged"
+                                result = True
+                                action_kind = "PARTIAL_SIGNAL"
+
+                            # Tranche NUR bei Erfolg/Signal als ausgeloest markieren
+                            # (bei API-Fehler/Skip bleibt Tranche offen fuer naechsten Zyklus)
+                            tranche_consumed = (
+                                action_kind in ("PROFIT_LOCK_CLOSE", "PARTIAL_CLOSE", "PARTIAL_SIGNAL")
+                                and result is not None and result is not False
+                            )
+                            if tranche_consumed:
+                                if pid_key not in partial_state:
+                                    partial_state[pid_key] = {"triggered": [], "total_closed_pct": 0}
+                                partial_state[pid_key]["triggered"].append(tranche_idx)
+                                partial_state[pid_key]["total_closed_pct"] = new_total
+                                save_json("partial_close_state.json", partial_state)
+
+                            trade_entry = {
+                                "timestamp": datetime.now().isoformat(),
+                                "action": action_kind,
+                                "instrument_id": p["instrument_id"],
+                                "position_id": p["position_id"],
+                                "pnl_pct": p["pnl_pct"],
+                                "pnl_usd": round(p["pnl"] * close_pct / 100, 2),
+                                "leverage": p["leverage"],
+                                "tranche_index": tranche_idx,
+                                "tranche_close_pct": close_pct,
+                                "tranche_target_pct": target_pct,
+                                "close_amount_usd": close_amount,
+                                "total_closed_pct": new_total,
+                                "status": trade_status,
+                            }
+                            save_trade(_attach_fill_prices(trade_entry, result))
+                            actions.append(action_kind)
+
+                            # Bei voller Schliessung: Rest der Tranchen-Pruefung ueberspringen
+                            if new_total >= 100 and result:
+                                break
+
+                            # v37h: alert_trade_executed nur bei Erfolg-Pfaden senden.
+                            # PARTIAL_CLOSE_FAILED ruft schon _log_close_failure auf
+                            # (ERROR-Alert via WARNING-Level) — kein Doppel-Push.
+                            # PARTIAL_SKIP ist ein "saubere Skip", kein Alert noetig.
+                            if al and action_kind in ("PROFIT_LOCK_CLOSE", "PARTIAL_CLOSE", "PARTIAL_SIGNAL"):
+                                al.alert_trade_executed(trade_entry)
+
+            # Stop-Loss Check
+            if p["pnl_pct"] <= sl_pct:
+                log.warning(f"  STOP-LOSS: Position {p['position_id']} "
+                            f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%")
+                result = _close_position_safe(client, p["position_id"], p["instrument_id"], "STOP-LOSS")
+                if _is_skipped_idempotent(result):
+                    continue  # Anti-Loop-Skip, naechster Position pruefen
+                if _is_already_closed(result):
+                    log.info(f"  STOP-LOSS skip {p['instrument_id']}: bei IBKR bereits "
+                             f"geschlossen (stale Bot-Cache)")
+                elif result:
+                    trade_entry = {
+                        "timestamp": datetime.now().isoformat(),
+                        "action": "STOP_LOSS_CLOSE",
+                        "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
+                        "instrument_id": p["instrument_id"],
+                        "position_id": p["position_id"],
+                        "pnl_pct": p["pnl_pct"],
+                        "pnl_usd": p["pnl"],
+                        "leverage": p["leverage"],
+                        "status": _trade_status_from_result(result),  # v37dh
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
+                    }
+                    save_trade(_attach_fill_prices(trade_entry, result))
+                    actions.append("STOP_LOSS_CLOSE")
+                    if al:
+                        al.alert_trade_executed(trade_entry)
+                else:
+                    _log_close_failure("STOP_LOSS_CLOSE", p, al)
+
+            # Take-Profit Check (nur fuer verbleibende Position nach Partial Closes)
+            elif p["pnl_pct"] >= tp_pct:
+                partial_state_tp = load_json("partial_close_state.json") or {}
+                pid_tp_key = str(p["position_id"])
+                closed_pct_total = partial_state_tp.get(pid_tp_key, {}).get("total_closed_pct", 0)
+                remaining_label = f" (Rest nach {closed_pct_total}% Partial Close)" if closed_pct_total > 0 else ""
+                log.info(f"  TAKE-PROFIT: Position {p['position_id']} "
+                         f"(Instrument {p['instrument_id']}) bei {p['pnl_pct']:+.1f}%{remaining_label}")
+                result = _close_position_safe(client, p["position_id"], p["instrument_id"], "TAKE-PROFIT")
+                if _is_skipped_idempotent(result):
+                    continue
+                if _is_already_closed(result):
+                    log.info(f"  TAKE-PROFIT skip {p['instrument_id']}: bei IBKR bereits "
+                             f"geschlossen (stale Bot-Cache)")
+                elif result:
+                    trade_entry = {
+                        "timestamp": datetime.now().isoformat(),
+                        "action": "TAKE_PROFIT_CLOSE",
+                        "symbol": p.get("symbol"),  # Q3-15: fuer Reports/Filter
+                        "instrument_id": p["instrument_id"],
+                        "position_id": p["position_id"],
+                        "pnl_pct": p["pnl_pct"],
+                        "pnl_usd": p["pnl"],
+                        "leverage": p["leverage"],
+                        "status": _trade_status_from_result(result),  # v37dh
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
+                    }
+                    save_trade(_attach_fill_prices(trade_entry, result))
+                    actions.append("TAKE_PROFIT_CLOSE")
+                    if al:
+                        al.alert_trade_executed(trade_entry)
+                else:
+                    _log_close_failure("TAKE_PROFIT_CLOSE", p, al)
+
+        except Exception as e:
+            # R-B55c (Audit-Strukturhinweis): Per-Position-Isolation.
+            # Vorher riss ein deterministischer Fehler bei Position k die
+            # Exits ALLER Folgepositionen jeden Zyklus mit (E6-Fehlerklasse)
+            # und der Scheduler fing das nur mit log.error — ohne Alert.
+            _sym = "?"
+            try:
+                _sym = (pos.get("symbol") or pos.get("instrument_id") or "?")
+            except Exception:
+                pass
+            _EXIT_LOOP_FAILS["streak"] += 1
+            _streak = _EXIT_LOOP_FAILS["streak"]
+            log.error(f"Exit-Pruefung fuer Position {_sym} gecrasht "
+                      f"(Streak {_streak}) — restliche Positionen laufen weiter: {e}")
+            if _streak == 3 or _streak % 144 == 0:
+                try:
+                    from app.alerts import send_alert
+                    send_alert(
+                        f"Exit-Pruefung crasht wiederholt (Streak {_streak}, "
+                        f"zuletzt {_sym}: {e}) — SL/TP/Trailing fuer betroffene "
+                        "Positionen laufen NICHT.",
+                        level="ERROR", config=config)
+                except Exception as alert_err:
+                    log.error(f"Exit-Loop-Alert fehlgeschlagen: {alert_err}")
+            continue
     # Partial-Close State bereinigen fuer geschlossene Positionen
     _cleanup_partial_close_state(portfolio)
 
