@@ -36,3 +36,27 @@ eine Illusion weniger.
 ## Entscheidungs-Sequenz
 Test-Ergebnis -> Carlos. Einbau = Motor-Aenderung = Uhr-Reset (expliziter
 Carlos-Entscheid) ODER parken als belegter Kandidat fuer die 80.
+
+---
+
+# ERGEBNIS — 27.08.2026, ~00:15 (gerechnet in derselben Nacht)
+
+Datenbasis: 6'116 Open-Market-Kaeufe / 292 Symbole, SEC Form-345-Datasets
+2018Q3-2026Q2, FILING-Datum, ISO-normalisiert (data/insider_events_pit.json).
+
+| Kriterium | Messwert | Schwelle | Urteil |
+|---|---|---|---|
+| (a) Eigenstaendigkeit | Excess +0.003%/Mt, t=0.01 (89 Monate); Spearman-IC -0.005 (t=-0.7) | t >= 2.0 | **NICHT ERFUELLT** |
+| (b) Stack-Verbesserung | Komposit PF 1.63 / 2024+ 1.42; Tilt 1.60 / 1.42; Promotion 1.62 / 1.35 — Basis: 1.675 / 1.448 | beide besser | **NICHT ERFUELLT** (alle drei schlechter) |
+| (c) Risiko | MaxDD: Komposit -9.9%, Tilt -8.4%, Promotion -6.6% vs Basis -6.0% | nicht schlechter (+1pp) | Komposit/Tilt verletzt |
+
+**URTEIL NACH VORREGISTRIERTEN KRITERIEN: NEIN — das Insider-Signal wird
+NICHT eingebaut.** Insider-Cluster-Kaeufe prognostizieren in unserem
+Universum/Zeitraum schlicht nichts (t=0.01 ist Punktlandung auf Null), und
+jede Beimischung verduennt den funktionierenden 5er-Stack.
+
+BEWUSST KEIN Parameter-Fishing (andere Fenster/Schwellen nachschieben, bis
+etwas signifikant aussieht) — genau das verbietet die Vorregistrierung.
+Das PIT-Archiv bleibt bestehen (Quartals-Cron pflegt es) fuer kuenftige,
+NEU vorregistrierte Hypothesen. Dritter Methoden-Nein in Folge
+(Rank-Band, Exit-Geometrie, Insider): 0 CHF verloren, drei Illusionen weniger.
