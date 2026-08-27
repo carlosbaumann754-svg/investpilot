@@ -123,5 +123,7 @@ rechnet das Urteil in die Pushover-Meldung.
 
 0.48 stammte aus der Close-basierten Referenz, die der validierte
 OHLC-Simulator als +4pp/Trade optimistisch entlarvt hat (R-B63/64).
-Neue bindende Grenze bei n=50: **PF% < 0.41** (p05 der live-validierten
-Referenz). Gleiche Logik, ehrliche Latte. Wecker-Skript angepasst.
+Neue bindende Grenze bei n=50: **PF% < 0.31** (p01 der live-validierten
+Referenz — like-for-like zur urspruenglichen 1%%-Regel; ein Zwischenwert
+0.41 war faelschlich das p05 und wurde am selben Tag korrigiert, bevor je
+ein Check damit lief). Wecker-Skript angepasst.
