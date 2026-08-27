@@ -40,3 +40,18 @@ Reicht die Datenbasis nicht: EHRLICHER ABBRUCH mit Befund, kein Wackel-Test.
 Vier Tests diese Woche, bisher 3x NEIN. Erwartung fuer Motor 1: eher
 "solide Beta-Plus-Maschine" als "Alpha-Wunder" — auch das waere ein
 wertvolles Ergebnis (Beta-Modus-Motorisierung fuer den Widerlegungs-Fall).
+
+---
+
+# Nachtrag R-B64 (28.08.2026): OHLC-Simulator — vorregistrierte Bestehens-Kriterien
+
+Der Tagesschluss-Blindfleck ist belegt (R-B63: Bias +4.07pp/Trade, nur 14/25
+gleiche Exit-Gruende). Der OHLC-Simulator (Stops/Trailing auf Tages-Hoch/Tief,
+Gap-Behandlung ueber Open) gilt als VALIDIERT, wenn er die 25 Live-Paare
+reproduziert mit: (1) |Bias| <= 1.5pp, (2) mittlere |Abweichung| <= 3.0pp,
+(3) gleicher Exit-Grund >= 18/25. Erst NACH bestandener Probe zaehlt sein
+M0-vs-M2d-Vergleich; zusaetzlich liefert er die korrigierte Referenz-
+verteilung fuer den 50er-Futility-Check (Pflicht vor Ende September).
+Konventionen (fix): Entry am Tagesschluss; Gap-Open unter Stop -> Fill zum
+Open; Trailing-Trigger prueft gegen den Peak bis GESTERN (kein Selbst-Peak
+am selben Tag); Peak aus Tages-Hochs.
