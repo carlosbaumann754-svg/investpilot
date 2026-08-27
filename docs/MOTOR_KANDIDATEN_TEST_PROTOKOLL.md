@@ -55,3 +55,26 @@ verteilung fuer den 50er-Futility-Check (Pflicht vor Ende September).
 Konventionen (fix): Entry am Tagesschluss; Gap-Open unter Stop -> Fill zum
 Open; Trailing-Trigger prueft gegen den Peak bis GESTERN (kein Selbst-Peak
 am selben Tag); Peak aus Tages-Hochs.
+
+---
+
+# Nachtrag R-B65 (28.08.2026): M2a-Final-Feintest — vorregistrierte Zellen
+
+Carlos hat dem Wechsel-Paket zugestimmt ("also los bau das"), Risiko-Budget
+-20% (Pre-Commit: kein manueller Eingriff oberhalb des Budgets). VOR der
+Rechnung festgeschrieben — genau DIESE vier Zellen, keine weiteren:
+
+| Zelle | Konfig | Zweck |
+|---|---|---|
+| Z1 | H126 pur (= M2a) | Referenz |
+| Z2 | H126 + Disaster-Stop -35% (OHLC-intraday) | Schwarzer-Schwan-Versicherung: kostet sie was? |
+| Z3 | H126 + Disaster-Stop -40% | dito, tiefer |
+| Z4 | H126 pur, max. 5 Neukaeufe/Monat | Anlauf-Staffelung (Uebergangs-Modus) |
+
+AKZEPTANZ (vorab): Disaster-Stop (Z2/Z3) wird uebernommen, wenn er ggue.
+Z1 weniger als 0.05 Monats-Sharpe UND weniger als 1pp CAGR kostet — dann
+ist die Versicherung ~gratis und der E6-Broker-Mechanismus (VPS-Ausfall-
+Schutz!) bleibt erhalten, nur tiefer gelegt. Z4 ist informativ fuer den
+Uebergang, kein Selektionskriterium. Zusaetzlich werden aus der Sieger-
+Zelle die MONATS-Verteilungsbaender (p01/p05/p25/p50) extrahiert — sie
+werden die Live-Gates des M2a-Regelwerks.
