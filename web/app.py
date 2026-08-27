@@ -5589,44 +5589,50 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
             "status": "yellow", "detail": "Status nicht ladbar",
         })
 
-    # --- Gate #3: Kelly-Sweep auf IBKR-Daten ---
+    # --- Gate #3: Kelly auf dem AKTIVEN Motor validiert ---
     try:
-        # R-B43-Hotfix: eigener Import. Vorher lieh sich dieses Gate den
-        # load_json-Import aus dem try-Block des ALTEN Gate #2 — der R-B43-
-        # Umbau benannte ihn dort um (_lj2) und Gate #3 fiel mit NameError
-        # auf 'Status nicht ladbar'. Geteilter Scope zwischen Gates = Falle.
-        from app.config_manager import load_json as _lj3
-        kelly = _lj3("kelly_sweep_results.json") or {}
-        last_run = kelly.get("timestamp") if isinstance(kelly, dict) else None
-        if last_run:
-            try:
-                # v37cs (03.05.): Kelly-Sweep speichert Timestamp ohne TZ-Info
-                # ('2026-05-03T08:30:48.957429'). Vergleich mit tz-aware now()
-                # warf 'cant subtract offset-naive and offset-aware' Exception
-                # -> Fallback 'Datum unklar' obwohl Kelly heute morgen lief.
-                # Fix: parsed dt als UTC annehmen wenn keine TZ vorhanden.
-                parsed = _dt.fromisoformat(last_run.replace("Z","+00:00"))
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=_tz.utc)
-                age_days = (_dt.now(_tz.utc) - parsed).days
-                gates.append({
-                    "nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
-                    "status": "yellow" if age_days > 14 else "green",
-                    "detail": f"Letzter Sweep: {age_days}d alt — fuer Cutover sollte er <14d sein",
-                    "last_check": last_run,
-                })
-            except Exception as e:
-                gates.append({"nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
-                              "status": "yellow",
-                              "detail": f"Letzter Sweep vorhanden, Parse-Fehler: {type(e).__name__}"})
+        # R-B56 (27.08.2026, Zwischencheck-Tag): umgestellt von
+        # kelly_sweep_results.json (Alt-TA-Motor, eingefroren 16.07., Gate
+        # stand dauerhaft gelb) auf kelly_neu_motor.json (R-B39: Sharpe ist
+        # skaleninvariant ueber k -> k ist ein reiner Risiko-Regler; empfohlen
+        # = groesstes k, dessen MaxDD das 8%-Hard-Gate haelt).
+        # R-B43-Lektion bleibt: eigener Import, kein geteilter Gate-Scope.
+        from app.config_manager import load_json as _lj3, load_config as _lc3
+        kn = _lj3("kelly_neu_motor.json") or {}
+        rows = kn.get("ergebnisse") or []
+        empf = None
+        for _row in rows:
+            if isinstance(_row, dict) and _row.get("gate_ok"):
+                k_val = float(_row.get("k_pct", 0) or 0)
+                if empf is None or k_val > empf:
+                    empf = k_val
+        _cfg3 = _lc3() or {}
+        live_k = float(((_cfg3.get("kelly_sizing") or {}).get("max_fraction")
+                        or 0)) * 100
+        if empf is None:
+            gates.append({"nr": 3, "title": "Kelly auf aktivem Motor validiert",
+                          "status": "yellow",
+                          "detail": "kelly_neu_motor.json fehlt/leer — "
+                                    "Analyse (R-B39) vor Cutover neu rechnen"})
+        elif abs(live_k - empf) < 0.01:
+            gates.append({
+                "nr": 3, "title": "Kelly auf aktivem Motor validiert",
+                "status": "green",
+                "detail": (f"k={live_k:.0f}% = groesstes k mit MaxDD<8% "
+                           f"(R-B39, Neu-Motor-Fenster {kn.get('start', '?')}"
+                           f"..{kn.get('ende', '?')})"),
+                "last_check": kn.get("ende"),
+            })
         else:
             gates.append({
-                "nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
+                "nr": 3, "title": "Kelly auf aktivem Motor validiert",
                 "status": "yellow",
-                "detail": "Geplant W2 (04.-10.05.) — Hard-Gate fuer Cutover",
+                "detail": (f"Live k={live_k:.1f}% weicht vom validierten "
+                           f"k={empf:.0f}% ab — bewusst entscheiden oder "
+                           "angleichen"),
             })
     except Exception:
-        gates.append({"nr": 3, "title": "Kelly-Sweep auf IBKR-Daten",
+        gates.append({"nr": 3, "title": "Kelly auf aktivem Motor validiert",
                       "status": "yellow", "detail": "Status nicht ladbar"})
 
     # --- Gate #4: Risk + Brain Backup ---

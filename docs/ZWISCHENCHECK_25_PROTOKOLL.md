@@ -46,3 +46,61 @@ das Erreichen einmalig per Pushover. Beim naechsten Claude-Check: dieses
 Protokoll oeffnen, Tabelle fuellen, Einordnung in Laiensprache, Ergebnis in
 Roadmap-CHANGELOG + Session-Recap. Erwarteter Zeitbedarf: < 1 Stunde.
 Danach gilt wieder: laufen lassen, Stille heisst gut.
+
+---
+
+# ERGEBNIS — gefahren am 27.08.2026 (Wecker feuerte 26.08. 22:15)
+
+## Protokoll-Tabelle (Ist vs. vorregistrierte Messlatte)
+
+| Kennzahl | Ist bei n=25 | Messlatte | Urteil |
+|---|---|---|---|
+| Profit-Faktor (USD) | **0.86** | WEITER solange >= 0.35 (p05) | **WEITER** |
+| Profit-Faktor (%-Basis, backtest-vergleichbar) | **0.99** | Median-Referenz 1.60 | unter Median, im Band |
+| Netto | -4'372 USD | informativ | — |
+| Trefferquote | 60.0% | Konsistenz-Check | Breakeven braeuchte 63.6% |
+| AvgWin / AvgLoss | +1'794 / -3'128 | Trailing-Mechanik | Asymmetrie bestaetigt |
+| Cancel-Quote | 35.4% | Baseline 29% | erhoeht, nicht massiv |
+| Partial-Quote | 41.5% | Paper-Artefakt | dokumentiert |
+| Deployment | ~28-29% | Backtest nimmt 60% an (k=4) | **halbiert — Paper-Datenqualitaet** |
+| Geerbt (Kontrolle) | n=12, +15'336 | getrennt | sauber getrennt |
+
+**Formales Urteil nach vorregistrierter Regel: WEITER.** Kein Untersuchen-
+Trigger (0.86 >> 0.35), kein Go-Live-Urteil moeglich (by design), kein
+Exit-Tuning, kein Soak-Reset.
+
+## Zusatzanalyse 1: Rechter Rand (Gewinner-Verteilung)
+
+>= +6%: 4 von 25 | >= +8%: 2 | >= +12%: 2 (DGII +20.7%, EZPW +14.2%).
+Der zweite Tail-Gewinner kam am 26.08. — die These "Tail-Gewinner treten
+live gar nicht auf" ist damit ABGESCHWAECHT: sie treten auf, Frequenz
+(~1 pro 12 Trades) entscheidet. Bei 80 messbar.
+
+## Zusatzanalyse 2: Stop-vs-Signalhorizont (NEU, wichtigster Befund)
+
+Alle 10 Stop-Ausstiege, Kurs am Stop-Tag vs. letzter Archiv-Kurs (PIT-Daten):
+**6 von 10 notieren HEUTE ueber dem Ausstiegskurs, Durchschnitt +4.1% seit
+Stop.** Extremfaelle: EZPW nach Stop +25.7% (der Bot kaufte spaeter erneut
+und nahm +14.2% mit), JBGS +10.2%, INSP +8.0% (auch re-gekauft, +4.8%).
+Das stuetzt die Hypothese, dass der -8%-Stop bei 30%+-Vol-Small-Caps
+regelmaessig RAUSCHEN erntet, bevor der 1-Monats-Signalhorizont wirken kann.
+GEGENGEWICHT (nicht unterschlagen): Fenster war ein steigender Small-Cap-
+Markt (Stops sehen in Rallyes immer schlecht aus); n=10; der Juli-Walk-
+Forward fand Exits nicht tunebar. KONSEQUENZ: KEINE Aenderung jetzt
+(vorregistriertes Verbot) — die Analyse laeuft formal bis 80 mit und wird
+dort zur Hauptfrage: "Konzept tot vs. Konzept falsch verdrahtet".
+
+## Ausfuehrungs-Befund
+
+Cancel 35% + Partial 42% + Deployment ~29% (Backtest-Annahme fuer k=4: 60%)
+— die Paper-Datenqualitaet halbiert den Kapitaleinsatz. Kein Strategie-,
+ein Infrastruktur-Problem. Fix bleibt das Echtzeit-Abo (Pre-Cutover-Item).
+
+## VORSCHLAG Abbruch-Kriterium (vorregistriert, braucht Carlos-Freigabe)
+
+Analog zur 25er-Vorregistrierung, BEVOR weitere Daten da sind:
+**STOPP des Konzepts bei 80, wenn (a) PF(%-Basis) < 1.0 UND (b) die
+Stop-Rebound-Quote weiter >= 50% UND (c) < 5 Tail-Gewinner (>= +8%) in 80.**
+Treffen nur (b)+(c) zu, aber PF >= 1.0: kein Stopp, sondern EIN definierter
+Umbau-Versuch (Exit-Geometrie an Signalhorizont anpassen) mit neuem,
+letztem 80er-Soak. Zaehler-Stand bei Registrierung: 25.
