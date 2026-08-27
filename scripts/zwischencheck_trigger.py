@@ -10,8 +10,8 @@ sind verboten (Memory-Regel: Monitore sterben mit der Session, R-B43).
 MEILENSTEINE (jeder feuert genau einmal, Marker im State-File):
   25  Zwischencheck (R-B53; GEFEUERT 26.08.2026, Protokoll gefahren 27.08.)
   50  FUTILITY-CHECK (R-B58, Carlos-Freigabe 27.08.2026, BINDEND):
-      Ist PF(%-Basis) < 0.48 — der p01-Glueckspfad-Untergrenze der eigenen
-      Referenz bei n=50 — ist der Bot schlechter als 99 von 100
+      Ist PF(%-Basis) < 0.41 — der Glueckspfad-Untergrenze der LIVE-VALIDIERTEN
+      OHLC-Referenz bei n=50 (R-B64; alte Close-Referenz 0.48 war aufgeblasen) — ist der Bot schlechter als 99 von 100
       Zufallspfaden der nachweislich guten Backtest-Strategie -> STOPP-
       Empfehlung, Carlos entscheidet. EIN einziger Blick mit 1%-Schwelle,
       damit die Gesamt-Fehlerrate sauber bleibt (kein Optional Stopping).
@@ -36,7 +36,7 @@ AUDIT_METADATA = {
         "Meilenstein-Wecker des Soaks: Host-Cron zaehlt taeglich nach "
         "Boersenschluss die sauberen Round-Trips (gleiche Quelle wie "
         "Soak-Karte/Gatekeeper) und meldet 25 (Zwischencheck), 50 "
-        "(BINDENDER Futility-Check: PF%<0.48 = schlechter als 99% der "
+        "(BINDENDER Futility-Check: PF%<0.41, live-validierte Referenz = "
         "eigenen Glueckspfade -> Stopp-Empfehlung) und 80 (Go/No-Go) je "
         "genau EINMAL per Pushover. Danach dauerhaft still (Marker-File)."
     ),
@@ -49,7 +49,7 @@ AUDIT_METADATA = {
 }
 
 SOAK_START = "2026-07-21T12:00:00"   # identisch mit web/app.py Soak-Karte (R-B15)
-FUTILITY_GRENZE_PF_PCT = 0.48        # p01 der R-B18-Referenz bei n=50 (R-B58)
+FUTILITY_GRENZE_PF_PCT = 0.41        # R-B64/Carlos 28.08.: validierte p05@50 (OHLC-Referenz); vorher 0.48 aus der aufgeblasenen Close-Referenz
 MEILENSTEINE = ((25, "fired_25"), (50, "fired_50"), (80, "fired_80"))
 
 STATE_FILE = os.environ.get(

@@ -43,11 +43,12 @@ class TestDecide:
 
 class TestFutilityBotschaft:
     def test_grenze_ist_p01_bei_50(self):
-        # Bindend registriert 27.08.2026 (R-B58) — stille Aenderung soll auffallen.
-        assert FUTILITY_GRENZE_PF_PCT == 0.48
+        # Bindend 27.08. (R-B58, 0.48), korrigiert 28.08. (R-B64, Carlos-Ja:
+        # live-validierte OHLC-p05@50). Stille Aenderung soll auffallen.
+        assert FUTILITY_GRENZE_PF_PCT == 0.41
 
     def test_unter_grenze_stopp_signal_mit_prio_1(self):
-        titel, text, prio = meldung_fuer(50, 50, {"pf_pct": 0.41, "net_usd": -20000})
+        titel, text, prio = meldung_fuer(50, 50, {"pf_pct": 0.35, "net_usd": -20000})
         assert "FUTILITY-STOPP" in titel
         assert "STOPPEN" in text
         assert prio == 1

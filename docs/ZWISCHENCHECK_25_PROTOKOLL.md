@@ -118,3 +118,10 @@ die bindende Empfehlung: **Soak stoppen** (Carlos-Entscheid beim naechsten
 Check). Liegt PF% >= 0.48: weiter bis 80, keine Aktion. Der Meilenstein-
 Wecker (scripts/zwischencheck_trigger.py) meldet den Check automatisch und
 rechnet das Urteil in die Pushover-Meldung.
+
+## Korrektur der Futility-Grenze (R-B64, Carlos-Freigabe 28.08.2026)
+
+0.48 stammte aus der Close-basierten Referenz, die der validierte
+OHLC-Simulator als +4pp/Trade optimistisch entlarvt hat (R-B63/64).
+Neue bindende Grenze bei n=50: **PF% < 0.41** (p05 der live-validierten
+Referenz). Gleiche Logik, ehrliche Latte. Wecker-Skript angepasst.
