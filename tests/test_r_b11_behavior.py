@@ -126,3 +126,31 @@ def test_c4_rebaseline_on_currency_switch(monkeypatch):
     assert state["daily_start_value"] == 8500
     assert state["daily_pnl_pct"] == 0.0
     assert state["account_key"] == "CHF"
+
+
+def test_r_b57_usd_risk_basis_rebaselined_vom_chf_wechsel(monkeypatch):
+    """R-B57 (27.08.2026): Umstieg CHF -> USD-RISK nutzt die C4-Re-Baseline.
+
+    Der Basiswechsel der Drawdown-Grenzen darf keinen Phantom-Drawdown
+    erzeugen: erster USD-RISK-Tick nach CHF-Historie = neue Baseline, 0% P/L.
+    """
+    from app import risk_manager as rm
+    state = {"last_daily_reset": "2026-08-27", "last_weekly_reset": "2026-08-24",
+             "daily_start_value": 1094656.0, "weekly_start_value": 1081504.0,
+             "daily_pnl_usd": 0, "daily_pnl_pct": 0,
+             "weekly_pnl_usd": 0, "weekly_pnl_pct": 0,
+             "daily_trades": 0, "account_key": "CHF"}
+    monkeypatch.setattr(rm, "_load_risk_state", lambda: state)
+    monkeypatch.setattr(rm, "_save_risk_state", lambda s: None)
+
+    # CHF-Equity 1.094 Mio -> USD-Proxy 1.13 Mio: OHNE Re-Baseline waere das
+    # faelschlich +3.5% "Tagesgewinn" (bzw. umgekehrt ein Phantom-Drawdown).
+    out = rm.update_portfolio_tracking(1130000.0, account_key="USD-RISK")
+    assert out["account_key"] == "USD-RISK"
+    assert out["daily_start_value"] == 1130000.0
+    assert out["daily_pnl_pct"] == 0.0
+    assert out["weekly_pnl_pct"] == 0.0
+
+    # Danach normales USD-Tracking: -2% Tag
+    out = rm.update_portfolio_tracking(1107400.0, account_key="USD-RISK")
+    assert out["daily_pnl_pct"] == -2.0

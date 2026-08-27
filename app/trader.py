@@ -960,10 +960,23 @@ def show_portfolio_status(client):
     # Risk Manager: Drawdown-Tracking
     rm = _import_risk_manager()
     if rm:
-        # C4: Base-Currency als Wechsel-Schluessel -> Re-Baseline am Cutover
-        # (USD-Paper -> CHF-Live) statt FX-Sprung als Drawdown zu werten.
+        # R-B57 (27.08.2026, Carlos-Entscheid nach Audit F9): Die Tages-/
+        # Wochen-Verlustgrenzen messen jetzt in USD — der Waehrung, in der
+        # der Bot handelt. Vorher lief das Tracking auf CHF-NetLiq gegen
+        # USD-Positionen: ein FX-Move konnte den Not-Stop maskieren (echte
+        # Trading-Verluste + CHF-Abwertung des USD) oder fehlausloesen
+        # (reiner FX-Move pausierte den Bot 24h).
+        # USD-Proxy = Cash + Einstandswert + unrealisierter P/L. Absolut
+        # leicht verzerrt (credit = AvailableFunds, nicht TotalCash), aber
+        # TAG-ZU-TAG KONSISTENT — fuer %-Grenzen zaehlt Konsistenz, nicht
+        # das Niveau. account_key 'USD-RISK' triggert die C4-Re-Baseline
+        # beim Umstieg (kein Phantom-Drawdown durch den Basiswechsel).
+        # Exposure-/Margin-KAUF-Limits bleiben bewusst auf der alten Basis
+        # bis zum Cutover (Umstellung wuerde Kaufverhalten im Soak aendern).
+        usd_risk_value = (float(credit or 0) + float(total_invested or 0)
+                          + float(unrealized_pnl or 0))
         state = rm.update_portfolio_tracking(
-            total_value, account_key=portfolio.get("_base_currency"))
+            usd_risk_value, account_key="USD-RISK")
         log.info(f"  Tages-P/L:         {state['daily_pnl_pct']:+.2f}% (${state['daily_pnl_usd']:+,.2f})")
         log.info(f"  Wochen-P/L:        {state['weekly_pnl_pct']:+.2f}% (${state['weekly_pnl_usd']:+,.2f})")
 

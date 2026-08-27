@@ -96,9 +96,10 @@ Cancel 35% + Partial 42% + Deployment ~29% (Backtest-Annahme fuer k=4: 60%)
 — die Paper-Datenqualitaet halbiert den Kapitaleinsatz. Kein Strategie-,
 ein Infrastruktur-Problem. Fix bleibt das Echtzeit-Abo (Pre-Cutover-Item).
 
-## VORSCHLAG Abbruch-Kriterium (vorregistriert, braucht Carlos-Freigabe)
+## Abbruch-Kriterium — BINDEND (Carlos-Freigabe 27.08.2026, "ja setze beides um")
 
-Analog zur 25er-Vorregistrierung, BEVOR weitere Daten da sind:
+Analog zur 25er-Vorregistrierung, BEVOR weitere Daten da sind — seit
+27.08.2026 verbindlicher Teil des Go/No-Go-Protokolls bei 80:
 **STOPP des Konzepts bei 80, wenn (a) PF(%-Basis) < 1.0 UND (b) die
 Stop-Rebound-Quote weiter >= 50% UND (c) < 5 Tail-Gewinner (>= +8%) in 80.**
 Treffen nur (b)+(c) zu, aber PF >= 1.0: kein Stopp, sondern EIN definierter
