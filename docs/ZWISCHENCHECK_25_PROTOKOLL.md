@@ -105,3 +105,16 @@ Stop-Rebound-Quote weiter >= 50% UND (c) < 5 Tail-Gewinner (>= +8%) in 80.**
 Treffen nur (b)+(c) zu, aber PF >= 1.0: kein Stopp, sondern EIN definierter
 Umbau-Versuch (Exit-Geometrie an Signalhorizont anpassen) mit neuem,
 letztem 80er-Soak. Zaehler-Stand bei Registrierung: 25.
+
+
+## Futility-Check bei 50 — BINDEND (Carlos-Freigabe 27.08.2026, R-B58)
+
+Registriert bei Zaehlerstand 25, BEVOR weitere Daten da sind. EIN einziger
+zusaetzlicher Blick (kein Optional Stopping): Erreicht der Zaehler 50 und
+liegt der PF (%-Basis) unter **0.48** — der p01-Glueckspfad-Untergrenze der
+eigenen Referenz bei n=50 —, ist der Bot schlechter als 99 von 100
+Zufallspfaden der nachweislich profitablen Backtest-Strategie. Dann lautet
+die bindende Empfehlung: **Soak stoppen** (Carlos-Entscheid beim naechsten
+Check). Liegt PF% >= 0.48: weiter bis 80, keine Aktion. Der Meilenstein-
+Wecker (scripts/zwischencheck_trigger.py) meldet den Check automatisch und
+rechnet das Urteil in die Pushover-Meldung.
