@@ -13,10 +13,10 @@ NEU:
 - HALTEDAUER: fix 126 Handelstage (~6 Monate) je Position, Verkauf zum
   Tagesschluss von Tag 126. KEIN Stop-Loss, KEIN Trailing, KEINE Tranchen.
 - VERSICHERUNG: E6-Broker-Katastrophen-Stop bleibt, auf -40% (statt -20).
-  Feintest-Entscheid (vorregistrierte Akzeptanz): -35%% (Z2) DURCHGEFALLEN
-  (kostet 0.08 Sharpe + 1.35pp CAGR), -40%% (Z3) BESTANDEN (-0.02 Sharpe,
-  -0.87pp CAGR = ~gratis). Sieger-Konfig = Z3: PF 3.39, CAGR 15.4%%,
-  MaxDD -19.2%%, SharpeM 0.95.
+  Feintest-Entscheid (vorregistrierte Akzeptanz): -35% (Z2) DURCHGEFALLEN
+  (kostet 0.08 Sharpe + 1.35pp CAGR), -40% (Z3) BESTANDEN (-0.02 Sharpe,
+  -0.87pp CAGR = ~gratis). Sieger-Konfig = Z3: PF 3.39, CAGR 15.4%,
+  MaxDD -19.2%, SharpeM 0.95.
 - KAUF-FENSTER: Neukaeufe nur in den ersten 3 Handelstagen des Monats
   (Modell-Treue; entschaerft nebenbei das Teilfuellungs-Problem).
 - SIZING: deployment 0.60 (= Carlos-Risiko-Budget -20%; historisch
@@ -44,7 +44,7 @@ Realitaet dem Modell folgt:
 
 G1 — MONATLICHE BAND-PRUEFUNG (automatischer Wecker, 1. Handelstag):
     Live-Monatsrendite (USD, MTM) wird gegen die Modell-Baender gelegt:
-    p01 = -8.3%% | p05 = -5.4%% | p25 = -1.2%% | Median = +1.2%% | Mittel = +1.3%%/Mt
+    p01 = -8.3% | p05 = -5.4% | p25 = -1.2% | Median = +1.2% | Mittel = +1.3%/Mt
     Einzelmonate unter p05 sind ERWARTBAR (5% der Faelle) — kein Alarm,
     nur Protokoll.
 
@@ -56,13 +56,13 @@ G2 — PAAR-PROBE JE HORIZONT-EXIT (fortlaufend):
 
 G3+G4 — 6-MONATS-LEITER (bindend, EIN Blick ~Ende Feb 2027), Basis:
     84 gerollte 6-Monats-Fenster des validierten Z3-Modells
-    (p01 = -10.7%% | p05 = -8.0%% | p25 = +1.2%% | Median = +5.6%%):
-    - Live 6-Mt < -10.7%% (p01)  -> FUTILITY: STOPP-Empfehlung.
-    - -10.7..-8.0%% (p01..p05)   -> WARNSTUFE: verlaengern auf Monat 9,
+    (p01 = -10.7% | p05 = -8.0% | p25 = +1.2% | Median = +5.6%):
+    - Live 6-Mt < -10.7% (p01)  -> FUTILITY: STOPP-Empfehlung.
+    - -10.7..-8.0% (p01..p05)   -> WARNSTUFE: verlaengern auf Monat 9,
       Zukauf-Stopp bis geklaert.
-    - -8.0..+1.2%% (p05..p25)    -> UNENTSCHIEDEN: verlaengern auf
+    - -8.0..+1.2% (p05..p25)    -> UNENTSCHIEDEN: verlaengern auf
       Monat 9, dann 12 — danach erzwungener Entscheid.
-    - >= +1.2%% (p25) UND Paar-Proben-Bias < 3pp UND keine Regelwerk-
+    - >= +1.2% (p25) UND Paar-Proben-Bias < 3pp UND keine Regelwerk-
       Verletzung -> GO-EMPFEHLUNG Real-Cutover.
 
 G5 — MODELL-STURZ (jederzeit):
@@ -74,7 +74,7 @@ G5 — MODELL-STURZ (jederzeit):
 
 1. Config + Locks: exit_mode='horizont', horizon_handelstage=126;
    stop_loss/trailing deaktiviert via manual_lock_overrides-NEUFASSUNG
-   (bewusster, dokumentierter Locks-Wechsel); E6 cat_stop_pct -> 35.
+   (bewusster, dokumentierter Locks-Wechsel); E6 cat_stop_pct -> 40 (Z3-Sieger).
 2. trader.py: unbedingter Zeit-Exit bei Positions-Alter >= 126
    Handelstage (neuer Exit-Zweig, VOR allen anderen Pruefungen; Tests:
    Tag 125 haelt, Tag 126 verkauft, geerbte Positionen ausgenommen);
