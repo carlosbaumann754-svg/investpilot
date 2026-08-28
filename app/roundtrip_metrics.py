@@ -62,6 +62,8 @@ FULL_CLOSE_ACTIONS = {
     # R-B54: bisher fehlend — diese Exits schlossen Episoden NIE, wodurch
     # ein Re-Buy in die stale Episode gemerged wurde (vermischtes PnL):
     "SCANNER_SELL", "MANUAL_SELL", "OVERNIGHT_CLOSE", "PROFIT_LOCK_CLOSE",
+    # R-B66: M2A-Horizont-Exit (126 Handelstage, bindendes Regelwerk).
+    "HORIZON_CLOSE",
 }
 PARTIAL_CLOSE_ACTIONS = {"PARTIAL_CLOSE", "PARTIAL_SIGNAL"}
 CLOSE_ACTIONS = FULL_CLOSE_ACTIONS | PARTIAL_CLOSE_ACTIONS

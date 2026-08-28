@@ -29,6 +29,8 @@ KRITISCH_TAR = {
     "buy_cooldown.json",
     "alert_state.json",
     "zwischencheck25_state.json",
+    "m2a_geerbt.json",
+    "m2a_erwartungsbaender.json",
 }
 
 # Unersetzlich (nicht rekonstruierbar ohne Look-Ahead-Bias) -> MUSS zusaetzlich

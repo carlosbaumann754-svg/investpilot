@@ -84,6 +84,11 @@ FILES=(
                                      # forensisch nuetzlich (Audit-Finding D-F5).
     # (3) MEILENSTEIN-ZUSTAND:
     "zwischencheck25_state.json"     # Einmal-Marker des 25er-Weckers (R-B53).
+
+    # R-B66 (28.08.2026): M2A-Motor-Zustand (bindendes Regelwerk):
+    "m2a_geerbt.json"                # Bestandsschutz-Liste der Alt-Positionen
+    "m2a_erwartungsbaender.json"     # validierte Gate-Baender (G1/G3/G4)
+    "m2a_gates_state.json"           # G1-Monats-Marker
 )
 
 # Sammle nur Dateien die existieren (some erst spaeter angelegt)

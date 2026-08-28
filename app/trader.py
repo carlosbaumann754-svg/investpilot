@@ -1183,12 +1183,69 @@ def check_stop_loss_take_profit(client, config):
     except (TypeError, ValueError):
         pass
 
+    # R-B66: M2A-Motor — einmal pro Zyklus laden (Flag + Geerbt-Schutz)
+    try:
+        from app import m2a_motor
+        _m2a_aktiv = m2a_motor.ist_aktiv(config)
+        _m2a_horizon = m2a_motor.horizon_handelstage(config)
+    except ImportError:
+        m2a_motor, _m2a_aktiv, _m2a_horizon = None, False, 126
+
     actions = []
     for pos in portfolio.get("positions", []):
         try:
             p = EtoroClient.parse_position(pos)
             if p["invested"] <= 0:
                 continue
+
+            # --- R-B66: M2A-Positionen kennen NUR den Horizont-Exit ---
+            # (bindendes Regelwerk docs/M2A_MOTOR_REGELWERK.md: kein SL,
+            # kein Trailing, keine Tranchen, kein Earnings-Exit; einzige
+            # weitere Absicherung ist der broker-seitige E6-Stop -40%.)
+            # GEERBTE Positionen (data/m2a_geerbt.json) fallen durch und
+            # laufen unter den M0-Exits weiter aus (Bestandsschutz).
+            if _m2a_aktiv and not m2a_motor.ist_geerbt(p["position_id"]):
+                open_dt, _age = _find_position_open_time(
+                    p["position_id"], p.get("open_time"), symbol=p.get("symbol"))
+                ht = m2a_motor.handelstage_seit(open_dt)
+                if ht is None:
+                    log.warning(f"  M2A: Positions-Alter unbekannt "
+                                f"({p['position_id']}) — halte (fail-safe)")
+                    continue
+                if ht < _m2a_horizon:
+                    continue    # halten — bewusst KEINE weiteren Exit-Checks
+                log.info(f"  HORIZON-EXIT: {p.get('symbol')} — {ht} Handelstage "
+                         f">= {_m2a_horizon}, PnL {p['pnl_pct']:+.2f}%")
+                result = _close_position_safe(
+                    client, p["position_id"], p["instrument_id"], "HORIZON")
+                if _is_skipped_idempotent(result):
+                    continue
+                if _is_already_closed(result):
+                    log.info(f"  HORIZON skip {p['instrument_id']}: bei IBKR "
+                             "bereits geschlossen (stale Bot-Cache)")
+                    continue
+                if result:
+                    trade_entry = {
+                        "timestamp": datetime.now().isoformat(),
+                        "action": "HORIZON_CLOSE",
+                        "symbol": p.get("symbol"),
+                        "instrument_id": p["instrument_id"],
+                        "position_id": p["position_id"],
+                        "pnl_pct": p["pnl_pct"],
+                        "pnl_usd": p["pnl"],
+                        "leverage": p["leverage"],
+                        "handelstage": ht,
+                        "status": _trade_status_from_result(result),
+                        "ibkr_status_raw": _ibkr_status_raw_from_result(result),
+                    }
+                    save_trade(_attach_fill_prices(trade_entry, result))
+                    actions.append("HORIZON_CLOSE")
+                    if al:
+                        al.alert_trade_executed(trade_entry)
+                else:
+                    _log_close_failure("HORIZON_CLOSE", p, al,
+                                       extra={"handelstage": ht})
+                continue    # M2a-Position: nie in die M0-Exit-Pfade
 
             # Earnings-Exit-Filter (v37v): vor allen anderen Checks
             # — wenn Earnings naht und Risk-Profil triggert, sofort schliessen.
@@ -1792,6 +1849,26 @@ def execute_scanner_trades(client, config, scan_results):
     if not portfolio:
         log.error("Portfolio nicht verfuegbar")
         return []
+
+    # R-B66: M2A-Kauf-Fenster (Handelstag 1-3) + Anlauf-Limit (max N/Monat).
+    # Modell-Treue zum validierten Z3-Backtest (monatliche Einstiege) und
+    # Z4-Staffelung fuer den Depot-Aufbau. Ausserhalb: bewusst KEINE Kaeufe.
+    try:
+        from app import m2a_motor as _m2a
+        if _m2a.ist_aktiv(config):
+            if not _m2a.im_kauf_fenster(config=config):
+                log.info("  M2A: ausserhalb des Kauf-Fensters "
+                         "(Handelstag 1-3 des Monats) — keine Neukaeufe")
+                return []
+            _hist = load_json("trade_history.json") or []
+            _n_neu = _m2a.neukaeufe_diesen_monat(_hist)
+            _limit = _m2a.anlauf_limit(config)
+            if _n_neu >= _limit:
+                log.info(f"  M2A: Anlauf-Limit erreicht "
+                         f"({_n_neu}/{_limit} Neukaeufe diesen Monat)")
+                return []
+    except ImportError:
+        pass
 
     credit = portfolio.get("credit", 0)
     positions = portfolio.get("positions", [])
