@@ -1,8 +1,8 @@
-# M2A-MOTOR — Regelwerk, Uebergang, Live-Gates (R-B65, Entwurf 28.08.2026)
+# M2A-MOTOR — Regelwerk, Uebergang, Live-Gates (R-B65)
 
-Status: FINAL zur Carlos-Freigabe (Zahlen aus validiertem Z3-Modell eingesetzt) (Schnitt geplant Mo 31.08. vor
-Marktoeffnung). Nach Freigabe ist dieses Dokument BINDEND — gleiche
-Disziplin wie Zwischencheck-/Abbruch-Regeln.
+Status: **BINDEND** — Carlos-Freigabe 28.08.2026 ('Also das passt so los'),
+inkl. Pre-Commit (-20%-Budget, kein manueller Eingriff, Ausstieg nur via
+Gates). Schnitt: Mo 31.08.2026 vor Marktoeffnung.
 
 ## 1. Motor-Definition (was sich aendert — und was nicht)
 
