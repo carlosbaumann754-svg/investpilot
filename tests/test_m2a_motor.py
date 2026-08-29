@@ -184,3 +184,40 @@ class TestWeeklyReportUnterM2a:
                  "scanner_trades": 5, "asset_class_breakdown": {"stocks": 20}}
         sug = wr._generate_improvement_suggestions({}, stats, [], [])
         assert any(s["bereich"] == "Trading" for s in sug)
+
+
+class TestLeiterStatus:
+    """R-B66e: Zentrale 6M-Leiter-Faelligkeit — Bug-Fund VOR dem Flip.
+
+    Die alte Formel (monats_diff >= 6) haette am 01.02.2027 mit nur
+    5 VOLLEN Monaten (Sep..Jan) den bindenden Entscheid angefordert.
+    Korrekt: 6 volle Monats-Returns (Sep..Feb) -> Entscheid ab 2027-03."""
+
+    def test_am_schnitt_tag_monat_1(self):
+        ls = m2a_motor.leiter_status("2026-08-31", date(2026, 8, 31))
+        assert ls["faellig"] is False
+        assert ls["leiter_monat"] == 1
+        assert ls["entscheid_ab"] == "2027-03"
+
+    def test_september_ist_leiter_monat_1(self):
+        ls = m2a_motor.leiter_status("2026-08-31", date(2026, 9, 15))
+        assert ls["faellig"] is False and ls["leiter_monat"] == 1
+
+    def test_am_01_02_2027_NICHT_faellig(self):
+        # DER Bug-Fall: nur 5 volle Monate (Sep..Jan) abgeschlossen
+        ls = m2a_motor.leiter_status("2026-08-31", date(2027, 2, 1))
+        assert ls["faellig"] is False, "zu fruehe Faelligkeit = Regelwerk-Bruch"
+        assert ls["leiter_monat"] == 6  # Februar = 6. und letzter Leiter-Monat
+
+    def test_ende_februar_noch_nicht_faellig(self):
+        ls = m2a_motor.leiter_status("2026-08-31", date(2027, 2, 28))
+        assert ls["faellig"] is False
+
+    def test_am_01_03_2027_faellig(self):
+        ls = m2a_motor.leiter_status("2026-08-31", date(2027, 3, 1))
+        assert ls["faellig"] is True
+
+    def test_jahreswechsel_im_entscheid_ab(self):
+        # Schnitt im Juni -> 6 volle Monate Jul..Dez -> Entscheid ab Januar
+        ls = m2a_motor.leiter_status("2026-06-30", date(2026, 7, 1))
+        assert ls["entscheid_ab"] == "2027-01"

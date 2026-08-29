@@ -1859,8 +1859,11 @@ async def api_m2a_gates(user=Depends(require_auth)):
                     if len(mk) >= 2 else None)
         schnitt = str(m2a.get("schnitt_datum", "2026-08-31"))
         heute = _m2a_date.today()
-        monate_seit = ((heute.year - int(schnitt[:4])) * 12
-                       + heute.month - int(schnitt[5:7]))
+        # R-B66e: zentrale Leiter-Faelligkeit (Bug-Fix: FAELLIG erst nach
+        # 6 VOLLEN Monaten, nicht am 01.02. mit nur 5) — eine Wahrheit fuer
+        # Karte, Wecker-Cron und Readiness-Gate.
+        _ls = _mm.leiter_status(schnitt, heute)
+        monate_seit = _ls["monate_seit"]
         schlecht = ("cancelled", "failed", "rejected")
         n_horizon = sum(1 for x in hist if isinstance(x, dict)
                         and x.get("action") == "HORIZON_CLOSE"
@@ -1868,7 +1871,11 @@ async def api_m2a_gates(user=Depends(require_auth)):
         return {
             "aktiv": True, "schnitt_datum": schnitt,
             "monate_seit_schnitt": monate_seit,
-            "leiter_faellig_ab_monat": 6,
+            # R-B66e: explizite Faelligkeit statt Frontend-Rechnerei
+            "leiter_faellig": _ls["faellig"],
+            "leiter_monat": _ls["leiter_monat"],
+            "leiter_entscheid_ab": _ls["entscheid_ab"],
+            "leiter_faellig_ab_monat": 7,
             "baender_monat": z3.get("monats_baender") or {},
             "fenster6m": z3.get("fenster6m") or {},
             "laufender_monat_ret_usd_pct": lauf_ret,
@@ -5739,24 +5746,19 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
         _cfg_g2 = _lcg2() or {}
         from app import m2a_motor as _m2a_g2
         if _m2a_g2.ist_aktiv(_cfg_g2):
-            from datetime import date as _date_g2
             schnitt = str((_cfg_g2.get("m2a") or {}).get("schnitt_datum")
                           or "2026-08-31")
-            try:
-                sj, sm, st = [int(x) for x in schnitt.split("-")]
-                heute = _date_g2.today()
-                monate = ((heute.year - sj) * 12 + (heute.month - sm)
-                          - (1 if heute.day < st else 0))
-            except Exception:
-                monate = None
-            if monate is not None and monate >= 6:
+            # R-B66e: zentrale Faelligkeit (m2a_motor.leiter_status) — FAELLIG
+            # erst nach 6 VOLLEN Monaten (Entscheid ab 2027-03).
+            _ls_g2 = _m2a_g2.leiter_status(schnitt)
+            if _ls_g2["faellig"]:
                 _g2_detail = ("6M-Leiter FAELLIG: Entscheid gemaess Regelwerk "
                               "(Stopp < -10.7% | GO >= +1.2% & Bias < 3pp) — "
                               "siehe M2a-Karte / Gate-Cron G3/G4.")
             else:
-                _mtxt = f"Monat {monate + 1}/6" if monate is not None else "laeuft"
-                _g2_detail = (f"M2a-Leiter {_mtxt} seit Schnitt {schnitt} — "
-                              "Go/No-Go ~Ende Feb 2027. Beweis-Traeger: "
+                _g2_detail = (f"M2a-Leiter Monat {_ls_g2['leiter_monat']}/6 "
+                              f"seit Schnitt {schnitt} — Entscheid ab "
+                              f"{_ls_g2['entscheid_ab']}. Beweis-Traeger: "
                               "live-validiertes OHLC-Modell (R-B64); der "
                               "WFO-Frische-Check ist unter M2a ausser Kraft.")
             gates.append({

@@ -103,15 +103,21 @@ def main() -> int:
     else:
         text_teile.append("G1: noch keine zwei Monats-Puntke/Baender — Aufbau.")
 
-    monate_seit = ((heute.year - int(schnitt[:4])) * 12
-                   + heute.month - int(schnitt[5:7]))
-    if monate_seit >= 6:
+    # R-B66e: zentrale Faelligkeit aus m2a_motor.leiter_status — die alte
+    # Inline-Formel (>= 6) haette am 01.02.2027 mit nur 5 VOLLEN Monaten
+    # den bindenden Entscheid angefordert. Korrekt: ab 2027-03 (6 volle
+    # Monats-Returns Sep..Feb liegen vor).
+    from app.m2a_motor import leiter_status
+    ls = leiter_status(schnitt, heute)
+    if ls["faellig"]:
         text_teile.append(
-            f"G3/G4: 6-MONATS-LEITER FAELLIG (Monat {monate_seit}) — beim "
-            "naechsten Claude-Check das bindende Leiter-Urteil fahren!")
+            "G3/G4: 6-MONATS-LEITER FAELLIG (6 volle Monate abgeschlossen) — "
+            "beim naechsten Claude-Check das bindende Leiter-Urteil fahren!")
         prio = max(prio, 1)
     else:
-        text_teile.append(f"Leiter in {6 - monate_seit} Monaten.")
+        text_teile.append(
+            f"Leiter-Monat {ls['leiter_monat']}/6 — "
+            f"Entscheid ab {ls['entscheid_ab']}.")
 
     text = " ".join(text_teile)
     print(f"[{heute}] {text}")

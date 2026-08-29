@@ -463,17 +463,23 @@ async function loadM2aGates() {
         const badgeEl = document.getElementById('m2a-badge');
         badgeEl.textContent = badge;
         badgeEl.style.color = badgeCol;
-        const rest = Math.max(d.leiter_faellig_ab_monat - d.monate_seit_schnitt, 0);
+        // R-B66e: Faelligkeit kommt jetzt explizit vom Server (Bug-Fix:
+        // FAELLIG erst nach 6 VOLLEN Monaten — Entscheid ab 2027-03, nicht
+        // schon am 01.02. mit 5 Monaten). Fallback: alte Felder.
+        const faellig = (d.leiter_faellig != null)
+            ? d.leiter_faellig
+            : (d.monate_seit_schnitt >= (d.leiter_faellig_ab_monat ?? 7));
         document.getElementById('m2a-leiter').textContent =
-            rest > 0 ? `in ${rest} Mt` : 'FAELLIG';
+            faellig ? 'FAELLIG' : `Monat ${d.leiter_monat ?? d.monate_seit_schnitt}/6`;
         document.getElementById('m2a-leiter-sub').textContent =
+            (faellig ? '' : `Entscheid ab ${d.leiter_entscheid_ab ?? '2027-03'} | `) +
             `Stopp < ${d.fenster6m?.p01 ?? '-10.7'}% | GO >= +${d.fenster6m?.p25 ?? '1.2'}%`;
         document.getElementById('m2a-umbau').textContent =
             `${d.neukaeufe_monat}/${d.anlauf_limit}`;
         document.getElementById('m2a-umbau-sub').textContent =
             `Neukaeufe Monat | geerbt: ${d.geerbt_gesamt} | Horizont-Exits: ${d.horizon_exits_gesamt}`;
         document.getElementById('m2a-headline').textContent =
-            `Seit Schnitt ${d.schnitt_datum}: Monat ${d.monate_seit_schnitt} von 6 bis zur Leiter` +
+            `Seit Schnitt ${d.schnitt_datum}: Leiter-Monat ${d.leiter_monat ?? '?'}/6` +
             (d.g1_letzte_meldung ? ` | letzter G1-Report: ${d.g1_letzte_meldung}` : '');
     } catch (e) { console.error('m2a-gates load:', e); }
 }

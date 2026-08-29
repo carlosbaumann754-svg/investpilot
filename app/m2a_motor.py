@@ -136,3 +136,33 @@ def neukaeufe_diesen_monat(trade_history: list, heute: date = None) -> int:
 def anlauf_limit(config) -> int:
     return int(((config or {}).get("m2a") or {}).get(
         "max_neukaeufe_pro_monat", ANLAUF_MAX_NEUKAEUFE_PRO_MONAT))
+
+
+def leiter_status(schnitt_datum: str, heute: date = None) -> dict:
+    """Zentrale 6M-Leiter-Faelligkeit (G3/G4) — EINE Wahrheit fuer Wecker,
+    M2a-Karte und Readiness-Gate.
+
+    R-B66e (29.08.2026, Bug-Fund VOR dem Flip): Die naive Formel
+    (jahr_diff*12 + monats_diff) >= 6 haette den bindenden Leiter-Entscheid
+    am 01.02.2027 angefordert — mit nur 5 VOLLEN Monaten (Sep..Jan).
+    Korrekt: Der Entscheid braucht die 6 Monats-Returns Sep..Feb; der
+    Februar-Return existiert erst ab dem Folgemonat -> FAELLIG ab
+    monate_seit >= 7 (konkret 01.03.2027 bei Schnitt 2026-08-31).
+
+    Returns:
+        {"faellig": bool,
+         "leiter_monat": int 1..6 (laufender Leiter-Monat, Anzeige),
+         "entscheid_ab": "YYYY-MM",
+         "monate_seit": int (naive Monats-Differenz, Diagnose)}
+    """
+    heute = heute or datetime.now().date()
+    sj, sm = int(schnitt_datum[:4]), int(schnitt_datum[5:7])
+    monate_seit = (heute.year - sj) * 12 + heute.month - sm
+    total = sm + 7  # Folgemonat nach 6 vollen Leiter-Monaten
+    entscheid_ab = f"{sj + (total - 1) // 12}-{(total - 1) % 12 + 1:02d}"
+    return {
+        "faellig": monate_seit >= 7,
+        "leiter_monat": min(6, max(1, monate_seit)),
+        "entscheid_ab": entscheid_ab,
+        "monate_seit": monate_seit,
+    }
