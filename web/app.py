@@ -924,7 +924,21 @@ async def api_portfolio(user=Depends(require_auth)):
         display_cost = base_cost_basis if base_cost_basis is not None else total_invested
         display_currency = base_currency
 
+        # R-B66d: M2a-Flags fuer die Positionen-Tabelle — geerbte Positionen
+        # behalten den Verkaufen-Button, M2a-Positionen bekommen die
+        # Pre-Commit-Sperre (Ausstieg NUR via Gates/Horizont, Regelwerk §5).
+        m2a_aktiv = False
+        try:
+            from app import m2a_motor
+            m2a_aktiv = m2a_motor.ist_aktiv(config)
+            if m2a_aktiv:
+                for _pos in parsed:
+                    _pos["geerbt"] = m2a_motor.ist_geerbt(_pos.get("position_id"))
+        except Exception:
+            m2a_aktiv = False
+
         return {
+            "m2a_aktiv": m2a_aktiv,
             # Display-Felder (BASE-Currency, konsistent mit IBKR Mobile)
             "credit": round(display_cash, 2),
             "invested": round(display_cost, 2),         # Cost-Basis in BASE
@@ -5343,7 +5357,14 @@ async def api_wfo_drift_status():
         wfo_cfg = cfg.get("wfo_drift_watchdog", {}) or {}
         threshold_pct = float(wfo_cfg.get("drift_threshold_pct", 30.0))
 
-        if skip_reason and result.get("wfo_sharpe") is None:
+        # R-B66d: unter M2a pausiert der Watchdog bewusst (M0-Baselines =
+        # Cry-Wolf-Quelle) — die Karte soll das als geplanten Zustand zeigen,
+        # nicht als "Nicht bereit"-Problem.
+        if skip_reason and "M2a" in skip_reason:
+            status_color = "gray"
+            status_label = "Pausiert (M2a)"
+            result["m2a_paused"] = True
+        elif skip_reason and result.get("wfo_sharpe") is None:
             status_color = "gray"
             status_label = "Nicht bereit"
         elif drift_pct is None:

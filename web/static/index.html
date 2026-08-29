@@ -65,7 +65,11 @@
     <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
     <button class="tab" onclick="switchTab('trades')">Trades</button>
     <button class="tab" onclick="switchTab('order-audit')">Order-Status</button>
-    <button class="tab" onclick="switchTab('brain')">Brain</button>
+    <!-- R-B66d: Brain-Register entfernt — zeigte nur noch All-Time-Werte des
+         Alt-Motors (Win-Rate/Sharpe inkl. eToro-Aera, steuert nichts mehr).
+         Das live genutzte Brain-REGIME steht weiterhin auf dem Dashboard
+         (Regime-Filter-Karte); Rest war v6-Era Anzeige-Legacy. -->
+
     <button class="tab" onclick="switchTab('reports')">Reports</button>
     <!-- v37e+ (16.07.2026): "Backtest"-Tab entfernt (zeigte Alt-Motor-Backtest/Optimizer/
          Kelly-Sweep — obsolet + stale seit Cron-Deaktivierung/Motor-Switch). Neu-Motor-
@@ -637,8 +641,11 @@
             </details>
         </div>
 
-        <div class="card" id="v15-dca-card">
-            <div class="card-title">Cash-DCA Status (v15)<span class="tip" data-tip="Staffelt neue Einzahlungen (>500 USD Trigger) ueber 5 Scheduler-Zyklen, um Timing-Risiko zu reduzieren. Inaktiv wenn keine neue Einzahlung erkannt wurde.">?</span></div>
+        <!-- R-B66d: Karte nur bei AKTIVEM DCA-Plan sichtbar (app.js) — der
+             Dauerzustand "INAKTIV" auf dem Paper-Konto ist Rauschen, und unter
+             M2a laufen Kaeufe ohnehin nur im Kauf-Fenster (Handelstag 1-3). -->
+        <div class="card" id="v15-dca-card" style="display:none;">
+            <div class="card-title">Cash-DCA Status (v15)<span class="tip" data-tip="Staffelt neue Einzahlungen (>500 USD Trigger) ueber 5 Scheduler-Zyklen, um Timing-Risiko zu reduzieren. Erscheint nur, wenn ein DCA-Plan aktiv laeuft.">?</span></div>
             <div id="v15-dca-status" style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
                 <div class="badge badge-blue" id="v15-dca-badge">--</div>
             </div>
@@ -703,11 +710,11 @@
         </div>
 
         <div class="card">
-            <div class="card-title">Positionen<span class="tip" data-tip="Alle aktuell offenen Trades. ID = Asset-Nummer, Investiert = eingesetztes Geld, P/L = Gewinn/Verlust in USD, % = in Prozent, Lev = Hebel, Trail SL = automatischer Stop-Loss der mit dem Kurs mitwandert.">?</span></div>
+            <div class="card-title">Positionen<span class="tip" data-tip="Alle aktuell offenen Trades. Investiert = eingesetztes Geld, P/L = Gewinn/Verlust in USD, % = in Prozent, Trail SL = automatischer Stop-Loss der mit dem Kurs mitwandert (ab M2a-Schnitt nur noch geerbte Positionen). M2a-Positionen haben keinen Verkaufen-Button: Pre-Commit — Ausstieg nur via Zeit-Horizont oder Gates, nicht per Hand.">?</span></div>
             <div class="table-wrap">
                 <table>
                     <thead>
-                        <tr><th>Symbol</th><th>Alter</th><th>Investiert</th><th>P/L</th><th>%</th><th>Lev</th><th>Trail SL</th><th>Aktion</th></tr>
+                        <tr><th>Symbol</th><th>Alter</th><th>Investiert</th><th>P/L</th><th>%</th><th>Trail SL</th><th>Aktion</th></tr>
                     </thead>
                     <tbody id="positions-table"></tbody>
                 </table>
@@ -725,9 +732,9 @@
                 <select id="trades-filter-action" onchange="applyTradesFilter()" title="Filter nach Trade-Typ. 'Alle Aktionen' zeigt alles, sonst nur den gewaehlten Typ (BUYs/Closes/SL/TP/Earnings/Manual/Failed). Kombiniert sich mit der Symbol-Suche rechts." style="padding:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.15);color:inherit;border-radius:4px;font-size:13px;">
                     <option value="">Alle Aktionen</option>
                     <option value="BUY">Nur BUYs (BUY/SCANNER_BUY)</option>
-                    <option value="CLOSE">Alle Closes (SL/TP/Trailing/Time/Earnings/Manual)</option>
+                    <option value="CLOSE">Alle Closes (Horizon/SL/Trailing/Time/Earnings/Manual)</option>
+                    <option value="HORIZON_CLOSE">Nur Horizon-Exits (M2a)</option>
                     <option value="STOP_LOSS_CLOSE">Nur Stop-Loss</option>
-                    <option value="TAKE_PROFIT_CLOSE">Nur Take-Profit</option>
                     <option value="EARNINGS_BLACKOUT_CLOSE">Nur Earnings-Exits</option>
                     <option value="MANUAL_SELL">Nur Manual-Sells</option>
                     <option value="FAILED">Nur FAILED</option>
@@ -741,10 +748,9 @@
                     <thead>
                         <tr style="cursor:pointer;">
                             <th onclick="sortTrades('timestamp')">Zeit ↕<span class="tip" data-tip="Zeitpunkt des Trades in UTC. Bei BUYs der Auftrags-Zeitpunkt, bei CLOSEs der Fill-Zeitpunkt. Klicke um auf- oder absteigend zu sortieren.">?</span></th>
-                            <th onclick="sortTrades('action')">Aktion ↕<span class="tip" data-tip="Typ des Trades: SCANNER_BUY (Bot-Kauf), STOP_LOSS_CLOSE / TAKE_PROFIT_CLOSE (automatische Exits), TIME_STOP_CLOSE (zu lange offen), EARNINGS_BLACKOUT_CLOSE (vor Earnings rausgeschmissen), MANUAL_SELL (du selbst geschlossen), FAILED (Order nicht durchgegangen).">?</span></th>
+                            <th onclick="sortTrades('action')">Aktion ↕<span class="tip" data-tip="Typ des Trades: SCANNER_BUY (Bot-Kauf), HORIZON_CLOSE (M2a-Verkauf nach 126 Handelstagen), STOP_LOSS_CLOSE / TRAILING_SL_CLOSE (Alt-Exits, ab M2a-Schnitt nur noch geerbte Positionen), TIME_STOP_CLOSE (zu lange offen), EARNINGS_BLACKOUT_CLOSE (vor Earnings rausgeschmissen), MANUAL_SELL (du selbst geschlossen), FAILED (Order nicht durchgegangen).">?</span></th>
                             <th onclick="sortTrades('symbol')">Symbol ↕<span class="tip" data-tip="Ticker des gehandelten Wertpapiers (z.B. AAPL, TSLA).">?</span></th>
                             <th onclick="sortTrades('amount_usd')">Betrag ↕<span class="tip" data-tip="USD-Betrag der Order (bei BUYs der eingesetzte Kapitalbetrag, bei CLOSEs der realisierte P/L in USD).">?</span></th>
-                            <th>Lev<span class="tip" data-tip="Hebel der Position. Aktuell 1x auf IBKR (kein Margin verwendet), kann sich aendern.">?</span></th>
                         </tr>
                     </thead>
                     <tbody id="trades-table"></tbody>
@@ -809,91 +815,9 @@
     </div>
 
     <!-- === BRAIN TAB === -->
-    <div id="tab-brain" class="tab-content">
-        <div class="grid-2">
-            <div class="card">
-                <div class="card-title">Marktregime<span class="tip" data-tip="Was der Bot ueber die Markt-Phase denkt. Bull = steigend, Bear = fallend, Sideways = seitwaerts.">?</span></div>
-                <div class="card-value" style="font-size:20px" id="brain-regime-detail">--</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Laeufe<span class="tip" data-tip="Wie oft der Bot bisher den Markt analysiert und Entscheidungen getroffen hat.">?</span></div>
-                <div class="card-value" style="font-size:20px" id="brain-runs">--</div>
-            </div>
-        </div>
-        <div class="grid-3">
-            <div class="card">
-                <div class="card-title">Win-Rate<span class="tip" data-tip="Anteil der gewinnbringenden Trades. Beispiel: 60% bedeutet, 6 von 10 Trades waren profitabel.">?</span></div>
-                <div class="card-value" style="font-size:18px" id="brain-winrate">--</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Sharpe<span class="tip" data-tip="Misst, wie gut die Rendite im Verhaeltnis zum Risiko ist. Ueber 1 = gut, ueber 2 = sehr gut. Je hoeher, desto besser.">?</span></div>
-                <div class="card-value" style="font-size:18px" id="brain-sharpe">--</div>
-            </div>
-            <!-- v37e+ (16.07.2026): ausgeblendet — Brain-"Regeln" (learn_rules = _legacy_learn_rules_unused), steuert den Fundamental-Motor nicht. -->
-            <div class="card" style="display:none">
-                <div class="card-title">Regeln<span class="tip" data-tip="Anzahl der Regeln, die der Bot aus seiner Erfahrung gelernt hat (z.B. 'Asset X funktioniert bei VIX unter 20 gut').">?</span></div>
-                <div class="card-value" style="font-size:18px" id="brain-rules">--</div>
-            </div>
-        </div>
+    <!-- R-B66d: tab-brain Block entfernt (Alt-Motor-Anzeige; Regime lebt
+         auf dem Dashboard weiter). Siehe CHANGELOG R-B66d. -->
 
-        <!-- v37e+ (16.07.2026): ausgeblendet — Brain-Instrument-Scores (Win-Rate-basierte Alt-Bewertung), vom Trader NICHT gelesen, steuert den Fundamental-Motor nicht. -->
-        <div class="card" style="display:none">
-            <div class="card-title">Instrument Scores<span class="tip" data-tip="Bewertung jedes einzelnen Assets durch den Bot. Hoher Score = der Bot vertraut diesem Asset, niedriger Score = vorsichtig sein.">?</span></div>
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Symbol<span class="tip" data-tip="Ticker des bewerteten Wertpapiers.">?</span></th>
-                            <th>Score<span class="tip" data-tip="Bot-interne Bewertung 0-100. Aus Avg %, Win % und Volatilitaet berechnet. Hoeher = Bot vertraut diesem Asset, niedriger = vorsichtig sein. Schwellwert fuer 'gute' Assets liegt typisch bei 30-40.">?</span></th>
-                            <th>Avg %<span class="tip" data-tip="Durchschnittliche Rendite pro Trade dieses Assets (alle abgeschlossenen Trades). +2.5% z.B. heisst, im Mittel verdient der Bot 2.5% pro abgeschlossenem Trade mit diesem Symbol.">?</span></th>
-                            <th>Win %<span class="tip" data-tip="Anteil profitabler Trades dieses Assets. 60% = 6 von 10 Trades waren im Plus.">?</span></th>
-                            <th>Trend<span class="tip" data-tip="Pfeil-Indikator: Hat sich der Score in den letzten Trades verbessert (↑), verschlechtert (↓) oder gehalten (→)?">?</span></th>
-                        </tr>
-                    </thead>
-                    <tbody id="scores-table"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- v37h Tab-Audit-Day-3 (13.05.2026): "Gelernte Regeln" Card entfernt.
-             Carlos-Entscheidung: Feature war v6-Era Legacy. Aktuelle Layer
-             (WFO + Optimizer + Scanner + Regime-Filter + Sentiment + Kelly)
-             ueberholen die Regel-Logic. Modernere risk-adaptive Features
-             E11+E12+E13 sind im Q1-Backlog geplant. -->
-
-        <!-- META-LABELER STATUS -->
-        <!-- v37e+ (16.07.2026): ausgeblendet — Meta-Labeler ist Shadow-Mode + das ML-Training ist deaktiviert (wird nie scharf). Totes Experiment; Code dormant. -->
-        <div class="card" id="meta-labeler-card" style="display:none">
-            <div class="card-title">Meta-Labeler (Beobachtungs-Modus)<span class="tip" data-tip="Zweite KI die im Hintergrund mitlernt: Sie schaut sich jeden Trade des Haupt-Bots an und merkt sich Muster wie 'wenn die Marktlage so-und-so ist, geht dieser Trade meistens auf'. Greift erst live ein, wenn sie ueber Wochen bewiesen hat dass sie zuverlaessig richtig liegt.">?</span></div>
-            <div id="meta-status-badge" class="badge badge-blue" style="margin-bottom:12px;">--</div>
-            <div class="grid-3">
-                <div>
-                    <div class="card-sub">Beobachtete Trades<span class="tip" data-tip="Wie viele Trades die zweite KI bisher im Hintergrund beobachtet hat. Je mehr, desto verlaesslicher kann sie spaeter beurteilen ob ein neues Signal gut oder schlecht ist.">?</span></div>
-                    <div class="card-value" style="font-size:18px" id="meta-shadow-count">--</div>
-                </div>
-                <div>
-                    <div class="card-sub">Treffer-Quote<span class="tip" data-tip="Wenn die zweite KI 'Kauf!' sagt — wie oft lag sie damit tatsaechlich richtig? Muss bei mindestens 65% liegen, bevor sie scharfgeschaltet wird.">?</span></div>
-                    <div class="card-value" style="font-size:18px" id="meta-precision">--</div>
-                </div>
-                <div>
-                    <div class="card-sub">Samples<span class="tip" data-tip="Anzahl der abgeschlossenen Trades, auf denen der Meta-Labeler zuletzt trainiert wurde.">?</span></div>
-                    <div class="card-value" style="font-size:18px" id="meta-samples">--</div>
-                </div>
-            </div>
-            <div style="margin-top:12px;">
-                <div class="card-sub" style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                    <span>Fortschritt zur Live-Schaltung<span class="tip" data-tip="Wenn beide Balken voll sind (genug Trades UND Precision hoch genug), schaltet sich der Meta-Labeler automatisch scharf und filtert dann echte Kauf-Signale.">?</span></span>
-                    <span id="meta-progress-label">--</span>
-                </div>
-                <div style="background:var(--bg-input);height:10px;border-radius:5px;overflow:hidden;">
-                    <div id="meta-progress-bar" style="height:100%;background:var(--green);width:0%;transition:width 0.4s;"></div>
-                </div>
-            </div>
-            <div class="card-sub" id="meta-trained-at" style="margin-top:8px;font-size:11px;">--</div>
-        </div>
-    </div>
-
-    <!-- === REPORTS TAB === -->
     <div id="tab-reports" class="tab-content">
         <div class="grid-2">
             <div class="card">
@@ -1233,17 +1157,11 @@
                         <label>Rebalance-Schwelle (%)</label><span class="tip" data-tip="Ab welcher Abweichung das Portfolio neu ausbalanciert wird. Beispiel: 5% = wenn eine Position statt 10% auf 15% des Depots waechst, wird ein Teil verkauft um die Balance zu halten. Frei editierbar.">?</span>
                         <input type="number" id="cfg-rebalance" step="0.5" min="1" max="20">
                     </div>
-                    <div class="form-group">
-                        <label>⚠️ Default Leverage</label><span class="tip" data-tip="Standard-Hebel fuer neue Trades. AKTUELL IGNORIERT bei IBKR — Margin/Hebel wird automatisch ueber das Konto-Setup gesteuert. Wert bleibt nur als historischer Default in der Config, hat KEINEN Einfluss auf reale Trades. Bei eToro-Rueckfall waere er aktiv.">?</span>
-                        <select id="cfg-leverage" style="opacity:0.7;">
-                            <option value="1">1x (IBKR-default)</option>
-                            <option value="2">2x</option>
-                            <option value="5">5x</option>
-                            <option value="10">10x</option>
-                            <option value="25">25x</option>
-                        </select>
-                        <div class="card-sub" style="margin-top:4px;font-size:11px;color:var(--text-dim);">Bei IBKR ignoriert (Account-Margin)</div>
-                    </div>
+                    <!-- R-B66d: Default-Leverage-Auswahl entfernt — bei IBKR wirkungslos
+                         (Margin steuert das Konto-Setup), Aktien laufen 1x. Config-Wert
+                         bleibt unangetastet; cfg-leverage existiert als hidden Input,
+                         damit der Settings-Save-Roundtrip unveraendert funktioniert. -->
+                    <input type="hidden" id="cfg-leverage" value="1">
                 </div>
                 <div class="grid-2">
                     <div class="form-group">

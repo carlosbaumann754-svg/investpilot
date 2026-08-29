@@ -39,7 +39,7 @@ function switchTab(name) {
 
     if (name === 'trades') loadTrades(true);
     if (name === 'order-audit') loadOrderAudit();
-    if (name === 'brain') loadBrain();
+    // R-B66d: 'brain'-Tab entfernt (Alt-Motor-Anzeige) — Regime lebt auf dem Dashboard.
     if (name === 'reports') { loadReports(); loadLastRunTimestamps(); }
     // v37e+ (16.07.2026): "Backtest"-Tab entfernt (Alt-TA obsolet/stale). Loader dormant.
     // if (name === 'backtest') { loadBacktest(); loadOptimizer(); loadKellySweep(); loadLastRunTimestamps(); }
@@ -590,6 +590,8 @@ async function loadDashboard() {
         if (portfolioRes) {
             const p = await portfolioRes.json();
             if (!p.error) {
+                // R-B66d: M2a-Flag global cachen (Earnings-Watchlist u.a. lesen es)
+                window._m2aAktiv = !!p.m2a_aktiv;
                 // v37h Multi-Currency: Currency aus Response uebernehmen.
                 // Diese Top-Karten zeigen Account-BASE-Currency (z.B. CHF).
                 if (p.currency) _botCurrency = p.currency;
@@ -642,17 +644,31 @@ async function loadDashboard() {
                     // Ticker als Asset-Kennung; Hover-Tooltip mit vollem Namen
                     const ticker = pos.symbol || ('#' + pos.instrument_id);
                     const title = pos.name ? `title="${pos.name}"` : '';
-                    const assetCell = `<span ${title} style="${pos.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>`;
+                    // R-B66d: GEERBT-Badge unter M2a (Alt-Position, Alt-Exits)
+                    const geerbtBadge = (p.m2a_aktiv && pos.geerbt)
+                        ? `<span title="Geerbte Alt-Position: laeuft unter den alten Exits (SL/Trailing) aus." ` +
+                          `style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:9px;font-size:10px;font-weight:600;` +
+                          `background:rgba(148,163,184,0.15);color:#94a3b8;border:1px solid rgba(148,163,184,0.35);cursor:help;">GEERBT</span>`
+                        : '';
+                    const assetCell = `<span ${title} style="${pos.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>${geerbtBadge}`;
                     // v37z: Manueller Sell-Button — bei Cutover-Phase wertvoll
                     // (heute morgen ROKU-Beispiel: nicht mehr in IBKR-App muessen)
-                    const sellBtn = pos.symbol
-                        ? `<button onclick="manualSell('${pos.symbol}', ${pos.pnl_pct || 0})"
-                                   title="Position sofort verkaufen (Confirm-Dialog erscheint)"
-                                   class="btn-secondary"
-                                   style="font-size:11px;padding:3px 8px;cursor:pointer;">
-                             Verkaufen
-                          </button>`
-                        : '<span style="color:#666;font-size:11px;">--</span>';
+                    // R-B66d: fuer M2a-Positionen GESPERRT — Pre-Commit aus dem
+                    // bindenden Regelwerk: Ausstieg NUR via Horizont/Gates, kein
+                    // manueller Eingriff. Geerbte behalten den Button (Alt-Regeln).
+                    // Notbremse fuer ALLE Faelle bleibt der Kill-Switch.
+                    const m2aGesperrt = p.m2a_aktiv && !pos.geerbt;
+                    const sellBtn = m2aGesperrt
+                        ? `<span title="M2a Pre-Commit: Ausstieg nur ueber den Zeit-Horizont (126 Handelstage), den Kat-Stop oder die Gates — kein manueller Einzelverkauf. Notfall: Kill-Switch."
+                                 style="color:var(--text-dim);font-size:11px;cursor:help;">M2a 🔒</span>`
+                        : (pos.symbol
+                            ? `<button onclick="manualSell('${pos.symbol}', ${pos.pnl_pct || 0})"
+                                       title="Position sofort verkaufen (Confirm-Dialog erscheint)"
+                                       class="btn-secondary"
+                                       style="font-size:11px;padding:3px 8px;cursor:pointer;">
+                                 Verkaufen
+                              </button>`
+                            : '<span style="color:#666;font-size:11px;">--</span>');
                     const tr = document.createElement('tr');
                     // v37cx: Alter-Spalte (age_days vom Backend, sonst trade_history-Lookup)
                     const ageDays = pos.age_days != null ? pos.age_days.toFixed(1) + 'd' : '--';
@@ -662,7 +678,6 @@ async function loadDashboard() {
                         <td>${fmtUsd(pos.invested)}</td>
                         <td class="${pnlClass(pos.pnl)}">${fmtUsd(pos.pnl)}</td>
                         <td class="${pnlClass(pos.pnl_pct)}">${fmtPct(pos.pnl_pct)}</td>
-                        <td>${pos.leverage}x</td>
                         ${trailTd}
                         <td>${sellBtn}</td>
                     `;
@@ -678,8 +693,11 @@ async function loadDashboard() {
                 const regimeMap = { bull: 'badge-green', bear: 'badge-red', sideways: 'badge-orange', unknown: 'badge-blue' };
                 regimeBadge.className = 'badge ' + (regimeMap[b.market_regime] || 'badge-blue');
                 regimeBadge.textContent = (b.market_regime || 'unknown').toUpperCase();
+                // R-B66d: Win/Sharpe-all-time entfernt (Alt-Motor-Zahlen ohne
+                // Steuerungsfunktion). Das Regime ist der lebende Teil — es
+                // speist den Kauf-Regime-Filter.
                 document.getElementById('brain-stats').textContent =
-                    `Win: ${b.win_rate?.toFixed(1) || 0}% | Sharpe: ${b.sharpe_estimate?.toFixed(2) || 0} (all-time inkl. Alt-Motor — Soak-Zahlen: siehe Soak-Karte)`;
+                    `Regime speist den Kauf-Filter (zusammen mit VIX, Fear&Greed, Makro-Score)`;
             }
         }
 
@@ -844,7 +862,7 @@ function renderTrades() {
         if (filterAction === 'BUY' && !(action === 'BUY' || action === 'SCANNER_BUY')) return false;
         if (filterAction === 'CLOSE' && !action.includes('CLOSE') && action !== 'MANUAL_SELL') return false;
         if (filterAction === 'STOP_LOSS_CLOSE' && action !== 'STOP_LOSS_CLOSE') return false;
-        if (filterAction === 'TAKE_PROFIT_CLOSE' && action !== 'TAKE_PROFIT_CLOSE') return false;
+        if (filterAction === 'HORIZON_CLOSE' && action !== 'HORIZON_CLOSE') return false;
         if (filterAction === 'EARNINGS_BLACKOUT_CLOSE' && action !== 'EARNINGS_BLACKOUT_CLOSE') return false;
         if (filterAction === 'MANUAL_SELL' && action !== 'MANUAL_SELL') return false;
         if (filterAction === 'FAILED' && !action.includes('FAILED')) return false;
@@ -875,6 +893,7 @@ function renderTrades() {
                         || (t.action || '').includes('FAILED');
         const actionClass = _failed ? 'badge-red' :
                             t.action === 'BUY' || t.action === 'SCANNER_BUY' ? 'badge-green' :
+                            t.action === 'HORIZON_CLOSE' ? 'badge-purple' :
                             t.action.includes('STOP_LOSS') ? 'badge-red' :
                             t.action.includes('TAKE_PROFIT') ? 'badge-purple' :
                             t.action.includes('FAILED') ? 'badge-red' :
@@ -895,7 +914,6 @@ function renderTrades() {
             <td><span class="badge ${actionClass}">${t.action}${_statusLabel}</span></td>
             <td>${assetCell}</td>
             <td>${t.amount_usd ? fmtUsd(t.amount_usd) : (t.pnl_usd ? fmtUsd(t.pnl_usd) : '--')}</td>
-            <td>${t.leverage || 1}x</td>
         `;
         tbody.appendChild(tr);
     });
@@ -1038,50 +1056,8 @@ function renderOrderAudit() {
 }
 
 // === BRAIN ===
-async function loadBrain() {
-    // Meta-Labeler-Status parallel zum Brain-Load ziehen
-    loadMetaLabelerStatus();
-
-    const res = await apiFetch('/api/brain');
-    if (!res) return;
-    const b = await res.json();
-    if (b.error) return;
-
-    document.getElementById('brain-regime-detail').textContent = (b.market_regime || 'unknown').toUpperCase();
-    document.getElementById('brain-runs').textContent = b.total_runs || 0;
-    document.getElementById('brain-winrate').textContent = (b.win_rate?.toFixed(1) || '0') + '%';
-    document.getElementById('brain-sharpe').textContent = b.sharpe_estimate?.toFixed(2) || '0';
-    document.getElementById('brain-rules').textContent = (b.learned_rules || []).length;
-
-    // Scores table
-    const tbody = document.getElementById('scores-table');
-    tbody.innerHTML = '';
-    const scores = b.instrument_scores || {};
-    Object.entries(scores).forEach(([iid, s]) => {
-        const scoreColor = s.score > 0 ? 'var(--green)' : 'var(--red)';
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td title="instrument_id=${iid}">${s.symbol || ("#" + iid)}</td>
-            <td style="color:${scoreColor}; font-weight:700">${s.score}</td>
-            <td>${fmtPct(s.avg_return_pct)}</td>
-            <td>${s.consistency}%</td>
-            <td class="${pnlClass(s.trend)}">${s.trend >= 0 ? '+' : ''}${s.trend}</td>
-        `;
-        tbody.appendChild(tr);
-    });
-
-    // v37h Tab-Audit-Day-3 (13.05.2026): rules-list Rendering entfernt.
-    // Card aus HTML weg (Carlos-Entscheidung), b.learned_rules wird nicht
-    // mehr angezeigt. Backend liefert das Feld weiter (fuer weekly_report)
-    // — wird aber im Frontend ignoriert.
-}
-
-// === STRATEGY PRESETS ===
-// v37h Tab-Audit-Day-2 (12.05.2026): STRATEGY_PRESETS + onStrategyPreset
-// entfernt. Strategy-Selector wurde in v37cx aus HTML entfernt (Bot bleibt
-// fix auf WFO-validierter Strategie). Dead-Code-Cleanup nach Bug-Hunt-Audit.
-
-// === SETTINGS ===
+// R-B66d: loadBrain() entfernt — tab-brain existiert nicht mehr.
+// Die Dashboard-Regime-Anzeige laeuft ueber den Portfolio-Load (brain-regime).
 async function loadSettings() {
     load2FAStatus(); // parallel
     loadDisabledSymbols(); // parallel
@@ -1992,6 +1968,10 @@ async function loadV15Sizing() {
 
         // DCA-Card
         const d = data.v15_cash_dca || {};
+        // R-B66d: Karte nur bei aktivem DCA-Plan zeigen — der Dauerzustand
+        // "INAKTIV" ist Rauschen (Display-Regel: Sinnloses nicht zeigen).
+        const dcaCard = document.getElementById('v15-dca-card');
+        if (dcaCard) dcaCard.style.display = d.dca_active ? '' : 'none';
         const badge = document.getElementById('v15-dca-badge');
         if (badge) {
             if (d.dca_active) {
@@ -2357,7 +2337,13 @@ async function loadWfoDriftStatus() {
         }
 
         // Summary-Text (PF-basiert, R-B43)
-        if (targetPf != null && livePf != null && driftPct != null) {
+        // R-B66d: unter M2a pausiert der Watchdog GEPLANT (M0-Baselines waeren
+        // Cry-Wolf) — die Karte erklaert das, statt "Skipped:" zu murmeln.
+        if (d.m2a_paused) {
+            summary.innerHTML = '⏸ Bewusst pausiert: die Baselines (WFO-PF, RT-Referenz) stammen vom ' +
+                'alten Motor — Vergleiche waeren Fehlalarme. Die Konformitaets-Ueberwachung ' +
+                'laeuft ueber die <strong>M2a-Gates G1–G5</strong> (siehe M2a-Karte oben).';
+        } else if (targetPf != null && livePf != null && driftPct != null) {
             summary.innerHTML = 'WFO-PF-Baseline: <strong>' + fmt(targetPf, 2) +
                 '</strong> ⇄ Live-PF: <strong>' + fmt(livePf, 2) +
                 '</strong> ⇒ Drift <strong>' + (driftPct > 0 ? '+' : '') + driftPct.toFixed(1) + '%</strong>' +
@@ -3225,7 +3211,11 @@ async function loadEarningsWatchlist() {
                 ? `<span style="color:#34d399;">Filter aktiv</span>`
                 : `<span style="color:#fbbf24;">Filter aus</span>`) +
             ` &middot; ${wouldExit} wuerden geschlossen` +
-            (exempt > 0 ? ` &middot; <span style="color:#fbbf24;">${exempt} exempt</span>` : '');
+            (exempt > 0 ? ` &middot; <span style="color:#fbbf24;">${exempt} exempt</span>` : '') +
+            // R-B66d: unter M2a gilt der Earnings-EXIT nur noch fuer geerbte
+            // Positionen (M2a haelt durch Earnings hindurch); der Kauf-Blackout
+            // gilt weiterhin fuer alle.
+            (window._m2aAktiv ? ' &middot; <span style="color:var(--text-dim);">Exit-Filter: nur geerbte Positionen (M2a haelt durch)</span>' : '');
 
         tbody.innerHTML = wl.map(e => {
             let action;

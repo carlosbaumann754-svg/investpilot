@@ -177,6 +177,34 @@ def _generate_improvement_suggestions(brain, trade_stats, tech_checks, tech_warn
     """Generiere konkrete Verbesserungsvorschlaege."""
     suggestions = []
 
+    # R-B66d: Unter M2a sind die klassischen Tuning-Vorschlaege dieser
+    # Funktion REGELWIDRIG — sie empfehlen SL/TP-Anpassungen, min_score
+    # senken, Brain-Score-Reaktionen und mehr Asset-Klassen, alles Dinge,
+    # die das bindende Regelwerk (Pre-Commit, Ausstieg nur via Gates)
+    # explizit ausschliesst. Unter M2a: nur Technik-Hinweise + Verweis.
+    try:
+        from app.config_manager import load_config as _lc
+        from app import m2a_motor as _m2a
+        if _m2a.ist_aktiv(_lc() or {}):
+            if len(tech_warnings) > 2:
+                suggestions.append({
+                    "bereich": "Technik",
+                    "prioritaet": "HOCH",
+                    "vorschlag": f"{len(tech_warnings)} technische Warnungen - System-Stabilitaet pruefen.",
+                    "aktion": "Warnings oben im Bericht pruefen und beheben",
+                })
+            suggestions.append({
+                "bereich": "M2a-Regelwerk",
+                "prioritaet": "INFO",
+                "vorschlag": ("Motor M2a aktiv: Strategie-Aenderungen laufen ausschliesslich "
+                              "ueber die kalendarischen Gates G1-G5 (6M-Leiter), nicht ueber "
+                              "Wochen-Tipps. Kein Eingriff oberhalb des -20%-Budgets."),
+                "aktion": "docs/M2A_MOTOR_REGELWERK.md",
+            })
+            return suggestions
+    except Exception:
+        pass
+
     # Trading-basierte Vorschlaege
     if trade_stats["sl_closes"] > trade_stats["tp_closes"] * 2:
         suggestions.append({

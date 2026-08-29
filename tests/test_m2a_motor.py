@@ -159,3 +159,28 @@ class TestWatchdogUnterM2a:
         # kein M2a-Skip — was danach passiert (Daten fehlen etc.) ist egal,
         # nur der Grund darf nicht M2a sein
         assert not (r.get("skip_reason") and "M2a" in r["skip_reason"])
+
+
+class TestWeeklyReportUnterM2a:
+    """R-B66d: Die Wochen-Vorschlaege des Alt-Motors (SL/TP anpassen,
+    min_score senken, Brain-Scores, mehr Asset-Klassen) sind unter M2a
+    REGELWIDRIG — der Generator muss sie kappen und auf die Gates verweisen."""
+
+    def test_m2a_kappt_alt_vorschlaege(self, monkeypatch):
+        from app import weekly_report as wr
+        monkeypatch.setattr("app.m2a_motor.ist_aktiv", lambda cfg: True)
+        stats = {"sl_closes": 10, "tp_closes": 1, "total_trades": 0,
+                 "scanner_trades": 0, "asset_class_breakdown": {"stocks": 20}}
+        brain = {"instrument_scores": {"1": {"score": -99.0}}}
+        sug = wr._generate_improvement_suggestions(brain, stats, [], [])
+        bereiche = {s["bereich"] for s in sug}
+        assert bereiche == {"M2a-Regelwerk"}, bereiche
+        assert "Gates" in sug[0]["vorschlag"]
+
+    def test_ohne_m2a_alles_wie_vorher(self, monkeypatch):
+        from app import weekly_report as wr
+        monkeypatch.setattr("app.m2a_motor.ist_aktiv", lambda cfg: False)
+        stats = {"sl_closes": 10, "tp_closes": 1, "total_trades": 5,
+                 "scanner_trades": 5, "asset_class_breakdown": {"stocks": 20}}
+        sug = wr._generate_improvement_suggestions({}, stats, [], [])
+        assert any(s["bereich"] == "Trading" for s in sug)
