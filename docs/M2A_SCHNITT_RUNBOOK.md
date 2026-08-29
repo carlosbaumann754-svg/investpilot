@@ -38,6 +38,10 @@ M0-Exits per Code-Flag. Der Schnitt ist damit ein reiner Config-Patch.
    - R-B66c: Exit-Forecast zeigt alle 15 Positionen mit GEERBT-Badge,
      Meta-Zeile "Config (M2a): ..."; WFO-Drift-Watchdog loggt beim
      naechsten Tageslauf den Skip "M2a aktiv — M0-Baselines pausiert".
+   - R-B66d: WFO-Karte zeigt "Pausiert (M2a) — Gates G1-G5 uebernehmen";
+     Positionen-Tabelle: alle 15 GEERBT-Badges, Verkaufen-Buttons bleiben
+     (alle geerbt!). Das "M2a 🔒" erscheint erst ab Dienstag bei den
+     ersten M2a-Kaeufen. Earnings-Watchlist traegt den Geerbten-Zusatz.
 
 5. DOKU: CHANGELOG-Eintrag "SCHNITT VOLLZOGEN" + Memory + Recap.
    M0-Akte archivieren: data/roundtrip_pf_reference.json + Zwischencheck-
