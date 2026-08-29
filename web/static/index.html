@@ -129,6 +129,31 @@
 
 
         <!-- v37dn: Soak-Fortschritt (neuer Motor) -->
+        <!-- R-B66: M2A-Gates-Karte — ersetzt die Soak-Karte sobald m2a.aktiv -->
+        <div class="card" id="m2a-gates-card" style="border-left:4px solid #10b981;display:none;">
+            <div class="card-title">M2A-Motor — Gates<span class="tip" data-tip="Der Bot haelt jede Position fix ~6 Monate (126 Handelstage) und verkauft dann — ohne Stop-Loss und Trailing; einzige Absicherung ist der Broker-Katastrophenstop bei -40%. Bewiesen wird der Motor nicht mehr per Trade-Zaehler, sondern durch sein LIVE-VALIDIERTES Modell (25/25-Paarprobe): Diese Karte prueft laufend, ob die Realitaet dem Modell folgt. Bindendes Regelwerk: docs/M2A_MOTOR_REGELWERK.md.">?</span>
+                <span id="m2a-badge" style="float:right;font-size:13px;padding:4px 10px;border-radius:12px;background:rgba(16,185,129,0.15);color:#6ee7b7;">--</span>
+            </div>
+            <div id="m2a-headline" class="card-sub" style="margin-bottom:10px;font-size:14px;">Lade Status...</div>
+            <div class="grid-3" style="gap:10px;">
+                <div>
+                    <div class="card-sub">Monat (USD)<span class="tip" data-tip="Rendite des laufenden Monats in Dollar, verglichen mit den Erwartungs-Baendern des validierten Modells. Einzelne Monate bis -5.4% sind NORMAL (passiert in 5% der Modell-Monate) — erst darunter wird protokolliert, unter -8.3% eskaliert.">?</span></div>
+                    <div class="card-value" id="m2a-monat" style="font-size:20px;">--</div>
+                    <div class="card-sub" id="m2a-monat-band" style="font-size:11px;">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">6-Monats-Leiter<span class="tip" data-tip="Der bindende Entscheid ~Ende Feb 2027: 6-Monats-Rendite unter -10.7% = Stopp-Empfehlung; bis +1.2% = verlaengern (spaetestens Monat 12 wird entschieden); ab +1.2% plus saubere Ausfuehrung = GO-Empfehlung fuer echtes Geld.">?</span></div>
+                    <div class="card-value" id="m2a-leiter" style="font-size:20px;">--</div>
+                    <div class="card-sub" id="m2a-leiter-sub" style="font-size:11px;">--</div>
+                </div>
+                <div>
+                    <div class="card-sub">Depot-Umbau<span class="tip" data-tip="Anlauf: max. 5 Neukaeufe pro Monat (nur Handelstag 1-3), bis das Depot komplett aus M2a-Positionen besteht. Die geerbten Alt-Positionen laufen unter den alten Regeln aus und zaehlen fuer keine Messung.">?</span></div>
+                    <div class="card-value" id="m2a-umbau" style="font-size:20px;">--</div>
+                    <div class="card-sub" id="m2a-umbau-sub" style="font-size:11px;">--</div>
+                </div>
+            </div>
+        </div>
+
         <div class="card" id="soak-progress-card" style="border-left:4px solid #f59e0b;">
             <div class="card-title">
                 Soak-Fortschritt (neuer Motor)

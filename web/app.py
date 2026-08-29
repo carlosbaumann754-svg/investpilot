@@ -1715,6 +1715,63 @@ async def api_pnl_periods(user=Depends(require_auth)):
         return {"error": str(e)}
 
 
+@app.get("/api/m2a-gates")
+async def api_m2a_gates(user=Depends(require_auth)):
+    """R-B66: Status-Karte des M2A-Motors (bindendes Regelwerk).
+
+    Vor dem Schnitt: {"aktiv": false} -> Frontend zeigt weiter die
+    Soak-Karte. Nach dem Flip ersetzt die M2a-Karte die Soak-Karte
+    (Display-Regel: Umbau ersetzt, nicht akkumuliert).
+    """
+    try:
+        from datetime import date as _m2a_date
+        from app.config_manager import load_json as _ljm, load_config as _lcm
+        from app import m2a_motor as _mm
+        cfg = _lcm() or {}
+        if not _mm.ist_aktiv(cfg):
+            return {"aktiv": False}
+        m2a = cfg.get("m2a") or {}
+        z3 = (((_ljm("m2a_erwartungsbaender.json") or {}).get("resultate")
+               or {}).get("Z3_H126_DS40") or {})
+        gates_state = _ljm("m2a_gates_state.json") or {}
+        geerbt = _ljm("m2a_geerbt.json") or {}
+        hist = read_json_safe("trade_history.json") or []
+        eq = read_json_safe("equity_history.json") or []
+        rows = eq if isinstance(eq, list) else eq.get("history", [])
+        je_monat = {}
+        for r in rows:
+            d = str(r.get("date", ""))[:7]
+            tv, fx = r.get("portfolio_total_value"), r.get("usdchf_close")
+            if d and tv and fx:
+                je_monat[d] = float(tv) / float(fx)
+        mk = sorted(je_monat)
+        lauf_ret = (round((je_monat[mk[-1]] / je_monat[mk[-2]] - 1) * 100, 2)
+                    if len(mk) >= 2 else None)
+        schnitt = str(m2a.get("schnitt_datum", "2026-08-31"))
+        heute = _m2a_date.today()
+        monate_seit = ((heute.year - int(schnitt[:4])) * 12
+                       + heute.month - int(schnitt[5:7]))
+        schlecht = ("cancelled", "failed", "rejected")
+        n_horizon = sum(1 for x in hist if isinstance(x, dict)
+                        and x.get("action") == "HORIZON_CLOSE"
+                        and str(x.get("status", "")).lower() not in schlecht)
+        return {
+            "aktiv": True, "schnitt_datum": schnitt,
+            "monate_seit_schnitt": monate_seit,
+            "leiter_faellig_ab_monat": 6,
+            "baender_monat": z3.get("monats_baender") or {},
+            "fenster6m": z3.get("fenster6m") or {},
+            "laufender_monat_ret_usd_pct": lauf_ret,
+            "g1_letzte_meldung": gates_state.get("last_g1"),
+            "geerbt_gesamt": len(geerbt.get("position_ids") or []),
+            "neukaeufe_monat": _mm.neukaeufe_diesen_monat(hist),
+            "anlauf_limit": _mm.anlauf_limit(cfg),
+            "horizon_exits_gesamt": n_horizon,
+        }
+    except Exception as e:
+        return {"aktiv": False, "fehler": str(e)[:200]}
+
+
 @app.get("/api/soak-progress")
 async def api_soak_progress(user=Depends(require_auth)):
     """v37dn (10.06.2026): Soak-Fortschritt des neuen Motors — Visibility-Karte.

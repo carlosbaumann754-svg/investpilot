@@ -29,8 +29,10 @@ M0-Exits per Code-Flag. Der Schnitt ist damit ein reiner Config-Patch.
    bestehende geerbte -20%-Stops bleiben unangetastet stehen.)
 
 4. VERIFIKATION (Zyklus abwarten, ~5 Min):
-   - Log: "M2A: ausserhalb des Kauf-Fensters" ODER Kaeufe (31.08. = Mo =
-     Handelstag 1 -> Kauf-Fenster OFFEN, max 5 Kaeufe erwartet ab 15:30).
+   - Log: "M2A: ausserhalb des Kauf-Fensters" (KORREKTUR 28.08.: der
+     31.08. ist Handelstag 21 des AUGUST — das Kauf-Fenster oeffnet erst
+     Di 01.09. = Handelstag 1. Erste M2a-Kaeufe also DIENSTAG ab 15:30,
+     max 5. Montag erwartet: Flip + Fenster-zu-Logzeile + Geerbte normal).
    - Keine SL/Trailing-Zeilen fuer neue Positionen; geerbte unveraendert.
    - Soak-/Dashboard-Karte zeigt M2a-Modus (Karte folgt am Wochenende).
 

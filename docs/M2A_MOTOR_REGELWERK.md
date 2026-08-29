@@ -70,11 +70,14 @@ G5 — MODELL-STURZ (jederzeit):
     durch die R-B64-Kriterien, verlieren ALLE Gates ihre Grundlage ->
     sofortige Grundsatz-Neubewertung.
 
-## 4. Umsetzungs-Spezifikation (Code, Wochenende 29./30.08.)
+## 4. Umsetzungs-Spezifikation (UMGESETZT 28.08., R-B66 — mit einer
+## dokumentierten Vereinfachung ggue. dem urspruenglichen Plan)
 
-1. Config + Locks: exit_mode='horizont', horizon_handelstage=126;
-   stop_loss/trailing deaktiviert via manual_lock_overrides-NEUFASSUNG
-   (bewusster, dokumentierter Locks-Wechsel); E6 cat_stop_pct -> 40 (Z3-Sieger).
+1. Config: config.m2a = {aktiv, horizon_handelstage=126, kauf_fenster=3,
+   max_neukaeufe=5}; E6 cat_stop_pct -> 40 (Z3-Sieger). VEREINFACHUNG:
+   KEINE Locks-Neufassung — die manual_lock_overrides (SL -8 etc.) steuern
+   weiterhin die GEERBTEN; M2a-Positionen ueberspringen die M0-Exits per
+   Code (testbewiesen). Schnitt+Rollback = reine Config-Flips.
 2. trader.py: unbedingter Zeit-Exit bei Positions-Alter >= 126
    Handelstage (neuer Exit-Zweig, VOR allen anderen Pruefungen; Tests:
    Tag 125 haelt, Tag 126 verkauft, geerbte Positionen ausgenommen);

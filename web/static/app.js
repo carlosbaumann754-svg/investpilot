@@ -404,6 +404,51 @@ document.addEventListener('click', (e) => {
 });
 
 // === DASHBOARD ===
+// R-B66: M2A-Gates-Karte — ersetzt die Soak-Karte sobald der Motor aktiv ist
+async function loadM2aGates() {
+    try {
+        const res = await apiFetch('/api/m2a-gates');
+        if (!res) return;
+        const d = await res.json();
+        const m2aCard = document.getElementById('m2a-gates-card');
+        const soakCard = document.getElementById('soak-progress-card');
+        if (!d.aktiv) {
+            if (m2aCard) m2aCard.style.display = 'none';
+            if (soakCard) soakCard.style.display = '';
+            return;
+        }
+        if (soakCard) soakCard.style.display = 'none';
+        if (m2aCard) m2aCard.style.display = '';
+        const b = d.baender_monat || {};
+        const ret = d.laufender_monat_ret_usd_pct;
+        document.getElementById('m2a-monat').textContent =
+            (ret == null) ? '--' : ((ret >= 0 ? '+' : '') + ret.toFixed(2) + '%');
+        let bandTxt = '--', badge = 'im Band', badgeCol = '#6ee7b7';
+        if (ret != null && b.p05 != null) {
+            if (ret < b.p01) { badge = 'UNTER p01'; badgeCol = '#f87171'; }
+            else if (ret < b.p05) { badge = 'unter p05 (erwartbar)'; badgeCol = '#fcd34d'; }
+            else if (ret >= b.p50) { badge = 'ueber Median'; badgeCol = '#6ee7b7'; }
+            bandTxt = `Baender: p05 ${b.p05}% | Median +${b.p50}%`;
+        }
+        document.getElementById('m2a-monat-band').textContent = bandTxt;
+        const badgeEl = document.getElementById('m2a-badge');
+        badgeEl.textContent = badge;
+        badgeEl.style.color = badgeCol;
+        const rest = Math.max(d.leiter_faellig_ab_monat - d.monate_seit_schnitt, 0);
+        document.getElementById('m2a-leiter').textContent =
+            rest > 0 ? `in ${rest} Mt` : 'FAELLIG';
+        document.getElementById('m2a-leiter-sub').textContent =
+            `Stopp < ${d.fenster6m?.p01 ?? '-10.7'}% | GO >= +${d.fenster6m?.p25 ?? '1.2'}%`;
+        document.getElementById('m2a-umbau').textContent =
+            `${d.neukaeufe_monat}/${d.anlauf_limit}`;
+        document.getElementById('m2a-umbau-sub').textContent =
+            `Neukaeufe Monat | geerbt: ${d.geerbt_gesamt} | Horizont-Exits: ${d.horizon_exits_gesamt}`;
+        document.getElementById('m2a-headline').textContent =
+            `Seit Schnitt ${d.schnitt_datum}: Monat ${d.monate_seit_schnitt} von 6 bis zur Leiter` +
+            (d.g1_letzte_meldung ? ` | letzter G1-Report: ${d.g1_letzte_meldung}` : '');
+    } catch (e) { console.error('m2a-gates load:', e); }
+}
+
 async function loadSoakProgress() {
     // v37dn: Soak-Fortschritt des neuen Motors (visualisiert vorhandene Daten)
     try {
@@ -1970,6 +2015,7 @@ async function loadV15Sizing() {
     loadSelfTest();  // v37cx
     loadEarningsWatchlist();
     loadSoakProgress();  // v37dn: Soak-Fortschritt (neuer Motor)
+    loadM2aGates();      // R-B66: ersetzt Soak-Karte sobald m2a aktiv
 
     // Auto-refresh
     setInterval(loadDashboard, 60000);
@@ -1984,6 +2030,7 @@ async function loadV15Sizing() {
     setInterval(loadCostModelStatus, 600000); // Cost-Model alle 10 Min (statisch)
     setInterval(loadCutoverReadiness, 300000); // Cutover-Readiness alle 5 Min
     setInterval(loadSoakProgress, 120000); // v37dn: Soak-Fortschritt alle 2 Min
+    setInterval(loadM2aGates, 120000);     // R-B66
     setInterval(loadEarningsWatchlist, 900000); // Earnings-Watchlist alle 15 Min (calendar-Daten aendern sich kaum)
     setInterval(() => {
         if (document.getElementById('tab-logs').classList.contains('active')) {
