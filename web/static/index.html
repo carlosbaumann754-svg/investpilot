@@ -286,7 +286,7 @@
 
         <!-- Exit-Forecast: Abstand jeder offenen Position zum naechsten Exit-Trigger -->
         <div class="card">
-            <div class="card-title">Exit-Forecast<span class="tip" data-tip="Fuer jede offene Position: Wie weit ist sie vom naechsten Exit entfernt? Aktive Ausstiegs-Typen der finalen Config: Stop-Loss (-8%), Trailing-SL (ab +6%, Abstand 4% — die einzige Gewinnmitnahme), Time-Stop und Earnings-Blackout. Take-Profit und Tranchen sind bewusst AUS (belegt ueber 27 Konfigurationen: 9/9 besser ohne). Die Tabelle zeigt je Position den nahesten Trigger. Beantwortet: Warum schliesst der Bot gerade nichts?">?</span></div>
+            <div class="card-title">Exit-Forecast<span class="tip" data-tip="Fuer jede offene Position: Wie weit ist sie vom naechsten Exit entfernt? Seit dem M2a-Schnitt (31.08.2026) hat eine NEUE Position genau zwei Ausstiege: den Zeit-Horizont (126 Handelstage, ~6 Monate — 'Ht' = Rest-Handelstage) und den Katastrophen-Stop (-40%, reine Notbremse). Stop-Loss, Trailing und Take-Profit gibt es fuer M2a-Positionen bewusst NICHT — das validierte Modell haelt durch Schwankungen hindurch. Positionen mit Badge GEERBT stammen aus der Zeit vor dem Schnitt und laufen unter den alten Regeln (SL -8%, Trailing ab +6%) aus. Beantwortet: Wann verkauft der Bot was?">?</span></div>
             <div id="exit-forecast-status" style="margin-bottom:10px;font-size:12px;color:var(--muted);">--</div>
             <div id="exit-forecast-table-wrap" style="overflow:visible;">
                 <table class="data-table" id="exit-forecast-table" style="display:none;width:100%;">

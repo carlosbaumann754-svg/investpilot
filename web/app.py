@@ -965,13 +965,18 @@ EXIT_TRIGGER_PRIORITY = ["SL", "Trailing-SL", "TP-1", "TP-2", "TP-3", "TP-final"
 _TP_DISABLED_SENTINEL = 100
 
 
-def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -> dict:
+def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict,
+                           m2a_ctx: Optional[dict] = None) -> dict:
     """Berechne für eine Position alle Trigger-Distanzen und den nächsten Exit.
 
     Args:
         position: Geparste Position (aus EtoroClient.parse_position)
         config: Volles Config-Dict
         trailing_state: trailing_sl_state.json Inhalt (persistierter SL-Level je pos_id)
+        m2a_ctx: R-B66c — wenn M2a aktiv: {"horizon", "geerbt", "kat_stop_pct"}.
+            M2a-Positionen haben genau ZWEI Ausstiege (Zeit-Horizont +
+            Katastrophen-Stop); die M0-Trigger existieren fuer sie nicht und
+            werden nicht angezeigt. Geerbte behalten die M0-Anzeige + Flag.
 
     Returns:
         dict mit triggers-Liste + next_trigger
@@ -1003,15 +1008,73 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
     # damit Brain-Cache-Snapshots ohne open_time/position_id (alte Daten) auch
     # ein age_days bekommen.
     age_days = None
+    open_dt_found = None
     try:
         from app.trader import _find_position_open_time
-        _, age_days = _find_position_open_time(
+        open_dt_found, age_days = _find_position_open_time(
             position.get("position_id"),
             open_time,
             symbol=position.get("symbol"),
         )
     except Exception:
         age_days = None
+
+    # --- R-B66c: M2a-Position? Dann gibt es genau zwei Ausstiege. ---
+    geerbt = bool(m2a_ctx) and pid in m2a_ctx.get("geerbt", frozenset())
+    if m2a_ctx and not geerbt:
+        horizon = int(m2a_ctx.get("horizon", 126))
+        kat_pct = float(m2a_ctx.get("kat_stop_pct", -40.0))
+        ht = None
+        try:
+            from app import m2a_motor
+            ht = m2a_motor.handelstage_seit(open_dt_found)
+        except Exception:
+            ht = None
+        ht_rest = max(0, horizon - ht) if ht is not None else None
+        triggers = [
+            {
+                "type": "HORIZONT",
+                "label": f"Zeit-Horizont ({horizon} Handelstage, ~6 Monate)",
+                "target_pct": None,
+                "distance_pct": None,
+                "active": True,
+                "direction": "time",
+                "handelstage": ht,
+                "handelstage_rest": ht_rest,
+                "eligible_now": ht is not None and ht >= horizon,
+            },
+            {
+                "type": "E6-Kat-Stop",
+                "label": f"Katastrophen-Stop ({kat_pct:+.0f}%)",
+                "target_pct": kat_pct,
+                "distance_pct": round(pnl_pct - kat_pct, 2),
+                "active": True,
+                "direction": "down",
+            },
+        ]
+        # Naechster Trigger: realistisch der Horizont — ausser die Position
+        # steht kurz vor dem Kat-Stop (<5% Abstand), dann ist DER die Nachricht.
+        e6 = triggers[1]
+        if e6["distance_pct"] is not None and e6["distance_pct"] < 5:
+            next_trigger = {"type": e6["type"], "label": e6["label"],
+                            "distance_pct": e6["distance_pct"], "direction": "down"}
+        else:
+            next_trigger = {"type": "HORIZONT", "label": triggers[0]["label"],
+                            "distance_pct": None, "direction": "time",
+                            "handelstage_rest": ht_rest}
+        return {
+            "position_id": position.get("position_id"),
+            "instrument_id": position.get("instrument_id"),
+            "symbol": position.get("symbol"),
+            "name": position.get("name"),
+            "pnl_pct": pnl_pct,
+            "invested": position.get("invested"),
+            "age_days": round(age_days, 2) if age_days is not None else None,
+            "m2a": True,
+            "geerbt": False,
+            "triggers": triggers,
+            "next_trigger": next_trigger,
+        }
 
     triggers = []
 
@@ -1167,6 +1230,10 @@ def _compute_exit_forecast(position: dict, config: dict, trailing_state: dict) -
         "pnl_pct": pnl_pct,
         "invested": position.get("invested"),
         "age_days": round(age_days, 2) if age_days is not None else None,
+        # R-B66c: unter M2a laufen diese Positionen als GEERBT unter Alt-Exits
+        # aus — das Dashboard zeigt dafuer ein Badge.
+        "m2a": False,
+        "geerbt": geerbt,
         "triggers": triggers,
         "next_trigger": next_trigger,
     }
@@ -1201,20 +1268,49 @@ async def api_exit_forecast(user=Depends(require_auth)):
             log.warning(f"Trailing-State laden fehlgeschlagen: {e}")
             trailing_state = {}
 
-        forecasts = [_compute_exit_forecast(p, config, trailing_state) for p in parsed]
+        # R-B66c: M2a-Kontext einmalig aufbauen (None solange m2a.aktiv=false —
+        # dann verhaelt sich die Karte exakt wie vor dem Schnitt).
+        m2a_ctx = None
+        try:
+            from app import m2a_motor
+            if m2a_motor.ist_aktiv(config):
+                _kat = ((config.get("risk_management") or {})
+                        .get("catastrophic_stop") or {}).get("pct", 40)
+                m2a_ctx = {
+                    "horizon": m2a_motor.horizon_handelstage(config),
+                    "geerbt": m2a_motor.geerbte_ids(),
+                    "kat_stop_pct": -abs(float(_kat)),
+                }
+        except Exception as e:
+            log.warning(f"M2a-Kontext fuer Exit-Forecast fehlgeschlagen: {e}")
+            m2a_ctx = None
+
+        forecasts = [_compute_exit_forecast(p, config, trailing_state, m2a_ctx)
+                     for p in parsed]
 
         # Symbol/Name anreichern fuer Dashboard-Anzeige
         enrich_with_asset_meta(forecasts)
 
-        # Nach Dringlichkeit sortieren (kleinste distance_pct zuerst)
+        # Nach Dringlichkeit sortieren: preis-basierte Trigger (Abstand in %)
+        # zuerst, dann zeit-basierte (Horizont, Rest-Handelstage). R-B66c:
+        # vorher warf None-distance (HORIZONT) im sort einen TypeError.
         def _sort_key(f):
-            nt = f.get("next_trigger")
-            return nt["distance_pct"] if nt else 999
+            nt = f.get("next_trigger") or {}
+            d = nt.get("distance_pct")
+            if d is not None:
+                return (0, d)
+            rest = nt.get("handelstage_rest")
+            if rest is not None:
+                return (1, rest)
+            return (2, 0)
         forecasts.sort(key=_sort_key)
 
         return {
             "count": len(forecasts),
             "positions": forecasts,
+            "m2a_aktiv": bool(m2a_ctx),
+            "m2a_horizon": (m2a_ctx or {}).get("horizon"),
+            "m2a_kat_stop_pct": (m2a_ctx or {}).get("kat_stop_pct"),
             "config_summary": {
                 # Live-Bot liest aus demo_trading.* (siehe trader.py). Der
                 # Optimizer schreibt auch dorthin. 'stocks' gibt's in der

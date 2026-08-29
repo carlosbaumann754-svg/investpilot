@@ -611,6 +611,24 @@ def check_wfo_drift(config: Optional[dict] = None) -> dict:
         result["skip_reason"] = "Feature disabled (config.wfo_drift_watchdog.enabled=False)"
         return result
 
+    # R-B66c (29.08.2026): Unter M2a sind BEIDE Vergleichsgroessen dieses
+    # Watchdogs M0-Artefakte — die WFO-PF-Baseline (Alt-Motor-WFO) und die
+    # Roundtrip-Referenztabelle (data/roundtrip_pf_reference.json, aus
+    # M0-Simulationen gebaut). Einen 6-Monats-Halte-Motor gegen diese
+    # Baselines zu pruefen wuerde systematisch falsch alarmieren (Cry-Wolf).
+    # Die Konformitaets-Ueberwachung uebernehmen die kalendarischen Gates
+    # G1-G5 (scripts/m2a_gate_check.py, Erwartungsbaender aus dem
+    # validierten OHLC-Modell). Rollback m2a.aktiv=false reaktiviert den
+    # Watchdog automatisch im naechsten Tageslauf.
+    try:
+        from app import m2a_motor
+        if m2a_motor.ist_aktiv(config):
+            result["skip_reason"] = ("M2a aktiv — M0-Baselines (WFO-PF + RT-Referenz) "
+                                     "pausiert; Gates G1-G5 ueberwachen")
+            return result
+    except Exception:
+        pass
+
     # R-B5 (01.06.2026, Soak-Investigation #1): PF ist die PRIMAERE Drift-Metrik.
     # Der WFO-Sharpe (mean OOS 6.40) ist ein Artefakt (Return-Glaettung +
     # explosives Compounding + OOS>IS-Anomalie) -> als absolute Baseline

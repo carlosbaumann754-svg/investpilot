@@ -120,3 +120,65 @@ def test_einstand_kommt_notfalls_aus_dem_trailing_state():
     assert t["locked_pct"] == pytest.approx(3.6, abs=0.1)
     assert t["distance_pct"] == pytest.approx(3.6, abs=0.2)
     assert r["next_trigger"]["type"] == "Trailing-SL"
+
+
+# --- R-B66c (29.08.2026): Exit-Forecast unter M2a ------------------------
+# Eine M2a-Position hat genau ZWEI Ausstiege (Zeit-Horizont + Kat-Stop).
+# Die Karte darf ihr KEINE M0-Trigger (SL/Trailing/TP/Time-Stop) andichten —
+# und Geerbte muessen die Alt-Anzeige behalten (+ Badge-Flag).
+
+def _forecast_m2a(position, m2a_ctx, open_dt=None, age=45.0):
+    from datetime import datetime
+    from unittest import mock
+    from web.app import _compute_exit_forecast
+    open_dt = open_dt or datetime(2026, 9, 1, 15, 45)
+    with mock.patch("app.trader._find_position_open_time",
+                    return_value=(open_dt, age)):
+        return _compute_exit_forecast(position, _cfg(), {}, m2a_ctx)
+
+
+def _ctx(geerbt=frozenset()):
+    return {"horizon": 126, "geerbt": geerbt, "kat_stop_pct": -40.0}
+
+
+def test_m2a_position_zeigt_nur_horizont_und_katstop():
+    from datetime import date, datetime
+    from unittest import mock
+    from app import m2a_motor
+    open_dt = datetime(2026, 9, 1, 15, 45)
+    r = _forecast_m2a({"position_id": "99001", "pnl_pct": -12.0}, _ctx(),
+                      open_dt=open_dt)
+    assert r["m2a"] is True and r["geerbt"] is False
+    typen = {t["type"] for t in r["triggers"]}
+    assert typen == {"HORIZONT", "E6-Kat-Stop"}, (
+        f"M2a-Position zeigt falsche Trigger: {typen}")
+    e6 = next(t for t in r["triggers"] if t["type"] == "E6-Kat-Stop")
+    assert e6["distance_pct"] == pytest.approx(28.0)  # -12 -> -40
+    hz = next(t for t in r["triggers"] if t["type"] == "HORIZONT")
+    erwartet = m2a_motor.handelstage_seit(open_dt)
+    assert hz["handelstage"] == erwartet
+    assert hz["handelstage_rest"] == max(0, 126 - erwartet)
+    assert r["next_trigger"]["type"] == "HORIZONT"
+    assert r["next_trigger"]["handelstage_rest"] == hz["handelstage_rest"]
+
+
+def test_m2a_kurz_vor_katstop_wird_der_zum_naechsten_trigger():
+    r = _forecast_m2a({"position_id": "99002", "pnl_pct": -37.0}, _ctx())
+    assert r["next_trigger"]["type"] == "E6-Kat-Stop"
+    assert r["next_trigger"]["distance_pct"] == pytest.approx(3.0)
+
+
+def test_geerbte_behalten_alt_anzeige_und_flag():
+    r = _forecast_m2a({"position_id": "74820280", "pnl_pct": 2.0},
+                      _ctx(geerbt=frozenset({"74820280"})))
+    assert r["geerbt"] is True and r["m2a"] is False
+    typen = {t["type"] for t in r["triggers"]}
+    assert "SL" in typen and "Trailing-SL" in typen
+    assert "HORIZONT" not in typen
+
+
+def test_ohne_m2a_ctx_alles_wie_vorher():
+    """Vor dem Schnitt (m2a_ctx=None) muss die Karte exakt M0 zeigen."""
+    r = _forecast_m2a({"position_id": "1", "pnl_pct": 1.0}, None)
+    assert r["m2a"] is False and r["geerbt"] is False
+    assert "SL" in {t["type"] for t in r["triggers"]}

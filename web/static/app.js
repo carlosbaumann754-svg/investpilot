@@ -270,7 +270,12 @@ function renderExitForecast(data) {
     tbody.innerHTML = positions.map(p => {
         const nt = p.next_trigger;
         const ntLabel = nt ? `${arrow(nt.direction)} ${nt.type}` : '--';
-        const ntDist = nt ? distFmt(nt.distance_pct) : '--';
+        // R-B66c: HORIZONT ist zeit-basiert — Abstand in Rest-Handelstagen
+        // statt in Prozent.
+        let ntDist = nt ? distFmt(nt.distance_pct) : '--';
+        if (nt && nt.type === 'HORIZONT') {
+            ntDist = nt.handelstage_rest != null ? `${nt.handelstage_rest} Ht` : '--';
+        }
         const pnlCls = (p.pnl_pct || 0) >= 0 ? 'positive' : 'negative';
 
         // R-B35: "Netz scharf"-Markierung. Ab +6% uebernimmt der Trailing-Stop
@@ -292,7 +297,16 @@ function renderExitForecast(data) {
         // Alle Trigger als kompakte Liste
         const allTriggers = (p.triggers || []).map(t => {
             let txt;
-            if (t.type === 'Time-Stop') {
+            if (t.type === 'HORIZONT') {
+                // R-B66c: zeit-basierter M2a-Exit — Rest-Handelstage zeigen
+                if (t.eligible_now) {
+                    txt = `${t.type}: <strong>FAELLIG</strong>`;
+                } else if (t.handelstage_rest != null) {
+                    txt = `${t.type}: ${t.handelstage_rest} Ht`;
+                } else {
+                    txt = `${t.type}: --`;
+                }
+            } else if (t.type === 'Time-Stop') {
                 if (t.eligible_now) {
                     txt = `${t.type}: <strong>JETZT</strong>`;
                 } else if (t.days_until != null) {
@@ -313,10 +327,19 @@ function renderExitForecast(data) {
 
         const ageTxt = p.age_days != null ? `${p.age_days.toFixed(1)}d` : '--';
 
+        // R-B66c: GEERBT-Badge — Alt-Position unter Bestandsschutz, laeuft
+        // unter den alten Exits (SL/Trailing) aus, waehrend M2a-Positionen
+        // nur Horizont + Kat-Stop haben.
+        const geerbtBadge = p.geerbt
+            ? `<span title="Geerbte Alt-Position (vor dem M2a-Schnitt gekauft): sie laeuft unter den ALTEN Ausstiegs-Regeln aus (Stop-Loss/Trailing). Neue M2a-Positionen haben stattdessen nur Zeit-Horizont + Katastrophen-Stop." ` +
+              `style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:600;` +
+              `background:rgba(148,163,184,0.15);color:#94a3b8;border:1px solid rgba(148,163,184,0.35);cursor:help;">GEERBT</span>`
+            : '';
+
         // Asset-Kennung: Ticker mit Hover-Tooltip (voller Name)
         const ticker = p.symbol || ('#' + (p.instrument_id || '?'));
         const title = p.name ? `title="${p.name}"` : '';
-        const assetCell = `<span ${title} style="${p.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>${netzBadge}`;
+        const assetCell = `<span ${title} style="${p.name ? 'cursor:help;border-bottom:1px dotted var(--text-dim);' : ''}">${ticker}</span>${geerbtBadge}${netzBadge}`;
         return `
             <tr>
                 <td>${assetCell}</td>
@@ -329,7 +352,13 @@ function renderExitForecast(data) {
         `;
     }).join('');
 
-    if (meta && data.config_summary) {
+    if (meta && data.m2a_aktiv) {
+        // R-B66c: unter M2a die WIRKLICHE Exit-Config zeigen — die alten
+        // M0-Werte gelten nur noch fuer die geerbten Positionen.
+        const hz = data.m2a_horizon ?? 126;
+        const kat = data.m2a_kat_stop_pct ?? -40;
+        meta.textContent = `Config (M2a): Zeit-Horizont ${hz} Handelstage | Kat-Stop ${kat}% | Geerbte laufen unter Alt-Exits (SL/Trailing) aus`;
+    } else if (meta && data.config_summary) {
         const c = data.config_summary;
         const sl = c.sl_pct ?? -2.5;
         const tp = c.tp_pct ?? 18;

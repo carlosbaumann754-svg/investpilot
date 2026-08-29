@@ -137,3 +137,25 @@ class TestTraderIntegration:
         assert "HORIZON" not in closes
         assert len(closes) >= 1, ("Geerbte Position bei -9% wurde nicht vom "
                                   "Alt-SL geschlossen — Bestandsschutz kaputt")
+
+
+class TestWatchdogUnterM2a:
+    """R-B66c: Unter M2a muss der WFO-Drift-Watchdog (inkl. Roundtrip-
+    Zweitsignal) SCHWEIGEN — beide Baselines sind M0-Artefakte, Alarme
+    dagegen waeren systematische Fehlalarme (Cry-Wolf). Rollback
+    (aktiv=false) reaktiviert ihn automatisch."""
+
+    def test_m2a_aktiv_pausiert_watchdog(self):
+        from app.wfo_drift_watchdog import check_wfo_drift
+        r = check_wfo_drift(config={"m2a": {"aktiv": True},
+                                    "wfo_drift_watchdog": {"enabled": True}})
+        assert r["alert_triggered"] is False
+        assert r["skip_reason"] and "M2a" in r["skip_reason"]
+
+    def test_m2a_inaktiv_laesst_watchdog_weiterlaufen(self):
+        from app.wfo_drift_watchdog import check_wfo_drift
+        r = check_wfo_drift(config={"m2a": {"aktiv": False},
+                                    "wfo_drift_watchdog": {"enabled": True}})
+        # kein M2a-Skip — was danach passiert (Daten fehlen etc.) ist egal,
+        # nur der Grund darf nicht M2a sein
+        assert not (r.get("skip_reason") and "M2a" in r["skip_reason"])

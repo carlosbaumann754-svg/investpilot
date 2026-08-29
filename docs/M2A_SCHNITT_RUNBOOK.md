@@ -34,7 +34,10 @@ M0-Exits per Code-Flag. Der Schnitt ist damit ein reiner Config-Patch.
      Di 01.09. = Handelstag 1. Erste M2a-Kaeufe also DIENSTAG ab 15:30,
      max 5. Montag erwartet: Flip + Fenster-zu-Logzeile + Geerbte normal).
    - Keine SL/Trailing-Zeilen fuer neue Positionen; geerbte unveraendert.
-   - Soak-/Dashboard-Karte zeigt M2a-Modus (Karte folgt am Wochenende).
+   - Soak-/Dashboard-Karte zeigt M2a-Modus (M2a-Gates-Karte, R-B66b).
+   - R-B66c: Exit-Forecast zeigt alle 15 Positionen mit GEERBT-Badge,
+     Meta-Zeile "Config (M2a): ..."; WFO-Drift-Watchdog loggt beim
+     naechsten Tageslauf den Skip "M2a aktiv — M0-Baselines pausiert".
 
 5. DOKU: CHANGELOG-Eintrag "SCHNITT VOLLZOGEN" + Memory + Recap.
    M0-Akte archivieren: data/roundtrip_pf_reference.json + Zwischencheck-
