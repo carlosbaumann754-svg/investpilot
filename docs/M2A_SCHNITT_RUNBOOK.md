@@ -42,6 +42,11 @@ M0-Exits per Code-Flag. Der Schnitt ist damit ein reiner Config-Patch.
      Positionen-Tabelle: alle 15 GEERBT-Badges, Verkaufen-Buttons bleiben
      (alle geerbt!). Das "M2a 🔒" erscheint erst ab Dienstag bei den
      ersten M2a-Kaeufen. Earnings-Watchlist traegt den Geerbten-Zusatz.
+   - R-B66e: M2a-Karte Leiter-Feld zeigt "Monat 1/6" + "Entscheid ab
+     2027-03" (NICHT "in 6 Mt" — Faelligkeits-Bug gefixt: Entscheid
+     braucht 6 VOLLE Monats-Returns Sep..Feb, also ab 01.03.2027);
+     Readiness-Gate #2 wird zum Leiter-Countdown; V12-Chips Time-Stop/
+     Trail-SL tragen "nur Geerbte".
 
 5. DOKU: CHANGELOG-Eintrag "SCHNITT VOLLZOGEN" + Memory + Recap.
    M0-Akte archivieren: data/roundtrip_pf_reference.json + Zwischencheck-
