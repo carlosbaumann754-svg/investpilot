@@ -2776,9 +2776,12 @@ async function loadV12Status() {
     }
 
     // Time-Stop
+    // R-B66e: unter M2a wirken Time-Stop und Trailing-SL nur noch auf
+    // GEERBTE Positionen — das Label sagt das dazu.
+    const m2aSuffix = data.m2a_aktiv ? ' · nur Geerbte' : '';
     const t = data.time_stop || {};
     if (t.enabled) {
-        setTxt('v12-timestop-value', `${t.max_days_stale || '?'}d · ${t.exits_last_7d || 0} Exits/7d`);
+        setTxt('v12-timestop-value', `${t.max_days_stale || '?'}d · ${t.exits_last_7d || 0} Exits/7d${m2aSuffix}`);
     } else {
         setTxt('v12-timestop-value', 'aus');
     }
@@ -2814,7 +2817,7 @@ async function loadV12Status() {
     // Trailing SL
     const tsl = data.trailing_sl || {};
     if (tsl.enabled) {
-        setTxt('v12-tsl-value', `${tsl.trail_pct ?? '?'}% @ ${tsl.activation_pct ?? '?'}%`);
+        setTxt('v12-tsl-value', `${tsl.trail_pct ?? '?'}% @ ${tsl.activation_pct ?? '?'}%${m2aSuffix}`);
     } else {
         setTxt('v12-tsl-value', 'aus');
     }
@@ -3048,9 +3051,17 @@ async function loadCostModelStatus() {
                 : `<span style="opacity:0.85;">Defaults aktiv</span> (Calibrator sammelt noch Daten)`);
 
         // Defaults-Tabelle
+        // R-B66e: nur Klassen zeigen, die der Bot wirklich handelt oder fuer
+        // die es Fills gibt — 5 Dauer-Zeilen mit "0 Fills" waren Rauschen.
         const diagByClass = {};
         for (const d of cal.diagnostics_per_class || []) diagByClass[d.asset_class] = d;
-        tbody.innerHTML = (data.defaults_per_class || []).map(row => {
+        const alleKlassen = data.defaults_per_class || [];
+        const relevante = alleKlassen.filter(row => {
+            const diag = diagByClass[row.asset_class] || {};
+            return row.asset_class === 'stocks' || diag.override_active || (diag.sample_count > 0);
+        });
+        const ausgeblendet = alleKlassen.length - relevante.length;
+        tbody.innerHTML = relevante.map(row => {
             const diag = diagByClass[row.asset_class] || {};
             let badge = '<span style="opacity:0.5;">--</span>';
             if (diag.override_active) {
@@ -3067,7 +3078,10 @@ async function loadCostModelStatus() {
                     <td style="text-align:right;padding:5px 4px;font-weight:600;">${row.total_round_trip_pct.toFixed(3)}%</td>
                     <td style="text-align:center;padding:5px 4px;font-size:11px;">${badge}</td>
                 </tr>`;
-        }).join('');
+        }).join('') + (ausgeblendet > 0
+            ? `<tr><td colspan="6" style="padding:5px 4px;font-size:11px;color:var(--text-dim);">` +
+              `${ausgeblendet} nicht gehandelte Asset-Klassen ausgeblendet (Defaults bleiben im Modell hinterlegt)</td></tr>`
+            : '');
         defaultsBlock.style.display = '';
 
         // Calibrator-Status

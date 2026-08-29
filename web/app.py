@@ -4994,6 +4994,14 @@ async def api_v12_status(user=Depends(require_auth)):
         from datetime import datetime, timedelta
         config = load_config()
 
+        # R-B66e: M2a-Flag mitliefern — die Chips Time-Stop/Trail-SL gelten
+        # unter M2a nur noch fuer geerbte Positionen (Frontend-Label).
+        try:
+            from app import m2a_motor as _m2a_v12
+            _m2a_on = _m2a_v12.ist_aktiv(config)
+        except Exception:
+            _m2a_on = False
+
         # --- Universe ---
         # R-B54 (Audit): zeigte das TOTE Alt-Universum (82er ASSET_UNIVERSE
         # minus 49 disabled = "33", davon 25 gar nicht im Universum) und
@@ -5083,6 +5091,7 @@ async def api_v12_status(user=Depends(require_auth)):
         lev = config.get("leverage", {}) or {}
 
         return {
+            "m2a_aktiv": _m2a_on,
             "universe": {
                 "total": total_universe,
                 "active": active_universe,
@@ -5721,42 +5730,77 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
     # Kriterium 3 (Gatekeeper) — nicht dieses Gate; der laufende Abgleich
     # Live-vs-Baseline ist Sache des WFO-Drift-Watchdogs (jeder Zyklus).
     try:
-        from app.config_manager import load_json as _lj2
-        w2 = _lj2("wfo_status.json") or {}
-        oos_pf = w2.get("mean_oos_pf")
-        gen_for = str(w2.get("generated_for") or "")
-        gen_at = str(w2.get("generated_at") or "")
-        ist_neuer_motor = "signal_stack" in gen_for
-        frisch = False
-        try:
-            from datetime import datetime as _dt2, timezone as _tz2
-            alter_tage = (_dt2.now(_tz2.utc)
-                          - _dt2.fromisoformat(gen_at)).days
-            frisch = alter_tage < 60
-        except Exception:
-            pass
-        if ist_neuer_motor and oos_pf and oos_pf > 1.0 and frisch:
+        from app.config_manager import load_json as _lj2, load_config as _lcg2
+        # R-B66e: Unter M2a traegt nicht mehr die WFO-Baseline den Beweis,
+        # sondern das live-validierte OHLC-Modell (R-B64, 25/25-Paarprobe)
+        # plus die bindende 6-Monats-Leiter (Gates G3/G4). Der 60-Tage-
+        # Frische-Check haette das Gate sonst dauer-gelb gefaerbt und einen
+        # WFO-Re-Run gefordert, den es unter M2a bewusst nicht mehr gibt.
+        _cfg_g2 = _lcg2() or {}
+        from app import m2a_motor as _m2a_g2
+        if _m2a_g2.ist_aktiv(_cfg_g2):
+            from datetime import date as _date_g2
+            schnitt = str((_cfg_g2.get("m2a") or {}).get("schnitt_datum")
+                          or "2026-08-31")
+            try:
+                sj, sm, st = [int(x) for x in schnitt.split("-")]
+                heute = _date_g2.today()
+                monate = ((heute.year - sj) * 12 + (heute.month - sm)
+                          - (1 if heute.day < st else 0))
+            except Exception:
+                monate = None
+            if monate is not None and monate >= 6:
+                _g2_detail = ("6M-Leiter FAELLIG: Entscheid gemaess Regelwerk "
+                              "(Stopp < -10.7% | GO >= +1.2% & Bias < 3pp) — "
+                              "siehe M2a-Karte / Gate-Cron G3/G4.")
+            else:
+                _mtxt = f"Monat {monate + 1}/6" if monate is not None else "laeuft"
+                _g2_detail = (f"M2a-Leiter {_mtxt} seit Schnitt {schnitt} — "
+                              "Go/No-Go ~Ende Feb 2027. Beweis-Traeger: "
+                              "live-validiertes OHLC-Modell (R-B64); der "
+                              "WFO-Frische-Check ist unter M2a ausser Kraft.")
             gates.append({
-                "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
-                "status": "green",
-                "detail": (f"OOS-PF {oos_pf:.2f} ueber "
-                           f"{w2.get('windows_total', '?')} Jahres-Fenster "
-                           f"(Re-Baseline 16.07., signal_stack_backtester). "
-                           "Ersetzt das Alt-Motor-Gate 'Sharpe > 2.0' (R-B43); "
-                           "Live-Abgleich uebernimmt der Drift-Watchdog, den "
-                           "Live-BEWEIS Kriterium 3."),
-                "last_check": gen_at[:10] or None,
+                "nr": 2, "title": "Validierungs-Beweis aktiver Motor (M2a-Leiter)",
+                "status": "yellow",
+                "detail": _g2_detail,
+                "last_check": schnitt,
             })
         else:
-            grund = ("keine Neu-Motor-Baseline" if not ist_neuer_motor
-                     else f"OOS-PF {oos_pf}" if not (oos_pf and oos_pf > 1.0)
-                     else "Baseline aelter als 60 Tage — Re-Run noetig")
-            gates.append({
-                "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
-                "status": "yellow",
-                "detail": f"Nicht erfuellt: {grund}.",
-                "last_check": gen_at[:10] or None,
-            })
+            w2 = _lj2("wfo_status.json") or {}
+            oos_pf = w2.get("mean_oos_pf")
+            gen_for = str(w2.get("generated_for") or "")
+            gen_at = str(w2.get("generated_at") or "")
+            ist_neuer_motor = "signal_stack" in gen_for
+            frisch = False
+            try:
+                from datetime import datetime as _dt2, timezone as _tz2
+                alter_tage = (_dt2.now(_tz2.utc)
+                              - _dt2.fromisoformat(gen_at)).days
+                frisch = alter_tage < 60
+            except Exception:
+                pass
+            if ist_neuer_motor and oos_pf and oos_pf > 1.0 and frisch:
+                gates.append({
+                    "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
+                    "status": "green",
+                    "detail": (f"OOS-PF {oos_pf:.2f} ueber "
+                               f"{w2.get('windows_total', '?')} Jahres-Fenster "
+                               f"(Re-Baseline 16.07., signal_stack_backtester). "
+                               "Ersetzt das Alt-Motor-Gate 'Sharpe > 2.0' (R-B43); "
+                               "Live-Abgleich uebernimmt der Drift-Watchdog, den "
+                               "Live-BEWEIS Kriterium 3."),
+                    "last_check": gen_at[:10] or None,
+                })
+            else:
+                grund = ("keine Neu-Motor-Baseline" if not ist_neuer_motor
+                         else f"OOS-PF {oos_pf}" if not (oos_pf and oos_pf > 1.0)
+                         else "Baseline aelter als 60 Tage — Re-Run noetig")
+                gates.append({
+                    "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
+                    "status": "yellow",
+                    "detail": f"Nicht erfuellt: {grund}.",
+                    "last_check": gen_at[:10] or None,
+                })
     except Exception:
         gates.append({
             "nr": 2, "title": "WFO-Baseline neuer Motor (OOS-PF > 1.0)",
@@ -5789,12 +5833,24 @@ async def api_cutover_readiness(user=Depends(require_auth)):  # 29.05.2026: Auth
                           "detail": "kelly_neu_motor.json fehlt/leer — "
                                     "Analyse (R-B39) vor Cutover neu rechnen"})
         elif abs(live_k - empf) < 0.01:
+            # R-B66e: Zusatz — das Kelly-k gilt unter M2a unveraendert fuer
+            # das Kauf-Sizing; das deployment 0.60 (= Budget -20%) kommt
+            # als M2a-Sicherheitsabschlag oben drauf.
+            _k3_m2a = ""
+            try:
+                from app import m2a_motor as _m2a_k3
+                from app.config_manager import load_config as _lc_k3
+                if _m2a_k3.ist_aktiv(_lc_k3() or {}):
+                    _k3_m2a = (" Gilt unter M2a unveraendert (Kauf-Sizing); "
+                               "deployment 0.60 = -20% Budget kommt on top.")
+            except Exception:
+                pass
             gates.append({
                 "nr": 3, "title": "Kelly auf aktivem Motor validiert",
                 "status": "green",
                 "detail": (f"k={live_k:.0f}% = groesstes k mit MaxDD<8% "
                            f"(R-B39, Neu-Motor-Fenster {kn.get('start', '?')}"
-                           f"..{kn.get('ende', '?')})"),
+                           f"..{kn.get('ende', '?')})" + _k3_m2a),
                 "last_check": kn.get("ende"),
             })
         else:
