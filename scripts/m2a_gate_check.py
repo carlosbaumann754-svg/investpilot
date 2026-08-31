@@ -85,8 +85,13 @@ def main() -> int:
         print(f"[{heute}] G1 fuer {monat} bereits gemeldet")
         return 0
 
-    baender = (_load("m2a_erwartungsbaender.json", {}) or {}).get(
-        "monats_baender") or {}
+    # R-B66f (31.08., Schnitt-Tag-Fund): die Baender liegen im Artefakt unter
+    # resultate.Z3_H126_DS40 — der alte top-level-Read fand NICHTS und haette
+    # jeden G1 als "Aufbau" gemeldet statt zu klassifizieren (gebaut != verdrahtet).
+    _bd = _load("m2a_erwartungsbaender.json", {}) or {}
+    baender = ((((_bd.get("resultate") or {}).get("Z3_H126_DS40") or {})
+                .get("monats_baender"))
+               or _bd.get("monats_baender") or {})
     eq = usd_equity_je_monat(_load("equity_history.json", []) or [])
     monate = sorted(eq)
     schnitt = str((cfg.get("m2a") or {}).get("schnitt_datum", "2026-08-31"))
