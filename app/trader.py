@@ -1861,7 +1861,9 @@ def execute_scanner_trades(client, config, scan_results):
                          "(Handelstag 1-3 des Monats) — keine Neukaeufe")
                 return []
             _hist = load_json("trade_history.json") or []
-            _n_neu = _m2a.neukaeufe_diesen_monat(_hist)
+            _n_neu = _m2a.neukaeufe_diesen_monat(
+                _hist,
+                schnitt_datum=(config.get("m2a") or {}).get("schnitt_datum"))
             _limit = _m2a.anlauf_limit(config)
             if _n_neu >= _limit:
                 log.info(f"  M2A: Anlauf-Limit erreicht "

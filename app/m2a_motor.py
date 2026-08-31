@@ -117,8 +117,15 @@ def im_kauf_fenster(heute: date = None, config=None) -> bool:
     return 1 <= handelstag_im_monat(heute) <= fenster
 
 
-def neukaeufe_diesen_monat(trade_history: list, heute: date = None) -> int:
-    """Zaehlt gefuellte SCANNER_BUYs des laufenden Monats (Anlauf-Limit)."""
+def neukaeufe_diesen_monat(trade_history: list, heute: date = None,
+                           schnitt_datum: str = None) -> int:
+    """Zaehlt gefuellte SCANNER_BUYs des laufenden Monats (Anlauf-Limit).
+
+    R-B66g (31.08.2026, Schnitt-Tag-Fund): Kaeufe VOR dem Schnitt sind
+    M0-Kaeufe (geerbt) und zaehlen NICHT ins M2a-Anlauf-Limit — sonst
+    zeigt die Karte am Schnitt-Tag '26/5', und ein Schnitt am
+    Monatsanfang haette die ersten M2a-Kaeufe blockiert.
+    """
     heute = heute or datetime.now().date()
     prefix = heute.strftime("%Y-%m")
     schlecht = ("cancelled", "rejected", "failed")
@@ -126,9 +133,11 @@ def neukaeufe_diesen_monat(trade_history: list, heute: date = None) -> int:
     for t in trade_history or []:
         if not isinstance(t, dict):
             continue
-        if (str(t.get("timestamp", "")).startswith(prefix)
+        ts = str(t.get("timestamp", ""))
+        if (ts.startswith(prefix)
                 and str(t.get("action", "")).upper() == "SCANNER_BUY"
-                and str(t.get("status", "")).lower() not in schlecht):
+                and str(t.get("status", "")).lower() not in schlecht
+                and (not schnitt_datum or ts >= str(schnitt_datum))):
             n += 1
     return n
 

@@ -1881,7 +1881,7 @@ async def api_m2a_gates(user=Depends(require_auth)):
             "laufender_monat_ret_usd_pct": lauf_ret,
             "g1_letzte_meldung": gates_state.get("last_g1"),
             "geerbt_gesamt": len(geerbt.get("position_ids") or []),
-            "neukaeufe_monat": _mm.neukaeufe_diesen_monat(hist),
+            "neukaeufe_monat": _mm.neukaeufe_diesen_monat(hist, schnitt_datum=schnitt),
             "anlauf_limit": _mm.anlauf_limit(cfg),
             "horizon_exits_gesamt": n_horizon,
         }

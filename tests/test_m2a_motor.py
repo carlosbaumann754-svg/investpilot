@@ -221,3 +221,23 @@ class TestLeiterStatus:
         # Schnitt im Juni -> 6 volle Monate Jul..Dez -> Entscheid ab Januar
         ls = m2a_motor.leiter_status("2026-06-30", date(2026, 7, 1))
         assert ls["entscheid_ab"] == "2027-01"
+
+
+class TestNeukaeufeSchnittDatum:
+    """R-B66g: M0-Kaeufe VOR dem Schnitt zaehlen nicht ins Anlauf-Limit."""
+
+    def _hist(self):
+        return [
+            {"timestamp": "2026-08-10T16:00:00", "action": "SCANNER_BUY", "status": "filled"},
+            {"timestamp": "2026-08-27T16:10:00", "action": "SCANNER_BUY", "status": "filled"},
+            {"timestamp": "2026-08-31T16:00:00", "action": "SCANNER_BUY", "status": "filled"},
+        ]
+
+    def test_vor_schnitt_zaehlt_nicht(self):
+        n = m2a_motor.neukaeufe_diesen_monat(
+            self._hist(), heute=date(2026, 8, 31), schnitt_datum="2026-08-31")
+        assert n == 1  # nur der Kauf AM/nach dem Schnitt
+
+    def test_ohne_schnitt_datum_wie_vorher(self):
+        n = m2a_motor.neukaeufe_diesen_monat(self._hist(), heute=date(2026, 8, 31))
+        assert n == 3
