@@ -1868,6 +1868,20 @@ async def api_m2a_gates(user=Depends(require_auth)):
         n_horizon = sum(1 for x in hist if isinstance(x, dict)
                         and x.get("action") == "HORIZON_CLOSE"
                         and str(x.get("status", "")).lower() not in schlecht)
+        # R-B66h (03.09.2026): Geerbte-REST statt nur Gesamt — nach 3 Tagen
+        # waren schon 4 von 15 ueber Alt-Exits raus, die Karte sagte aber
+        # weiter "geerbt: 15" (Anzeige-Luege light).
+        _geerbt_ids = {str(x) for x in (geerbt.get("position_ids") or [])}
+        geerbt_offen = None
+        try:
+            _pf = _portfolio_from_brain_cache() or {}
+            geerbt_offen = sum(
+                1 for p in (_pf.get("positions") or [])
+                if str(EtoroClient.parse_position(p).get("position_id"))
+                in _geerbt_ids)
+        except Exception:
+            geerbt_offen = None
+
         return {
             "aktiv": True, "schnitt_datum": schnitt,
             "monate_seit_schnitt": monate_seit,
@@ -1880,6 +1894,7 @@ async def api_m2a_gates(user=Depends(require_auth)):
             "fenster6m": z3.get("fenster6m") or {},
             "laufender_monat_ret_usd_pct": lauf_ret,
             "g1_letzte_meldung": gates_state.get("last_g1"),
+            "geerbt_offen": geerbt_offen,
             "geerbt_gesamt": len(geerbt.get("position_ids") or []),
             "neukaeufe_monat": _mm.neukaeufe_diesen_monat(hist, schnitt_datum=schnitt),
             "anlauf_limit": _mm.anlauf_limit(cfg),

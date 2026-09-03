@@ -476,8 +476,13 @@ async function loadM2aGates() {
             `Stopp < ${d.fenster6m?.p01 ?? '-10.7'}% | GO >= +${d.fenster6m?.p25 ?? '1.2'}%`;
         document.getElementById('m2a-umbau').textContent =
             `${d.neukaeufe_monat}/${d.anlauf_limit}`;
+        // R-B66h: Geerbte-REST zeigen (wie viele noch offen), nicht die
+        // eingefrorene Gesamtzahl — die schrumpft ja mit jedem Alt-Exit.
+        const geerbtTxt = (d.geerbt_offen != null)
+            ? `${d.geerbt_offen} von ${d.geerbt_gesamt} offen`
+            : `${d.geerbt_gesamt}`;
         document.getElementById('m2a-umbau-sub').textContent =
-            `Neukaeufe Monat | geerbt: ${d.geerbt_gesamt} | Horizont-Exits: ${d.horizon_exits_gesamt}`;
+            `Neukaeufe Monat | geerbt: ${geerbtTxt} | Horizont-Exits: ${d.horizon_exits_gesamt}`;
         document.getElementById('m2a-headline').textContent =
             `Seit Schnitt ${d.schnitt_datum}: Leiter-Monat ${d.leiter_monat ?? '?'}/6` +
             (d.g1_letzte_meldung ? ` | letzter G1-Report: ${d.g1_letzte_meldung}` : '');
