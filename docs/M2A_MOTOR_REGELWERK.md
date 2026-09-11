@@ -33,6 +33,16 @@ NEU:
   Feintest Z4 (max. 5 Neukaeufe/Monat), bis das Depot einmal komplett
   aus M2a-Positionen besteht (~3 Monate Anlauf).
 - Die M0-Soak-Akte (25 saubere Round-Trips, PF% 0.99) wird geschlossen
+  KORREKTUR 11.09.2026 (R-B67): Diese Zahlen waren zu pessimistisch. Ein
+  Buchhaltungs-Fehler verbuchte real gefuellte Verkaeufe als 'storniert'
+  (LIMIT-Storno-Status bei spaet fuellender MARKET-Order) und filterte sie
+  damit aus den Metriken — fast nur Gewinner, da TRAILING_SL_CLOSE nur im
+  Gewinn feuert. Mit reparierter Historie: n=28, PF% 1.033, netto -3'022 USD
+  (statt n=25, PF% 0.99, netto -4'372 USD). Die Entscheidung bleibt gueltig:
+  netto weiterhin negativ, n weit unter der Beweisgrenze 80, und die beiden
+  Backtest-Linien ('kein Edge seit 2024') sind vom Fehler unberuehrt. Die
+  fruehere Formulierung '3-fach unabhaengig belegt' wird zurueckgenommen —
+  die Live-Linie war fehlerhaft gemessen.
   und archiviert — sie bleibt die Messung des alten Motors.
 
 ## 3. Live-Gates (vorregistriert, KALENDER-basiert)
