@@ -1910,6 +1910,7 @@ class IbkrBroker(BrokerBase):
         market_fill_qty = 0
         market_avg_price = 0.0
         market_order_id = None
+        market_status = None  # R-B67: finaler Status der MARKET-Stufe
 
         # Phase 2: MARKET-Fallback wenn nicht vollstaendig gefuellt
         if limit_fill_qty < qty:
@@ -1976,6 +1977,7 @@ class IbkrBroker(BrokerBase):
                 market_fill_qty = int(market_trade.orderStatus.filled or 0)
                 market_avg_price = float(market_trade.orderStatus.avgFillPrice or 0.0)
                 market_order_id = str(market_trade.order.orderId)
+                market_status = market_trade.orderStatus.status or None
 
         # Aggregiere Fills aus beiden Orders (weighted-avg-Preis)
         total_fill_qty = limit_fill_qty + market_fill_qty
@@ -1987,17 +1989,34 @@ class IbkrBroker(BrokerBase):
         else:
             agg_avg_price = 0.0
 
-        # Status: Filled wenn alles weg, sonst der finale LIMIT-Status
+        # Status: Filled wenn alles weg, sonst der Status der MASSGEBLICHEN Stufe.
+        # R-B67 (11.09.2026, Live-Fund INSP): Vorher wurde hier IMMER der finale
+        # LIMIT-Status genommen. Lief aber ein MARKET-Fallback, ist die LIMIT-
+        # Stufe zu diesem Zeitpunkt bereits storniert ("Cancelled") — ein
+        # ZWISCHENSCHRITT, kein Ergebnis. Fuellt die MARKET-Order erst nach dem
+        # Warte-Fenster (Extended Hours, duenne Liquiditaet), wurde der Trade
+        # faelschlich als storniert verbucht und fiel damit aus saemtlichen
+        # Round-Trip-Metriken (12 Live-Faelle, zusammen +10'813 USD, fast nur
+        # Gewinner — TRAILING_SL_CLOSE feuert nur im Gewinn).
+        # Den spaeten Fill traegt danach der E27-Tracker nach (per order_id).
         if total_fill_qty >= qty:
             agg_status = "Filled"
         elif total_fill_qty > 0:
             agg_status = "PartiallyFilled"
+        elif used_market_fallback:
+            agg_status = market_status or "Submitted"
         else:
             agg_status = limit_trade.orderStatus.status or "Submitted"
 
+        # R-B67: Die ID der zuletzt massgeblichen Order zurueckgeben — sonst
+        # zeigt die Historie auf die stornierte LIMIT-Order und der Tracker
+        # kann den spaeteren Fill nicht zuordnen.
+        effektive_order_id = (market_order_id if used_market_fallback and market_order_id
+                              else str(limit_trade.order.orderId))
+
         return {
             "orderForOpen": {
-                "orderID": str(limit_trade.order.orderId),
+                "orderID": effektive_order_id,
                 "statusID": agg_status,
                 "filledQuantity": total_fill_qty,
                 "avgFillPrice": agg_avg_price,

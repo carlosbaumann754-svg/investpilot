@@ -851,6 +851,66 @@ def tc_price_provider() -> TestResult:
                           duration_ms=int((time.time() - t0) * 1000))
 
 
+def tc_keine_fehlverbuchten_verkaeufe() -> TestResult:
+    """R-B67 (11.09.2026): Verkaeufe, die real gefuellt wurden, duerfen nicht
+    als 'cancelled' in der Historie stehen.
+
+    Live-Fund: 11 solche Eintraege (+10'813 USD, fast nur Gewinner) fielen
+    dadurch aus saemtlichen Round-Trip-Metriken. Ursache war der Status der
+    stornierten LIMIT-Stufe bei spaet fuellender MARKET-Order. Dieser Test
+    schlaegt an, wenn der Fehler ZURUECKKEHRT — geprueft wird nur, was NACH
+    dem Fix entstanden ist (aeltere Eintraege repariert das Einmal-Skript
+    scripts/fix_cancelled_fills.py).
+    """
+    FIX_AB = "2026-09-12"  # ab Deploy des R-B67-Fixes
+    VOLL_CLOSE = ("STOP_LOSS_CLOSE", "TRAILING_SL_CLOSE", "SCANNER_SELL",
+                  "MANUAL_SELL", "OVERNIGHT_CLOSE", "PROFIT_LOCK_CLOSE",
+                  "HORIZON_CLOSE", "EARNINGS_BLACKOUT_CLOSE",
+                  "TIME_STOP_CLOSE", "TAKE_PROFIT_CLOSE")
+    try:
+        f = _get_data_path("trade_history.json")
+        if not f.exists():
+            return TestResult("keine_fehlverbuchten_verkaeufe", True,
+                              "keine trade_history.json", severity="info",
+                              category="trading")
+        hist = json.loads(f.read_text() or "[]")
+        treffer = []
+        for t in hist:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get("timestamp", ""))[:10] < FIX_AB:
+                continue
+            if str(t.get("action", "")).upper() not in VOLL_CLOSE:
+                continue
+            if str(t.get("status", "")).lower() not in ("cancelled", "rejected"):
+                continue
+            # Gefuellt? -> dann ist der Status falsch
+            gefuellt = False
+            try:
+                if float(t.get("filled_qty") or 0) > 0:
+                    gefuellt = True
+                if float(t.get("avg_fill_price") or 0) > 0:
+                    gefuellt = True
+            except (TypeError, ValueError):
+                pass
+            if gefuellt:
+                treffer.append("{} {}".format(
+                    str(t.get("timestamp", ""))[:16], t.get("symbol")))
+        if treffer:
+            return TestResult(
+                "keine_fehlverbuchten_verkaeufe", False,
+                "{} Verkauf(e) trotz Fill als storniert verbucht: {}".format(
+                    len(treffer), treffer[:5]),
+                severity="warning", category="trading")
+        return TestResult("keine_fehlverbuchten_verkaeufe", True,
+                          "keine fehl-verbuchten Verkaeufe seit {}".format(FIX_AB),
+                          severity="info", category="trading")
+    except Exception as e:
+        return TestResult("keine_fehlverbuchten_verkaeufe", False,
+                          f"exception: {e!r}", severity="warning",
+                          category="trading")
+
+
 ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_broker_config,
     tc_trading_flag_failclosed,
@@ -872,6 +932,7 @@ ALL_TESTS: list[Callable[[], TestResult]] = [
     tc_signal_stack_fresh,         # v38: Shadow-Scan-Freshness (Signal-Stack)
     tc_partial_fill_status,        # v37dj (10.06.2026): Teilfill->'partial' Regressionsschutz
     tc_price_provider,             # v37dm (10.06.2026): Preis-Provider extract_now_ref + Import
+    tc_keine_fehlverbuchten_verkaeufe,  # R-B67 (11.09.2026): Fill-trotz-storniert-Regressionsschutz
 ]
 
 

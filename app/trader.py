@@ -318,6 +318,17 @@ def _attach_fill_prices(trade_entry: dict, broker_result: dict | None) -> dict:
     order = broker_result.get("orderForOpen") or {}
     if not isinstance(order, dict):
         return trade_entry
+    # R-B67 (11.09.2026): order_id mitschreiben — bisher trugen NUR Kauf-
+    # Eintraege eine (live: 637 von 637), KEIN einziger Close (0 von 254).
+    # Ohne sie findet der E27-Tracker den Eintrag nicht und kann einen nach
+    # dem Warte-Fenster eintreffenden Fill nicht nachtragen: der Verkauf
+    # blieb dauerhaft auf "cancelled" stehen und fiel aus allen Metriken.
+    try:
+        _oid = order.get("orderID")
+        if _oid:
+            trade_entry["order_id"] = str(_oid)
+    except (TypeError, ValueError):
+        pass
     avg = order.get("avgFillPrice")
     intended = order.get("intendedPrice")
     ref_quote = order.get("refQuote")

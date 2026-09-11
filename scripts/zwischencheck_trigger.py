@@ -139,6 +139,21 @@ def main() -> int:
     sys.path.insert(0, "/app")
     from app.roundtrip_metrics import clean_roundtrip_stats
 
+    # R-B67 (11.09.2026): M2a-Sperre IM CODE. Der Wecker misst M0-Round-Trips
+    # und traegt das bindende Futility-Stopp-Signal. Seit dem Motor-Wechsel
+    # (31.08.) ist er nur per auskommentiertem Cron stillgelegt — wer die
+    # Zeile reaktiviert, bekaeme ein Prio-1-"STOPP"-Signal auf Basis einer
+    # geschlossenen Akte. Die Ueberwachung laeuft ueber die Gates G1-G5.
+    try:
+        from app import m2a_motor
+        from app.config_manager import load_config
+        if m2a_motor.ist_aktiv(load_config() or {}):
+            print("m2a aktiv — Meilenstein-Wecker stillgelegt (misst M0), "
+                  "Ueberwachung via m2a_gate_check")
+            return 0
+    except Exception:
+        pass
+
     try:
         with open(TRADE_HISTORY, encoding="utf-8") as f:
             hist = json.load(f) or []

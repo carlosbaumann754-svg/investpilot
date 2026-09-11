@@ -599,13 +599,21 @@ class OrderStatusTracker:
 
             if target is None:
                 # Fallback: search by order_id
+                # R-B67 (11.09.2026): zusaetzlich das SYMBOL pruefen. IBKR
+                # recycelt Order-IDs pro Session — ohne Qualifier trifft die
+                # Rueckwaertssuche den erstbesten Eintrag mit derselben ID und
+                # ueberschreibt so einen fremden Trade (inkl. filled_qty).
                 snap = entry.get("trade_entry_snapshot", {})
                 order_id_str = snap.get("order_id")
+                want_sym = snap.get("symbol") or entry.get("symbol")
                 if order_id_str:
                     for t in reversed(history):  # neuestes zuerst
-                        if str(t.get("order_id")) == str(order_id_str):
-                            target = t
-                            break
+                        if str(t.get("order_id")) != str(order_id_str):
+                            continue
+                        if want_sym and t.get("symbol") and t.get("symbol") != want_sym:
+                            continue
+                        target = t
+                        break
 
             if target is None:
                 log.debug("E27 _update_trade_history: kein matching trade_history-Eintrag gefunden")
@@ -613,6 +621,17 @@ class OrderStatusTracker:
 
             # Update Fields
             bot_status = self._map_status(new_ibkr_status)
+            # R-B67: Ein bereits gefuellter Trade darf NIE zurueckgestuft
+            # werden. Nach einem Fill raeumt der Bot die zugehoerige
+            # Schutz-Order ab; deren Cancel-Event darf den Verkauf nicht
+            # nachtraeglich entwerten (Fill ist ein Endzustand).
+            _alt_status = str(target.get("status", "")).lower()
+            if _alt_status in ("executed", "partial") and bot_status in (
+                    "cancelled", "rejected", "stale", "submitted"):
+                log.info(
+                    "E27 Rueckstufung verhindert: %s bleibt '%s' (Event '%s')",
+                    target.get("symbol"), _alt_status, new_ibkr_status)
+                return
             target["status"] = bot_status
             target["ibkr_status_raw"] = new_ibkr_status
             target["_e27_last_update"] = datetime.now(timezone.utc).isoformat()
