@@ -1861,7 +1861,7 @@ python -m video_generator "Thema"               # braucht ANTHROPIC_API_KEY + FA
 ```
 
 Details, Rezepte und bekannte Grenzen: `video_generator/README.md`.
-Tests: `python -m pytest tests/test_video_*.py -q` (68, ohne Netz/Keys).
+Tests: `python -m pytest tests/test_video_*.py -q` (75, ohne Netz/Keys).
 
 Drei Dinge, die beim Anfassen wichtig sind:
 - **`timing.py` ist der Kern.** Clip-Laenge und Voiceover-Laenge sind
