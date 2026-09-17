@@ -35,6 +35,31 @@ def _fake_edge_tts(monkeypatch, chunks, erwartet: dict | None = None):
     return gesehen
 
 
+def _fake_edge_tts_mit_boundary(monkeypatch, chunks):
+    """Wie ``_fake_edge_tts``, aber mit der Signatur von edge-tts 7.x.
+
+    Entscheidend ist, dass ``boundary`` als benannter Parameter existiert —
+    der Produktivcode entscheidet per Signatur-Prüfung, ob er ihn setzt.
+    """
+    gesehen = {}
+
+    class Communicate:
+        def __init__(self, text, voice, *, rate="+0%", volume="+0%",
+                     pitch="+0Hz", boundary="SentenceBoundary", **kw):
+            gesehen.update({"text": text, "voice": voice, "rate": rate,
+                            "volume": volume, "pitch": pitch,
+                            "boundary": boundary, **kw})
+
+        async def stream(self):
+            for c in chunks:
+                yield c
+
+    modul = types.ModuleType("edge_tts")
+    modul.Communicate = Communicate
+    monkeypatch.setitem(sys.modules, "edge_tts", modul)
+    return gesehen
+
+
 @pytest.fixture
 def cfg():
     return lade_config()
@@ -120,3 +145,56 @@ def test_trockenlauf_verteilt_die_woerter_gleichmaessig(cfg, tmp_path):
     # Lückenlos: jedes Wort schliesst an das vorige an.
     for a, b in zip(r.woerter, r.woerter[1:]):
         assert a.end_s == pytest.approx(b.start_s)
+
+
+def test_wortgenaue_boundaries_werden_explizit_angefordert(monkeypatch, cfg, tmp_path):
+    """edge-tts 7.x liefert ohne dieses Argument nur Satz-Grenzen.
+
+    Der Stream läuft dann durch, die Audiodatei ist einwandfrei — nur die
+    Wort-Timings fehlen und die Untertitel fallen stillschweigend auf einen
+    Block pro Szene zurück. Ein Fehler, der sich nur im fertigen Video zeigt.
+    """
+    gesehen = _fake_edge_tts_mit_boundary(monkeypatch, [
+        {"type": "audio", "data": b"x" * 100},
+        {"type": "WordBoundary", "offset": 0, "duration": TICKS, "text": "x"},
+    ])
+
+    synthesize(1, "x", cfg, tmp_path / "v.mp3")
+
+    assert gesehen.get("boundary") == "WordBoundary"
+
+
+def test_aeltere_edge_tts_ohne_boundary_parameter_laeuft_weiter(monkeypatch, cfg,
+                                                                tmp_path):
+    """Versionen ohne den Parameter dürfen nicht an einem TypeError sterben."""
+    gesehen = _fake_edge_tts(monkeypatch, [
+        {"type": "audio", "data": b"x" * 100},
+        {"type": "WordBoundary", "offset": 0, "duration": TICKS, "text": "x"},
+    ])
+
+    r = synthesize(1, "x", cfg, tmp_path / "v.mp3")
+
+    assert "boundary" not in gesehen
+    assert len(r.woerter) == 1
+
+
+def test_fehlende_wort_timings_werden_laut_gemeldet(monkeypatch, cfg, tmp_path,
+                                                    caplog):
+    """Stiller Qualitätsverlust ist die schlimmste Variante — also: Fehlerlog.
+
+    Der reale Fall: die Audiodatei ist einwandfrei (ffprobe liefert eine
+    Dauer), nur die Wort-Events fehlen. Genau dann fällt nichts auf, ausser
+    man schaut sich das fertige Video an.
+    """
+    monkeypatch.setattr("video_generator.ffmpeg_utils.probe_dauer",
+                        lambda pfad, timeout=60: 2.0)
+    _fake_edge_tts(monkeypatch, [
+        {"type": "audio", "data": b"x" * 100},
+        {"type": "SentenceBoundary", "offset": 0, "duration": TICKS, "text": "Ein Satz."},
+    ])
+
+    r = synthesize(1, "Ein Satz.", cfg, tmp_path / "v.mp3")
+
+    assert r.woerter == []
+    assert any(x.levelname == "ERROR" and "Wort-Timings" in x.getMessage()
+               for x in caplog.records)

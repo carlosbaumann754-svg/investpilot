@@ -5,6 +5,14 @@ sehr ordentliche deutsche Stimmen. Entscheidend für diese Pipeline ist aber
 etwas anderes: der Stream liefert neben den Audiodaten **WordBoundary-Events**
 mit exakten Zeitstempeln pro Wort.
 
+Achtung, versteckte Stolperkante: ``Communicate`` hat ab edge-tts 7.x einen
+Parameter ``boundary``, der auf ``"SentenceBoundary"`` steht. Ohne explizites
+``boundary="WordBoundary"`` kommen dort **keine** Wort-Events an — der Stream
+läuft durch, die Audiodatei ist einwandfrei, und die Untertitel fallen
+stillschweigend auf einen Block pro Szene zurück. Genau deshalb wird unten
+geprüft, ob überhaupt Wort-Timings ankamen, statt das Ergebnis einfach
+hinzunehmen.
+
 Damit werden die Untertitel in Stufe 5 nicht geschätzt, sondern auf das
 tatsächlich Gesprochene gesetzt. Der Unterschied ist im fertigen Video sofort
 sichtbar — geschätzte Timings driften spätestens nach zwei Sätzen.
@@ -20,6 +28,7 @@ Stimmen (Auswahl, ``edge-tts --list-voices`` zeigt alle):
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 from pathlib import Path
@@ -56,8 +65,13 @@ async def _synthese(text: str, cfg: VideoConfig) -> tuple[bytes, list[WordTiming
             "Paket 'edge-tts' fehlt — pip install -r video_generator/requirements.txt"
         ) from e
 
-    comm = edge_tts.Communicate(text, cfg.tts_stimme, rate=cfg.tts_rate,
-                                volume=cfg.tts_volume, pitch=cfg.tts_pitch)
+    kwargs = dict(rate=cfg.tts_rate, volume=cfg.tts_volume, pitch=cfg.tts_pitch)
+    # Nur setzen, wenn die installierte Version den Parameter kennt — in
+    # älteren Versionen gibt es ihn nicht und der Aufruf würde crashen.
+    if "boundary" in inspect.signature(edge_tts.Communicate.__init__).parameters:
+        kwargs["boundary"] = "WordBoundary"
+
+    comm = edge_tts.Communicate(text, cfg.tts_stimme, **kwargs)
     audio = bytearray()
     woerter: list[WordTiming] = []
     async for chunk in comm.stream():
@@ -99,8 +113,17 @@ def synthesize(index: int, text: str, cfg: VideoConfig, zielpfad: Path) -> Voice
     zielpfad.write_bytes(audio)
     dauer = _dauer(zielpfad, woerter)
 
-    log.info("Szene %d: Voiceover %.2fs, %d Wort-Timings (%s)",
-             index, dauer, len(woerter), cfg.tts_stimme)
+    if woerter:
+        log.info("Szene %d: Voiceover %.2fs, %d Wort-Timings (%s)",
+                 index, dauer, len(woerter), cfg.tts_stimme)
+    else:
+        # Kein Abbruch — die Tonspur ist brauchbar, nur die Untertitel werden
+        # gröber. Aber sichtbar, sonst sucht man den Qualitätsverlust im
+        # Schnitt statt an seiner Quelle.
+        log.error("Szene %d: keine Wort-Timings erhalten. Die Untertitel "
+                  "dieser Szene werden zu einem Block statt wortgenau "
+                  "gesetzt. Prüfen: unterstützt die installierte edge-tts "
+                  "den Parameter boundary=\"WordBoundary\"?", index)
     return VoiceResult(index=index, pfad=str(zielpfad), dauer_s=dauer,
                        stimme=cfg.tts_stimme, woerter=woerter)
 

@@ -15,5 +15,8 @@ anthropic>=0.42.0
 # Stufe 3 — fal.ai Queue-API
 requests>=2.31.0
 
-# Stufe 4 — Sprachsynthese inkl. Wort-Timings
+# Stufe 4 — Sprachsynthese inkl. Wort-Timings.
+# Ab 7.x steht Communicate(boundary=...) per Default auf "SentenceBoundary";
+# tts.py fordert Wort-Events deshalb explizit an, sofern die installierte
+# Version den Parameter kennt. Beide Versionslinien funktionieren.
 edge-tts>=6.1.0

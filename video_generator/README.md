@@ -150,7 +150,7 @@ Secrets kommen ausschliesslich aus der Umgebung (`ANTHROPIC_API_KEY`,
 python -m pytest tests/test_video_*.py -q
 ```
 
-75 Tests, ohne Netzzugriff und ohne API-Keys. Der Test der Gesamtkette
+78 Tests, ohne Netzzugriff und ohne API-Keys. Der Test der Gesamtkette
 überspringt sich selbst, wenn ffmpeg fehlt.
 
 ---
