@@ -1,0 +1,19 @@
+# Abhängigkeiten der Video-Pipeline — bewusst getrennt von der requirements.txt
+# des Trading-Bots, damit das Docker-Image des Bots nicht um Pakete wächst, die
+# dort nie gebraucht werden.
+#
+#   pip install -r video_generator/requirements.txt
+#
+# Zusätzlich wird ffmpeg (inkl. ffprobe) als Systemprogramm gebraucht:
+#   Debian/Ubuntu  sudo apt-get install -y ffmpeg
+#   macOS          brew install ffmpeg
+#   Windows        winget install Gyan.FFmpeg
+
+# Stufe 1+2 — Skript und Prompts (Claude)
+anthropic>=0.42.0
+
+# Stufe 3 — fal.ai Queue-API
+requests>=2.31.0
+
+# Stufe 4 — Sprachsynthese inkl. Wort-Timings
+edge-tts>=6.1.0

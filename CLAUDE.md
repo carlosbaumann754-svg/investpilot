@@ -1844,6 +1844,35 @@ Hypothese bestaetigt.
 - Scheduler-Crash / Health RED > 30 Min
 - Ungeplante Position-Groesse > 20% Portfolio (Sizing-Bug)
 
+## video_generator/ — Kurzvideo-Pipeline (2026-09-17)
+
+Eigenstaendiges Paket im Repo, **unabhaengig vom Trading-Bot**: eigene
+`video_generator/requirements.txt`, eigene `config.default.json`, keine
+gemeinsamen Datendateien, kein Import in beide Richtungen. Landet bewusst
+NICHT im Docker-Image des Bots.
+
+Thema -> Skript (Claude) -> Video-Prompts -> Clips (fal.ai PixVerse v3.5,
+Fallback Kling 2.5 Turbo Pro) -> Voiceover (edge-tts) -> Timing + Untertitel
+-> Schnitt (ffmpeg) -> MP4 in 9:16 oder 16:9.
+
+```bash
+python -m video_generator "Thema" --dry-run     # kostenlos, volle Kette
+python -m video_generator "Thema"               # braucht ANTHROPIC_API_KEY + FAL_KEY
+```
+
+Details, Rezepte und bekannte Grenzen: `video_generator/README.md`.
+Tests: `python -m pytest tests/test_video_*.py -q` (68, ohne Netz/Keys).
+
+Drei Dinge, die beim Anfassen wichtig sind:
+- **`timing.py` ist der Kern.** Clip-Laenge und Voiceover-Laenge sind
+  unabhaengig; jede Szene wird einzeln gepasst (Stille -> Tempo bis 1.15x ->
+  Standbild). Der gesprochene Text wird nie gekuerzt, stattdessen Warnung.
+- **Kosten entstehen nur in Stufe 3.** Budget-Bremse (`max_kosten_usd`) greift
+  vor dem ersten Call, `job.json` wird nach jedem bezahlten Clip geschrieben,
+  `--resume <verzeichnis>` setzt dort wieder an.
+- **Modell-Kennungen stehen in der Config** (`pixverse_model_id`,
+  `kling_model_id`), nicht im Code — fal.ai versioniert Modelle im Pfad.
+
 ## Legacy-Dateien (Root)
 Vorgaenger der modularen Version, koennen aufgeraeumt werden:
 - `demo_trader.py`, `trade_brain.py`, `investpilot.py`

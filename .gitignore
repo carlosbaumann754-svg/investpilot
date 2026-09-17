@@ -47,3 +47,6 @@ data/audits/
 
 # R-B49: Host-lokaler Supervisor-Zustand (kein Repo-Inhalt)
 supervisor_state.json
+
+# Video-Generator: Laufverzeichnisse sind Ausgabe, kein Quellcode
+video_output/
