@@ -128,7 +128,6 @@ def neukaeufe_diesen_monat(trade_history: list, heute: date = None,
     """
     heute = heute or datetime.now().date()
     prefix = heute.strftime("%Y-%m")
-    schlecht = ("cancelled", "rejected", "failed")
     n = 0
     for t in trade_history or []:
         if not isinstance(t, dict):
@@ -136,10 +135,30 @@ def neukaeufe_diesen_monat(trade_history: list, heute: date = None,
         ts = str(t.get("timestamp", ""))
         if (ts.startswith(prefix)
                 and str(t.get("action", "")).upper() == "SCANNER_BUY"
-                and str(t.get("status", "")).lower() not in schlecht
+                and zaehlt_als_neukauf(t.get("status"))
                 and (not schnitt_datum or ts >= str(schnitt_datum))):
             n += 1
     return n
+
+
+def zaehlt_als_neukauf(status) -> bool:
+    """Ein Kauf belegt das Anlauf-Kontingent, sobald er nicht storniert/
+    abgelehnt/fehlgeschlagen ist (auch 'partial' und 'submitted')."""
+    return str(status or "").lower() not in ("cancelled", "rejected", "failed")
+
+
+def rest_neukaeufe(config, trade_history, heute: date = None) -> int:
+    """Wie viele Neukaeufe der laufende Monat noch erlaubt (nie negativ).
+
+    R-B68 (13.10.2026): Das Limit wurde nur zu Zyklus-Beginn geprueft; ein
+    Zyklus durfte dann bis zu 5 Orders legen. Am 01.10. kamen so 6 statt 5
+    Kaeufe zustande (Zyklus 1: 3 gefuellt, Zyklus 2: Zaehler 3<5 -> nochmal 3).
+    Die Kauf-Schleife zaehlt jetzt gegen dieses Restkontingent.
+    """
+    n = neukaeufe_diesen_monat(
+        trade_history, heute=heute,
+        schnitt_datum=((config or {}).get("m2a") or {}).get("schnitt_datum"))
+    return max(0, anlauf_limit(config) - n)
 
 
 def anlauf_limit(config) -> int:

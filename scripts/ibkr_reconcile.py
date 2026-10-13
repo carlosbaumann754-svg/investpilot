@@ -562,26 +562,90 @@ def maybe_alert(report: dict) -> None:
         log.warning("Alert-Dispatch fehlgeschlagen: %s", e)
 
 
-def _persist_reconcile_status(report: dict) -> None:
-    """R-B11 (C6, 07.06.2026): Heartbeat fuer das Cutover-Readiness-Gate #1.
+# R-B68 (13.10.2026): Beim IBKR-Login-Ausfall 02.-13.10.2026 scheiterte dieser
+# Abgleich 11 Tage lang alle 30 Min mit TimeoutError — der Fehlerpfad schrieb das
+# nur still in reconcile_status.json. Jetzt zaehlt er Fehlserien mit und meldet
+# sich (unabhaengig vom Bot-Prozess) per Pushover; Entwarnung, wenn es wieder geht.
+RECONCILE_ERROR_ALERT_AFTER = 4        # Cron alle 30 Min -> nach ~2 Std
+RECONCILE_ERROR_REALERT_HOURS = 12
 
-    Schreibt ts/status/drift-count nach reconcile_status.json, damit das
-    Dashboard-Gate den ECHTEN letzten Reconcile-Stand anzeigt statt hartkodiert
-    'green/passive'. Single-Writer (nur dieser Cron) -> kein Cross-Prozess-Race.
-    Best-effort — ein Fehler hier darf den Reconcile nie killen.
+
+def _persist_reconcile_status(report: dict) -> dict:
+    """Heartbeat fuer das Cutover-Readiness-Gate #1 + Fehlserien-Zaehler.
+
+    Single-Writer (nur dieser Cron) -> kein Cross-Prozess-Race. Best-effort:
+    ein Fehler hier darf den Reconcile nie killen. Gibt den geschriebenen
+    Stand zurueck (leeres Dict bei Fehler).
     """
     try:
-        from app.config_manager import save_json
+        from app.config_manager import save_json, load_json
         from datetime import datetime, timezone
-        save_json("reconcile_status.json", {
-            "ts": report.get("ts") or datetime.now(timezone.utc).isoformat(),
-            "written_at": datetime.now(timezone.utc).isoformat(),
-            "status": report.get("status", "ERROR"),
+        prev = load_json("reconcile_status.json") or {}
+        jetzt = datetime.now(timezone.utc).isoformat()
+        status = report.get("status", "ERROR")
+        st = {
+            "ts": report.get("ts") or jetzt,
+            "written_at": jetzt,
+            "status": status,
             "drift_count": len(report.get("drifts", []) or []),
             "error": report.get("error"),
-        })
+        }
+        serie_laeuft = prev.get("status") == "ERROR"
+        if status == "ERROR":
+            st["consecutive_errors"] = (int(prev.get("consecutive_errors", 0) or 0) + 1
+                                        if serie_laeuft else 1)
+            st["first_error_at"] = (prev.get("first_error_at") if serie_laeuft
+                                    and prev.get("first_error_at") else jetzt)
+            st["last_error_alert_at"] = prev.get("last_error_alert_at") if serie_laeuft else None
+        else:
+            st["consecutive_errors"] = 0
+            st["error_streak_alerted"] = bool(serie_laeuft and prev.get("last_error_alert_at"))
+        save_json("reconcile_status.json", st)
+        return st
     except Exception as e:
         log.warning("reconcile_status.json Persist fehlgeschlagen: %r", e)
+        return {}
+
+
+def _alarm_bei_dauerfehler(st: dict, jetzt=None) -> None:
+    """Pushover bei Fehlserie (ab RECONCILE_ERROR_ALERT_AFTER Laeufen, danach
+    alle RECONCILE_ERROR_REALERT_HOURS) und Entwarnung nach einer Serie."""
+    if not st:
+        return
+    try:
+        from app.alerts import send_alert
+        from app.config_manager import save_json
+        from datetime import datetime, timezone
+        jetzt = jetzt or datetime.now(timezone.utc)
+        if st.get("status") == "ERROR":
+            n = int(st.get("consecutive_errors", 0) or 0)
+            if n < RECONCILE_ERROR_ALERT_AFTER:
+                return
+            letzter = st.get("last_error_alert_at")
+            if letzter:
+                try:
+                    if (jetzt - datetime.fromisoformat(letzter)).total_seconds() \
+                            < RECONCILE_ERROR_REALERT_HOURS * 3600:
+                        return
+                except (TypeError, ValueError):
+                    pass
+            try:
+                std = (jetzt - datetime.fromisoformat(st.get("first_error_at"))).total_seconds() / 3600
+                dauer = f"{std:.1f} Std" if std < 48 else f"{std / 24:.1f} Tagen"
+            except (TypeError, ValueError):
+                dauer = "unbekannt"
+            msg = (f"\U0001f534 IBKR-Abgleich scheitert seit {dauer} ({n} Laeufe in Folge).\n"
+                   f"Vermutlich hat der Bot keine Verbindung zu IBKR und handelt nicht.\n"
+                   f"Fehler: {st.get('error')}\n"
+                   f"Pruefen: docker logs ib-gateway | grep IBC:")
+            if send_alert(msg, level="ERROR"):
+                st["last_error_alert_at"] = jetzt.isoformat()
+                save_json("reconcile_status.json", st)
+        elif st.get("error_streak_alerted"):
+            send_alert("\U0001f7e2 IBKR-Abgleich laeuft wieder — Verbindung zu IBKR ist zurueck.",
+                       level="INFO")
+    except Exception as e:
+        log.warning("Dauerfehler-Alarm fehlgeschlagen: %r", e)
 
 
 def main():
@@ -644,10 +708,12 @@ def main():
         # leeren __str__, vorher loggte das 'Reconciliation failed: ' ohne
         # Diagnose-Info. Jetzt sieht man den Exception-Type explizit.
         log.error("Reconciliation failed: %r", e)
-        _persist_reconcile_status({"status": "ERROR", "error": repr(e)})  # C6
+        _st = _persist_reconcile_status({"status": "ERROR", "error": repr(e)})  # C6
+        if args.alert:
+            _alarm_bei_dauerfehler(_st)
         return 2
 
-    _persist_reconcile_status(report)  # C6: Heartbeat fuer Readiness-Gate #1
+    _st = _persist_reconcile_status(report)  # C6: Heartbeat fuer Readiness-Gate #1
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))
@@ -671,6 +737,7 @@ def main():
 
     if args.alert:
         maybe_alert(report)
+        _alarm_bei_dauerfehler(_st)
 
     return 0 if report["status"] == "OK" else 1
 

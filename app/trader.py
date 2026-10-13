@@ -1864,6 +1864,8 @@ def execute_scanner_trades(client, config, scan_results):
     # R-B66: M2A-Kauf-Fenster (Handelstag 1-3) + Anlauf-Limit (max N/Monat).
     # Modell-Treue zum validierten Z3-Backtest (monatliche Einstiege) und
     # Z4-Staffelung fuer den Depot-Aufbau. Ausserhalb: bewusst KEINE Kaeufe.
+    _m2a_rest = None          # None = kein M2a-Kontingent (Alt-Motor)
+    _m2a_gebucht = 0
     try:
         from app import m2a_motor as _m2a
         if _m2a.ist_aktiv(config):
@@ -1872,14 +1874,13 @@ def execute_scanner_trades(client, config, scan_results):
                          "(Handelstag 1-3 des Monats) — keine Neukaeufe")
                 return []
             _hist = load_json("trade_history.json") or []
-            _n_neu = _m2a.neukaeufe_diesen_monat(
-                _hist,
-                schnitt_datum=(config.get("m2a") or {}).get("schnitt_datum"))
             _limit = _m2a.anlauf_limit(config)
-            if _n_neu >= _limit:
+            _m2a_rest = _m2a.rest_neukaeufe(config, _hist)
+            if _m2a_rest <= 0:
                 log.info(f"  M2A: Anlauf-Limit erreicht "
-                         f"({_n_neu}/{_limit} Neukaeufe diesen Monat)")
+                         f"({_limit}/{_limit} Neukaeufe diesen Monat)")
                 return []
+            log.info(f"  M2A: Restkontingent {_m2a_rest}/{_limit} Neukaeufe diesen Monat")
     except ImportError:
         pass
 
@@ -2504,6 +2505,11 @@ def execute_scanner_trades(client, config, scan_results):
             for candidate in top_buys:
                 if effective_cash < 100:
                     break
+                # R-B68: Anlauf-Limit gilt pro KAUF, nicht pro Zyklus.
+                if _m2a_rest is not None and _m2a_gebucht >= _m2a_rest:
+                    log.info(f"  M2A: Restkontingent ({_m2a_rest}) in diesem "
+                             f"Zyklus ausgeschoepft — keine weiteren Kaeufe")
+                    break
 
                 symbol = candidate["symbol"]
                 asset_class = candidate["class"]
@@ -2782,6 +2788,8 @@ def execute_scanner_trades(client, config, scan_results):
 
                     save_trade(_attach_fill_prices(trade_entry, result))
                     trades_executed.append(trade_entry)
+                    if _m2a_rest is not None and _m2a.zaehlt_als_neukauf(trade_entry.get("status")):
+                        _m2a_gebucht += 1
                     # R-B11/E5: nur dekrementieren wenn der Buy tatsaechlich Kapital
                     # gebunden hat (executed/partial/submitted), NICHT bei rejected/
                     # cancelled/failed — sonst "verbraucht" der Bot Budget, das real

@@ -697,8 +697,8 @@ def check_broker_health(client, config=None, max_attempts=2, retry_wait_s=5.0):
     """Schneller Health-Check des aktiven Brokers + Telegram-Alert bei Drop.
 
     Wird von run_trading_cycle() VOR dem ersten get_portfolio() aufgerufen.
-    Dedupliziert Alerts via alert_state['broker_last_health'] — sendet nur
-    bei State-Wechsel (ok->fail, fail->ok), nicht bei jedem Cycle.
+    Alarmierung ueber _track_broker_outage (R-B68): ab 3 Fehlzyklen, danach
+    alle 6 Std erneut, Entwarnung mit Ausfalldauer.
 
     Args:
         client: BrokerBase-Instanz (EtoroClient oder IbkrBroker)
@@ -714,8 +714,6 @@ def check_broker_health(client, config=None, max_attempts=2, retry_wait_s=5.0):
     """
     import time as _time
     # Lazy disconnect zwischen Attempts (gibt Connection-Pool sauberen Reset)
-    state = _load_alert_state()
-    last = state.get("broker_last_health", "unknown")  # "ok" | "fail" | "unknown"
     broker_name = getattr(client, "broker_name", "?")
 
     healthy = False
@@ -748,26 +746,85 @@ def check_broker_health(client, config=None, max_attempts=2, retry_wait_s=5.0):
     if not healthy:
         error_detail = " | ".join(attempt_errors)
 
-    new_state = "ok" if healthy else "fail"
+    _track_broker_outage(healthy, broker_name, error_detail, config)
+    return healthy
 
-    if last != new_state:
-        # State-Change → Alert
-        if new_state == "fail":
+
+# R-B68 (13.10.2026): Ausfall-Alarm mit Wiederholung.
+# Vorher meldete check_broker_health nur den Zustands-WECHSEL ok->fail, also
+# genau einmal. Beim IBKR-Login-Ausfall 02.-13.10.2026 ging so hoechstens EINE
+# Nachricht raus (Sa 00:00 Uhr), danach 11 Tage Stille, obwohl jeder Zyklus
+# uebersprungen wurde. Zudem lag der Zustand in alert_state.json, das mehrere
+# Funktionen mit veralteten Kopien zurueckschreiben.
+# Jetzt: eigene Datei, Alarm ab N Fehlzyklen (der naechtliche Gateway-Neustart
+# kostet hoechstens 1-2 Zyklen), Wiederholung solange der Ausfall andauert,
+# Entwarnung mit Dauer, aber nur wenn vorher alarmiert wurde.
+BROKER_OUTAGE_STATE_FILE = "broker_outage_state.json"
+OUTAGE_ALERT_AFTER_FAILS = 3      # ~15 Min bei 5-Min-Zyklus
+OUTAGE_REALERT_HOURS = 6
+
+
+def _dauer_text(seit_iso, jetzt):
+    try:
+        sek = (jetzt - datetime.fromisoformat(seit_iso)).total_seconds()
+    except (TypeError, ValueError):
+        return "unbekannt"
+    stunden = sek / 3600
+    if stunden < 1:
+        return f"{int(sek // 60)} Min"
+    if stunden < 48:
+        return f"{stunden:.1f} Std"
+    return f"{stunden / 24:.1f} Tagen"
+
+
+def _track_broker_outage(healthy, broker_name, error_detail, config=None, jetzt=None):
+    """Zaehlt Fehlzyklen und alarmiert bei Dauerausfall (siehe Kommentar oben)."""
+    jetzt = jetzt or datetime.now()
+    st = load_json(BROKER_OUTAGE_STATE_FILE) or {}
+    name = str(broker_name).upper()
+
+    if healthy:
+        if st.get("alerted"):
             send_alert(
-                f"🔴 Broker '{broker_name.upper()}' Connection LOST\n"
-                f"Detail: {error_detail}\n"
-                f"Bot pausiert keine Trades — naechster Cycle versucht erneut.",
-                level="ERROR", config=config,
-            )
-        else:
-            send_alert(
-                f"🟢 Broker '{broker_name.upper()}' Connection RESTORED",
+                f"\U0001f7e2 Broker '{name}' wieder verbunden — Bot handelt wieder.\n"
+                f"Ausfall: {_dauer_text(st.get('since'), jetzt)} "
+                f"({st.get('fails', 0)} Zyklen uebersprungen).",
                 level="INFO", config=config,
             )
-        state["broker_last_health"] = new_state
-        _save_alert_state(state)
+        if st:
+            save_json(BROKER_OUTAGE_STATE_FILE, {})
+        return
 
-    return healthy
+    st["fails"] = int(st.get("fails", 0)) + 1
+    st.setdefault("since", jetzt.isoformat())
+    st["last_error"] = (error_detail or "")[:300]
+
+    faellig = st["fails"] >= OUTAGE_ALERT_AFTER_FAILS
+    letzter = st.get("last_alert_at")
+    if faellig and letzter:
+        try:
+            faellig = (jetzt - datetime.fromisoformat(letzter)).total_seconds() \
+                >= OUTAGE_REALERT_HOURS * 3600
+        except (TypeError, ValueError):
+            faellig = True
+    if faellig:
+        gesendet = send_alert(
+            f"\U0001f534 Bot handelt NICHT — keine Verbindung zu {name} seit "
+            f"{_dauer_text(st['since'], jetzt)} ({st['fails']} Zyklen uebersprungen).\n"
+            f"Haeufigste Ursache: Gateway-Login abgelehnt "
+            f"(docker logs ib-gateway | grep IBC:).\n"
+            f"Die Notbremsen (E6-Stops) liegen weiter bei IBKR.\n"
+            f"Detail: {st['last_error']}\n"
+            f"Erinnerung alle {OUTAGE_REALERT_HOURS} Std, solange der Ausfall andauert.",
+            level="ERROR", config=config,
+        )
+        if gesendet:
+            st["last_alert_at"] = jetzt.isoformat()
+            st["alerted"] = True
+            st["alerts"] = int(st.get("alerts", 0)) + 1
+        else:
+            log.warning("Ausfall-Alarm konnte nicht zugestellt werden, naechster Zyklus versucht erneut")
+    save_json(BROKER_OUTAGE_STATE_FILE, st)
 
 
 # ============================================================

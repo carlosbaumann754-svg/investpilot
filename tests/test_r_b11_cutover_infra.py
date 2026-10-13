@@ -129,7 +129,9 @@ def test_c6_reconcile_persists_status():
     """C6: ibkr_reconcile schreibt reconcile_status.json mit status+drift_count."""
     src = _read("scripts/ibkr_reconcile.py")
     assert "def _persist_reconcile_status" in src
-    body = src[src.find("def _persist_reconcile_status"):][:900]
+    start = src.find("def _persist_reconcile_status")
+    # ganze Funktion (R-B68 hat sie um den Fehlserien-Zaehler verlaengert)
+    body = src[start:src.find("\ndef ", start + 1)]
     assert 'save_json("reconcile_status.json"' in body
     assert '"status"' in body and '"drift_count"' in body
     # Wird im Erfolgs- UND im Fehlerpfad aufgerufen
