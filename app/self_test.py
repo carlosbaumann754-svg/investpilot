@@ -412,6 +412,13 @@ def tc_ibkr_session_watchdog() -> TestResult:
 def tc_discovery_freshness() -> TestResult:
     """v37cz: Discovery soll innerhalb der letzten 14 Tage gelaufen sein."""
     try:
+        # R-B69: Freitagslauf ist unter dem Signal-Stack bewusst aus -> kein
+        # "veraltet"-Warning (Cry-Wolf), sondern Info.
+        from app import asset_discovery as _ad
+        if not _ad.automatik_aktiv():
+            return TestResult("discovery_freshness", True,
+                              "pausiert — Signal-Stack kauft aus festem sp600-Universum (R-B69)",
+                              severity="info", category="scheduler")
         f = _get_data_path("discovery_status.json")
         if not f.exists():
             return TestResult("discovery_freshness", True,

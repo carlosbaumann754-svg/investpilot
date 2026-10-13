@@ -18,7 +18,7 @@ log = logging.getLogger("AssetDiscovery")
 
 # v37h+3 (Sprint-Tag-9, 19.05.2026): Audit-Coverage-Marker
 AUDIT_METADATA = {
-    "purpose": "IBKR-Universe-Discovery: Wöchentlicher Live-Scan nach neuen handelbaren Assets im IBKR-Universe",
+    "purpose": "IBKR-Universe-Discovery: Wöchentlicher Live-Scan nach neuen handelbaren Assets im IBKR-Universe (R-B69: Freitags-Automatik unter dem Signal-Stack pausiert — Universum ist fix sp600)",
     "config_section": None,
     "state_files": [],
     "self_tests": ["tc_discovery_freshness"],
@@ -336,6 +336,25 @@ def run_weekly_discovery():
     log.info("=" * 55)
 
     return result
+
+
+def automatik_aktiv(config=None) -> bool:
+    """R-B69 (13.10.2026): Soll der woechentliche Freitagslauf ueberhaupt laufen?
+
+    Discovery fuettert nur das alte TA-Universum (market_scanner.ASSET_UNIVERSE).
+    Unter dem Signal-Stack kauft der Bot ausschliesslich aus dem festen
+    sp600-Universum -> der Lauf ist wirkungslos, belegt aber jeden Freitag
+    ~12 Min die IBKR-Verbindung und erzeugt Sentry-Laerm (Muell-Symbole wie MLO;
+    im Login-Ausfall 09.10. 48x "search_instrument failed").
+    Fail-safe: Config unlesbar -> nicht laufen (es geht nur Rauschen verloren).
+    Der manuelle Start ueber /api/discovery/run bleibt unberuehrt.
+    """
+    try:
+        cfg = config if config is not None else (load_config() or {})
+        return not bool(cfg.get("use_signal_stack", False))
+    except Exception as e:
+        log.warning(f"Discovery-Automatik: Config nicht lesbar ({e!r}) -> aus")
+        return False
 
 
 def is_friday_discovery_time():

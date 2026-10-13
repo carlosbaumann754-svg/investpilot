@@ -481,12 +481,17 @@ def _run_background_maintenance() -> None:
     if (is_friday_discovery_time()
             and now - _BG_MAINT_LAST_RUN.get("live_discovery", 0) >= _BG_LIVE_DISCOVERY_S):
         _BG_MAINT_LAST_RUN["live_discovery"] = now
-        log.info("BG-Discovery: starte Live-Discovery in separate Thread...")
-        try:
-            t = threading.Thread(target=_run_live_discovery_safely, daemon=True)
-            t.start()
-        except Exception as e:
-            log.warning(f"BG-Discovery Thread-Start fehlgeschlagen: {e}")
+        # R-B69: unter dem Signal-Stack wirkungslos (festes sp600-Universum).
+        from app import asset_discovery as _ad
+        if not _ad.automatik_aktiv():
+            log.info("BG-Discovery: pausiert (Signal-Stack kauft aus festem sp600-Universum)")
+        else:
+            log.info("BG-Discovery: starte Live-Discovery in separate Thread...")
+            try:
+                t = threading.Thread(target=_run_live_discovery_safely, daemon=True)
+                t.start()
+            except Exception as e:
+                log.warning(f"BG-Discovery Thread-Start fehlgeschlagen: {e}")
 
     # ----- WFO-Drift-Watchdog: 1x taeglich (Sharpe-Drift, 17.05.2026) -----
     if now - _BG_MAINT_LAST_RUN.get("wfo_drift", 0) >= _BG_WFO_DRIFT_S:
