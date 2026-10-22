@@ -1871,7 +1871,9 @@ async def api_m2a_gates(user=Depends(require_auth)):
         # R-B66h (03.09.2026): Geerbte-REST statt nur Gesamt — nach 3 Tagen
         # waren schon 4 von 15 ueber Alt-Exits raus, die Karte sagte aber
         # weiter "geerbt: 15" (Anzeige-Luege light).
-        _geerbt_ids = {str(x) for x in (geerbt.get("position_ids") or [])}
+        # R-B70: ueber m2a_motor.geerbte_ids() — die Rohliste zaehlte nach dem
+        # Schnitt neu gekaufte Aktien (gleiche conId) weiter als "geerbt".
+        _geerbt_ids = _mm.geerbte_ids()
         geerbt_offen = None
         try:
             _pf = _portfolio_from_brain_cache() or {}

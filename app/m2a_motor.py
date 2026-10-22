@@ -54,23 +54,67 @@ def horizon_handelstage(config) -> int:
         "horizon_handelstage", HORIZON_HANDELSTAGE))
 
 
+_KAUF_AKTIONEN = ("SCANNER_BUY", "BUY", "MANUAL_BUY", "OPEN")
+
+
+def _nach_schnitt_gekauft(eingefroren_am: str, history_path: Path) -> set:
+    """conIds mit einem (nicht stornierten) Kauf NACH dem Einfrieren.
+
+    R-B70: Die Geerbt-Liste fuehrt IBKR-conIds = Kennung der AKTIE, nicht der
+    Position. Ein Kauf nach dem Schnitt heisst: die geerbte Position war schon
+    weg (der Bot kauft nie eine gehaltene Aktie nach) -> neue M2a-Position.
+    Zeitstempel beider Seiten sind naive Container-Lokalzeit -> String-Vergleich.
+    """
+    try:
+        with open(history_path, encoding="utf-8") as f:
+            hist = json.load(f) or []
+    except OSError:
+        return set()
+    return {str(e.get("position_id")) for e in hist
+            if isinstance(e, dict)
+            and e.get("action") in _KAUF_AKTIONEN
+            and zaehlt_als_neukauf(e.get("status"))
+            and str(e.get("timestamp", "")) > eingefroren_am}
+
+
 def geerbte_ids() -> frozenset:
-    """Position-IDs der Alt-Positionen (Bestandsschutz). mtime-gecacht."""
+    """Position-IDs der Alt-Positionen, die seit dem Schnitt durchgehend
+    gehalten werden (Bestandsschutz). Gecacht auf mtime beider Dateien."""
     global _geerbt_cache
+    history_path = _GEERBT_PATH.parent / "trade_history.json"
     try:
         mtime = os.path.getmtime(_GEERBT_PATH)
     except OSError:
         return frozenset()
-    if _geerbt_cache["mtime"] != mtime:
+    try:
+        mtime_hist = os.path.getmtime(history_path)
+    except OSError:
+        mtime_hist = None
+    schluessel = (mtime, mtime_hist)
+    if _geerbt_cache["mtime"] != schluessel:
         try:
             with open(_GEERBT_PATH, encoding="utf-8") as f:
                 d = json.load(f) or {}
             ids = frozenset(str(x) for x in (d.get("position_ids") or []))
-            _geerbt_cache = {"mtime": mtime, "ids": ids}
         except Exception as e:
             log.warning(f"m2a_geerbt.json unlesbar ({e}) — Bestandsschutz "
                         "greift NICHT, M2a-Regeln gelten fuer alle")
             return frozenset()
+        eingefroren_am = str(d.get("eingefroren_am") or "")
+        if eingefroren_am:
+            try:
+                neu = _nach_schnitt_gekauft(eingefroren_am, history_path)
+                if ids & neu:
+                    log.info("M2a: neu gekauft, nicht mehr geerbt: "
+                             f"{sorted(ids & neu)}")
+                ids = ids - neu
+            except Exception as e:
+                # unverstandene Historie -> bisherige Liste (Bestandsschutz)
+                log.warning(f"Geerbt-Neukauf-Filter fehlgeschlagen ({e!r}) — "
+                            "unveraenderte Geerbt-Liste")
+        else:
+            log.warning("m2a_geerbt.json ohne eingefroren_am — Neukauf-Filter aus")
+        _geerbt_cache = {"mtime": schluessel, "ids": ids}
     return _geerbt_cache["ids"]
 
 
