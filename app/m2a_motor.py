@@ -238,3 +238,111 @@ def leiter_status(schnitt_datum: str, heute: date = None) -> dict:
         "entscheid_ab": entscheid_ab,
         "monate_seit": monate_seit,
     }
+
+
+# ── R-B71 (26.10.2026): FX-neutrale M2a-Messung fuer G1 + 6-Monats-Leiter ──
+# Das Paper-Konto haelt ~1.01 Mio GBP Bargeld (Basis CHF); die US-Aktien sind
+# ueber ein USD-Minus finanziert. Die alte Messung (Kontowert CHF / USDCHF)
+# mass damit vor allem GBP/USD: September -3.38% statt -0.76% Strategie.
+# Jetzt: Strategie-P/L in USD = Delta unrealisiert der M2a-Positionen +
+# realisierte M2a-Closes, Nenner = USD-Equity am Vormonatsende. Geerbte
+# Positionen zaehlen nicht (Regelwerk). Carlos-Freigabe 26.10.2026.
+
+_CLOSE_OK = ("executed", "partial", "filled")
+
+
+def geerbt_unrealized(positions):
+    """Summe des unrealisierten P/L (USD) aller noch geerbten Positionen.
+
+    `positions` im brain_state-Format ({position_id, pnl}). None, wenn keine
+    Positionsliste vorliegt (-> Messung des Tages unvollstaendig)."""
+    if positions is None:
+        return None
+    return round(sum(float(p.get("pnl") or 0) for p in positions
+                     if ist_geerbt(p.get("position_id"))), 2)
+
+
+def _war_geerbt_bei_close(pid, ts, trade_history, roh_ids, eingefroren_am) -> bool:
+    """Geerbt zum Close-Zeitpunkt = in der eingefrorenen Liste und bis dahin
+    kein Neukauf derselben conId nach dem Einfrieren (R-B70-Logik)."""
+    if pid not in roh_ids:
+        return False
+    return not any(
+        str(e.get("position_id")) == pid
+        and e.get("action") in _KAUF_AKTIONEN
+        and zaehlt_als_neukauf(e.get("status"))
+        and eingefroren_am < str(e.get("timestamp", "")) < ts
+        for e in trade_history if isinstance(e, dict))
+
+
+def monatsrenditen(rows, trade_history, schnitt_datum: str) -> dict:
+    """{YYYY-MM: {ret_pct, pnl_usd, basis_usd, bis}} fuer jeden Monat nach dem
+    Schnitt, gemessen Monatsende gegen Vormonatsende (letzter Snapshot je Monat;
+    der laufende Monat zaehlt bis zum juengsten Snapshot).
+
+    ret_pct ist None, wenn einem der beiden Stichtage ein Wert fehlt (vor allem
+    geerbt_unrealized_pnl) — lieber "unbekannt" als still falsch.
+    """
+    try:
+        with open(_GEERBT_PATH, encoding="utf-8") as f:
+            roh = json.load(f) or {}
+    except (OSError, ValueError):
+        roh = {}
+    roh_ids = {str(x) for x in (roh.get("position_ids") or [])}
+    eingefroren_am = str(roh.get("eingefroren_am") or "")
+
+    je_monat = {}
+    for r in sorted((r for r in rows or [] if isinstance(r, dict)),
+                    key=lambda r: str(r.get("date", ""))):
+        d = str(r.get("date", ""))
+        if len(d) >= 7:
+            je_monat[d[:7]] = r
+    basis_monat = str(schnitt_datum)[:7]
+    monate = [m for m in sorted(je_monat) if m >= basis_monat]
+
+    def _m2a_u(r):
+        u, g = r.get("unrealized_pnl"), r.get("geerbt_unrealized_pnl")
+        return None if u is None or g is None else float(u) - float(g)
+
+    def _ts(r):
+        return str(r.get("ts") or f"{r.get('date')}T23:59:59")
+
+    out = {}
+    for vor, m in zip(monate, monate[1:]):
+        a, b = je_monat[vor], je_monat[m]
+        eintrag = {"ret_pct": None, "pnl_usd": None, "basis_usd": None,
+                   "bis": str(b.get("date"))}
+        ua, ub = _m2a_u(a), _m2a_u(b)
+        tv, fx = a.get("portfolio_total_value"), a.get("usdchf_close")
+        if ua is not None and ub is not None and tv and fx:
+            von, bis = _ts(a), _ts(b)
+            realisiert = sum(
+                float(e.get("pnl_usd") or 0) for e in trade_history or []
+                if isinstance(e, dict)
+                and "CLOSE" in str(e.get("action", ""))
+                and str(e.get("status", "")).lower() in _CLOSE_OK
+                and von < str(e.get("timestamp", "")) <= bis
+                and not _war_geerbt_bei_close(str(e.get("position_id")),
+                                              str(e.get("timestamp", "")),
+                                              trade_history, roh_ids,
+                                              eingefroren_am))
+            pnl = ub - ua + realisiert
+            basis = float(tv) / float(fx)
+            eintrag.update(ret_pct=round(pnl / basis * 100, 2),
+                           pnl_usd=round(pnl, 2), basis_usd=round(basis, 2))
+        out[m] = eintrag
+    return out
+
+
+def kumuliert_pct(renditen: dict):
+    """Verzinste Gesamtrendite (%) ueber alle Monate; None wenn ein Monat
+    unbekannt ist oder noch keiner vorliegt."""
+    if not renditen:
+        return None
+    faktor = 1.0
+    for m in sorted(renditen):
+        r = renditen[m].get("ret_pct")
+        if r is None:
+            return None
+        faktor *= 1 + r / 100
+    return round((faktor - 1) * 100, 2)

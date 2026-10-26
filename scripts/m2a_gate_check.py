@@ -4,7 +4,7 @@ Bindendes Regelwerk: docs/M2A_MOTOR_REGELWERK.md. Host-Cron TAEGLICH
 (Mo-Fr 06:00 UTC, stdin-Pattern); das Skript entscheidet selbst:
 - m2a nicht aktiv -> stiller Exit (Cron darf schon vor dem Schnitt laufen).
 - G1 feuert genau EINMAL pro Monat (am 1. Handelstag): Vormonats-Rendite
-  (USD-Basis: portfolio_total_value / usdchf_close aus equity_history)
+  (R-B71: FX-neutral, nur M2a-Positionen — m2a_motor.monatsrenditen)
   gegen die Modell-Baender aus data/m2a_erwartungsbaender.json.
   < p01 -> Prio 1 (Regelwerk-relevant), sonst Prio 0 (Protokoll).
 - G3/G4: Countdown zur 6-Monats-Leiter im G1-Text; die Leiter selbst wird
@@ -13,12 +13,12 @@ Marker: data/m2a_gates_state.json (einmal pro Monat).
 """
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 AUDIT_METADATA = {
     "purpose": (
         "M2A-Gates-Wecker (bindendes Regelwerk R-B65/66): meldet monatlich "
-        "am 1. Handelstag die Vormonats-Rendite (USD) gegen die validierten "
+        "am 1. Handelstag die Vormonats-Rendite (USD, FX-neutral, nur M2a — R-B71) gegen die validierten "
         "Modell-Baender (G1), erinnert an die 6-Monats-Leiter (G3/G4) und "
         "eskaliert Prio 1 bei Monat < p01. Stiller Exit solange m2a nicht "
         "aktiv — Cron kann vor dem Schnitt installiert werden."
@@ -43,17 +43,6 @@ def _load(name, default=None):
         return default
 
 
-def usd_equity_je_monat(rows):
-    """Letzter Eintrag je Monat -> USD-Equity (CHF-Wert / USDCHF-Kurs)."""
-    je_monat = {}
-    for r in rows or []:
-        d = str(r.get("date", ""))
-        tv, fx = r.get("portfolio_total_value"), r.get("usdchf_close")
-        if len(d) >= 7 and tv and fx:
-            je_monat[d[:7]] = float(tv) / float(fx)
-    return je_monat
-
-
 def klassifiziere(ret_pct, baender):
     if ret_pct < baender["p01"]:
         return "UNTER p01 — Regelwerk-relevant", 1
@@ -62,6 +51,26 @@ def klassifiziere(ret_pct, baender):
     if ret_pct < baender["p50"]:
         return "im unteren Normalband", 0
     return "im oberen Normalband", 0
+
+
+def g1_teil(renditen, vor, baender):
+    """G1-Satz fuer den Vormonat -> (text, prio).
+
+    R-B71 (26.10.2026): FX-neutral und nur M2a. Die alte Messung (Kontowert
+    CHF / USDCHF) mass bei ~1 Mio GBP Bargeld vor allem GBP/USD (September
+    -3.38% statt -0.76%). Fehlt ein Stichtag-Wert, meldet G1 das mit Prio 1
+    statt still eine falsche Zahl zu klassifizieren."""
+    e = (renditen or {}).get(vor)
+    if not baender or e is None:
+        return f"G1 {vor}: noch kein Monatswert/Baender — Aufbau.", 0
+    ret = e.get("ret_pct")
+    if ret is None:
+        return (f"G1 {vor}: Messung UNVOLLSTAENDIG (Tagesschnappschuss ohne "
+                f"geerbt-Anteil) — beim naechsten Claude-Check pruefen.", 1)
+    urteil, prio = klassifiziere(ret, baender)
+    return (f"G1 {vor}: {ret:+.2f}% (USD, FX-neutral, nur M2a) — {urteil} "
+            f"(Baender p01 {baender['p01']}/p05 {baender['p05']}/"
+            f"Median {baender['p50']}).", prio)
 
 
 def main() -> int:
@@ -92,21 +101,17 @@ def main() -> int:
     baender = ((((_bd.get("resultate") or {}).get("Z3_H126_DS40") or {})
                 .get("monats_baender"))
                or _bd.get("monats_baender") or {})
-    eq = usd_equity_je_monat(_load("equity_history.json", []) or [])
-    monate = sorted(eq)
     schnitt = str((cfg.get("m2a") or {}).get("schnitt_datum", "2026-08-31"))
-    text_teile = []
-    prio = 0
-    if len(monate) >= 2 and baender:
-        vor, davor = monate[-1], monate[-2]
-        ret = (eq[vor] / eq[davor] - 1) * 100
-        urteil, prio = klassifiziere(ret, baender)
-        text_teile.append(
-            f"G1 {vor}: {ret:+.2f}% USD — {urteil} "
-            f"(Baender p01 {baender['p01']}/p05 {baender['p05']}/"
-            f"Median {baender['p50']}).")
-    else:
-        text_teile.append("G1: noch keine zwei Monats-Puntke/Baender — Aufbau.")
+    _eh = _load("equity_history.json", []) or []
+    rows = _eh if isinstance(_eh, list) else _eh.get("history", [])
+    renditen = m2a_motor.monatsrenditen(
+        rows, _load("trade_history.json", []) or [], schnitt)
+    vor = (heute.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    g1_text, prio = g1_teil(renditen, vor, baender)
+    text_teile = [g1_text]
+    kum = m2a_motor.kumuliert_pct({m: e for m, e in renditen.items() if m <= vor})
+    if kum is not None:
+        text_teile.append(f"M2a seit Schnitt kumuliert {kum:+.2f}%.")
 
     # R-B66e: zentrale Faelligkeit aus m2a_motor.leiter_status — die alte
     # Inline-Formel (>= 6) haette am 01.02.2027 mit nur 5 VOLLEN Monaten

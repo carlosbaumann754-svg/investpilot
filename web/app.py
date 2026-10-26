@@ -1848,16 +1848,13 @@ async def api_m2a_gates(user=Depends(require_auth)):
         hist = read_json_safe("trade_history.json") or []
         eq = read_json_safe("equity_history.json") or []
         rows = eq if isinstance(eq, list) else eq.get("history", [])
-        je_monat = {}
-        for r in rows:
-            d = str(r.get("date", ""))[:7]
-            tv, fx = r.get("portfolio_total_value"), r.get("usdchf_close")
-            if d and tv and fx:
-                je_monat[d] = float(tv) / float(fx)
-        mk = sorted(je_monat)
-        lauf_ret = (round((je_monat[mk[-1]] / je_monat[mk[-2]] - 1) * 100, 2)
-                    if len(mk) >= 2 else None)
         schnitt = str(m2a.get("schnitt_datum", "2026-08-31"))
+        # R-B71 (26.10.2026): FX-neutral + nur M2a (zentrale Messung wie G1).
+        # Vorher Kontowert CHF / USDCHF -> mass bei ~1 Mio GBP Bargeld vor
+        # allem GBP/USD statt der Strategie.
+        renditen = _mm.monatsrenditen(rows, hist, schnitt)
+        lauf_ret = renditen[max(renditen)]["ret_pct"] if renditen else None
+        kumuliert = _mm.kumuliert_pct(renditen)
         heute = _m2a_date.today()
         # R-B66e: zentrale Leiter-Faelligkeit (Bug-Fix: FAELLIG erst nach
         # 6 VOLLEN Monaten, nicht am 01.02. mit nur 5) — eine Wahrheit fuer
@@ -1895,6 +1892,8 @@ async def api_m2a_gates(user=Depends(require_auth)):
             "baender_monat": z3.get("monats_baender") or {},
             "fenster6m": z3.get("fenster6m") or {},
             "laufender_monat_ret_usd_pct": lauf_ret,
+            "kumuliert_seit_schnitt_pct": kumuliert,
+            "messung": "FX-neutral, nur M2a (R-B71)",
             "g1_letzte_meldung": gates_state.get("last_g1"),
             "geerbt_offen": geerbt_offen,
             "geerbt_gesamt": len(geerbt.get("position_ids") or []),

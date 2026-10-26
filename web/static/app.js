@@ -471,7 +471,10 @@ async function loadM2aGates() {
             : (d.monate_seit_schnitt >= (d.leiter_faellig_ab_monat ?? 7));
         document.getElementById('m2a-leiter').textContent =
             faellig ? 'FAELLIG' : `Monat ${d.leiter_monat ?? d.monate_seit_schnitt}/6`;
-        document.getElementById('m2a-leiter-sub').textContent =
+        // R-B71: bisherige M2a-Rendite seit Schnitt (FX-neutral, verzinst)
+        const kum = d.kumuliert_seit_schnitt_pct;
+        const kumTxt = (kum == null) ? '' : `bisher ${kum >= 0 ? '+' : ''}${kum.toFixed(2)}% | `;
+        document.getElementById('m2a-leiter-sub').textContent = kumTxt +
             (faellig ? '' : `Entscheid ab ${d.leiter_entscheid_ab ?? '2027-03'} | `) +
             `Stopp < ${d.fenster6m?.p01 ?? '-10.7'}% | GO >= +${d.fenster6m?.p25 ?? '1.2'}%`;
         document.getElementById('m2a-umbau').textContent =

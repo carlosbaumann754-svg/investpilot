@@ -121,7 +121,20 @@ def _fetch_latest_close(symbol: str) -> float | None:
 _COMPONENT_KEYS = (
     "unrealized_pnl", "base_unrealized_pnl", "base_realized_pnl",
     "cash", "invested", "num_positions", "base_currency",
+    "geerbt_unrealized_pnl",
 )
+
+
+def _geerbt_anteil(positions):
+    """R-B71 (26.10.2026): unrealisierter P/L (USD) der noch geerbten
+    Positionen. Die FX-neutrale M2a-Monatsrendite zieht ihn vom Gesamtwert ab.
+    None bei Fehler -> die Monatsmessung meldet 'unbekannt' statt falsch."""
+    try:
+        from app import m2a_motor
+        return m2a_motor.geerbt_unrealized(positions)
+    except Exception as e:
+        log.warning(f"Equity-Snapshot: geerbt-Anteil nicht berechenbar: {e!r}")
+        return None
 
 
 def _fetch_portfolio_components() -> dict | None:
@@ -146,6 +159,7 @@ def _fetch_portfolio_components() -> dict | None:
                     for k in _COMPONENT_KEYS:
                         if k in latest:
                             out[k] = latest[k]
+                    out["geerbt_unrealized_pnl"] = _geerbt_anteil(latest.get("positions"))
                     return out
     except Exception as e:
         log.debug(f"Brain-Snapshot-Read fehlgeschlagen: {e}")
@@ -161,11 +175,14 @@ def _fetch_portfolio_components() -> dict | None:
         credit = float(port.get("credit", 0) or 0)
         unrealized = float(port.get("unrealizedPnL", 0) or 0)
         invested = 0.0
+        geparst, unvollstaendig = [], False
         for pos in port.get("positions", []) or []:
             try:
                 parsed = EtoroClient.parse_position(pos)
                 invested += float(parsed.get("invested", 0) or 0)
+                geparst.append(parsed)
             except Exception as e:
+                unvollstaendig = True
                 log.warning(
                     f"Equity-Snapshot: Position parse failed "
                     f"(pos_id={pos.get('PositionID') or pos.get('position_id')}): {e}",
@@ -177,7 +194,9 @@ def _fetch_portfolio_components() -> dict | None:
             return None
         return {"portfolio_total_value": float(total), "cash": credit,
                 "invested": invested, "unrealized_pnl": unrealized,
-                "num_positions": len(port.get("positions", []) or [])}
+                "num_positions": len(port.get("positions", []) or []),
+                "geerbt_unrealized_pnl": (None if unvollstaendig
+                                          else _geerbt_anteil(geparst))}
     except Exception as e:
         log.warning(f"Live-Portfolio-Fetch fehlgeschlagen: {e}")
         return None

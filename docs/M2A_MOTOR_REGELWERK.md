@@ -58,6 +58,18 @@ G1 — MONATLICHE BAND-PRUEFUNG (automatischer Wecker, 1. Handelstag):
     Einzelmonate unter p05 sind ERWARTBAR (5% der Faelle) — kein Alarm,
     nur Protokoll.
 
+    MESSUNG (R-B71, Carlos-Freigabe 26.10.2026) — gilt fuer G1 UND G3/G4:
+    Monatsrendite = Strategie-P/L der M2a-Positionen in USD
+                    (Delta unrealisiert + realisierte M2a-Verkaeufe)
+                    / USD-Kontowert am Vormonatsende.
+    Waehrungseffekte des Bargelds zaehlen NICHT (es liegt in GBP, ~1 Mio),
+    geerbte Alt-Positionen zaehlen NICHT. Die 6-Monats-Rendite der Leiter
+    ist das Produkt der Monatsrenditen (verzinst).
+    Anlass: Die erste Umsetzung rechnete Kontowert CHF / USDCHF und mass
+    damit vor allem GBP/USD — September -3.38% statt -0.76% Strategie.
+    Fehlt einem Stichtag ein Wert, meldet G1 "unvollstaendig" (Prio 1)
+    statt einer Zahl. Code: m2a_motor.monatsrenditen().
+
 G2 — PAAR-PROBE JE HORIZONT-EXIT (fortlaufend):
     Jede geschlossene M2a-Position wird gegen ihren Modell-Zwilling
     gerechnet (gleicher Einstieg, OHLC-Sim). Ab 10 Paaren gilt:
