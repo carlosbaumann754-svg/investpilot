@@ -346,3 +346,58 @@ def kumuliert_pct(renditen: dict):
             return None
         faktor *= 1 + r / 100
     return round((faktor - 1) * 100, 2)
+
+
+# ── R-B72 (30.10.2026): M2a-Kaeufe voll ausfuehren ──
+# Von 15 M2a-Orders wurden nur ~39% des Zielbetrags gefuellt: die Limit-Order
+# wartet 30 s und storniert dann den Rest (Small Caps handeln in 30 s nur
+# einige hundert Aktien), und die Paper-Kurse sind 15 Min alt (Limit = alter
+# Kurs +0.5% lag teils unter dem Markt -> null Fuellung). Eine Teilfuellung
+# zaehlte als Monatskauf und wurde nie aufgestockt. Carlos-Freigabe 30.10.2026.
+
+KAUF_LIMIT_PUFFER_PCT = 2.0     # Obergrenze ueber dem (15 Min alten) Kurs
+NACHKAUF_MIN_ANTEIL = 0.10      # erst ab 10% fehlendem Zielbetrag ...
+NACHKAUF_MIN_USD = 1000.0       # ... und mindestens 1000 USD nachkaufen
+NACHKAUF_AKTION = "M2A_NACHKAUF"
+
+
+def kauf_limit_puffer_pct(config) -> float:
+    """Preisobergrenze (%) fuer M2a-Kaeufe. Gekauft wird zum Marktpreis; das
+    Limit ist nur der Deckel und muss die 15-Min-Verzoegerung abdecken."""
+    return float(((config or {}).get("m2a") or {}).get(
+        "kauf_limit_puffer_pct", KAUF_LIMIT_PUFFER_PCT))
+
+
+def nachkauf_ziele(trade_history: list, heute: date = None,
+                   schnitt_datum: str = None) -> dict:
+    """{position_id: {ziel_usd, symbol, instrument_id}} der M2a-Kaeufe des
+    laufenden Monats (nicht storniert). Nur diese duerfen im Kauf-Fenster
+    aufgestockt werden — aeltere Teilpositionen bewusst nicht (anderer
+    Einstiegszeitpunkt als im Modell). instrument_id ist die Scanner-ID,
+    mit der client.buy() den Kontrakt aufloest."""
+    heute = heute or datetime.now().date()
+    prefix = heute.strftime("%Y-%m")
+    ziele = {}
+    for t in trade_history or []:
+        if not isinstance(t, dict):
+            continue
+        ts = str(t.get("timestamp", ""))
+        if (ts.startswith(prefix)
+                and str(t.get("action", "")).upper() == "SCANNER_BUY"
+                and zaehlt_als_neukauf(t.get("status"))
+                and (not schnitt_datum or ts >= str(schnitt_datum))
+                and t.get("position_id") and t.get("amount_usd")):
+            ziele[str(t["position_id"])] = {
+                "ziel_usd": float(t["amount_usd"]),
+                "symbol": t.get("symbol"),
+                "instrument_id": t.get("instrument_id"),
+            }
+    return ziele
+
+
+def nachkauf_rest(ziel_usd: float, investiert_usd: float) -> float:
+    """Fehlender Betrag bis zum Ziel; 0 wenn die Luecke zu klein ist."""
+    rest = float(ziel_usd) - float(investiert_usd or 0)
+    if rest < max(NACHKAUF_MIN_USD, NACHKAUF_MIN_ANTEIL * float(ziel_usd)):
+        return 0.0
+    return round(rest, 2)

@@ -1834,6 +1834,70 @@ def rebalance_portfolio(client, config):
 # SCANNER-BASIERTES TRADING (v2 mit allen Filtern)
 # ============================================================
 
+def _m2a_nachkaeufe(client, config, parsed_positions, effective_cash,
+                    trade_history, heute=None, schnitt_datum=None):
+    """R-B72 (30.10.2026): teilgefuellte M2a-Kaeufe des laufenden Kauf-Fensters
+    bis zum Zielbetrag aufstocken.
+
+    Anlass: die Limit-Order wartet 30 s und storniert dann den Rest; bei Small
+    Caps blieben so Positionen mit 3-8k statt 43k USD stehen (CARG, AGO, CENT).
+    Jeder 5-Min-Zyklus im Fenster versucht den fehlenden Betrag erneut.
+    Nachkaeufe zaehlen NICHT ins Anlauf-Limit und verschieben die 126-Tage-Uhr
+    nicht (eigene Aktion M2A_NACHKAUF). Nur Kaeufe dieses Monats und nur
+    Positionen, die noch gehalten werden. Der E6-Stop kommt pro Fuellung aus
+    _place_market_order (Summe der Stops = Positionsgroesse).
+
+    Returns: Liste der Nachkauf-trade_entries.
+    """
+    from app import m2a_motor
+    schnitt_datum = schnitt_datum or ((config or {}).get("m2a") or {}).get("schnitt_datum")
+    ziele = m2a_motor.nachkauf_ziele(trade_history, heute=heute,
+                                     schnitt_datum=schnitt_datum)
+    if not ziele:
+        return []
+    kwargs = ({"limit_slippage_pct": m2a_motor.kauf_limit_puffer_pct(config)}
+              if getattr(client, "broker_name", "") == "ibkr" else {})
+    cash = float(effective_cash or 0)
+    out = []
+    for p in parsed_positions or []:
+        pid = str(p.get("position_id"))
+        ziel = ziele.get(pid)
+        if not ziel:
+            continue
+        investiert = float(p.get("invested") or 0)
+        betrag = round(min(m2a_motor.nachkauf_rest(ziel["ziel_usd"], investiert), cash), 2)
+        if betrag < m2a_motor.NACHKAUF_MIN_USD:
+            continue
+        log.info(f"  M2A-NACHKAUF: {ziel['symbol']} ${betrag:,.2f} "
+                 f"(investiert ${investiert:,.0f} von Ziel ${ziel['ziel_usd']:,.0f})")
+        try:
+            result = client.buy(ziel["instrument_id"], betrag, leverage=1, **kwargs)
+        except Exception as e:
+            log.warning(f"  M2A-NACHKAUF {ziel['symbol']} fehlgeschlagen: {e!r}")
+            continue
+        if not result:
+            continue
+        order = result.get("orderForOpen", {})
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "action": m2a_motor.NACHKAUF_AKTION,
+            "symbol": ziel["symbol"],
+            "instrument_id": ziel["instrument_id"],
+            "position_id": pid,
+            "amount_usd": betrag,
+            "ziel_usd": ziel["ziel_usd"],
+            "leverage": 1,
+            "order_id": order.get("orderID"),
+            "status": _trade_status_from_result(result),
+            "ibkr_status_raw": _ibkr_status_raw_from_result(result),
+        }
+        save_trade(_attach_fill_prices(entry, result))
+        out.append(entry)
+        if entry["status"] in ("executed", "partial", "submitted"):
+            cash -= betrag
+    return out
+
+
 def execute_scanner_trades(client, config, scan_results):
     """Trades basierend auf Scanner-Ergebnissen mit vollen Safety-Checks."""
     log.info("=" * 55)
@@ -1866,6 +1930,7 @@ def execute_scanner_trades(client, config, scan_results):
     # Z4-Staffelung fuer den Depot-Aufbau. Ausserhalb: bewusst KEINE Kaeufe.
     _m2a_rest = None          # None = kein M2a-Kontingent (Alt-Motor)
     _m2a_gebucht = 0
+    _hist = None
     try:
         from app import m2a_motor as _m2a
         if _m2a.ist_aktiv(config):
@@ -1877,10 +1942,13 @@ def execute_scanner_trades(client, config, scan_results):
             _limit = _m2a.anlauf_limit(config)
             _m2a_rest = _m2a.rest_neukaeufe(config, _hist)
             if _m2a_rest <= 0:
+                # R-B72: kein frueher Abbruch mehr — teilgefuellte Kaeufe dieses
+                # Fensters werden weiter aufgestockt (Kauf-Schleife bricht bei
+                # Restkontingent 0 sofort ab, siehe unten).
                 log.info(f"  M2A: Anlauf-Limit erreicht "
-                         f"({_limit}/{_limit} Neukaeufe diesen Monat)")
-                return []
-            log.info(f"  M2A: Restkontingent {_m2a_rest}/{_limit} Neukaeufe diesen Monat")
+                         f"({_limit}/{_limit} Neukaeufe diesen Monat) — nur Nachkaeufe")
+            else:
+                log.info(f"  M2A: Restkontingent {_m2a_rest}/{_limit} Neukaeufe diesen Monat")
     except ImportError:
         pass
 
@@ -2118,6 +2186,14 @@ def execute_scanner_trades(client, config, scan_results):
             if (_canon_instrument_key(p["instrument_id"])
                     == _canon_instrument_key(candidate.get("symbol") or candidate["etoro_id"])
                     and p["invested"] > 0):
+                # R-B72: M2a-Positionen verlassen das Depot NUR ueber Horizont
+                # oder E6 (bindendes Regelwerk) — nie auf Scanner-Signal. Der
+                # Pfad hat nie gefeuert, laeuft aber seit R-B72 an Kauftagen
+                # auch nach erschoepftem Kontingent. Geerbte: M0-Regeln.
+                if _m2a_rest is not None and not _m2a.ist_geerbt(p["position_id"]):
+                    log.info(f"  SCANNER SELL {candidate['symbol']} uebersprungen "
+                             "(M2a: Ausstieg nur ueber Horizont/E6)")
+                    continue
                 log.info(f"  SCANNER SELL: {candidate['symbol']} "
                          f"(Score={candidate['score']:+.1f}, {candidate['signal']})")
 
@@ -2485,6 +2561,19 @@ def execute_scanner_trades(client, config, scan_results):
         except Exception as e:
             log.debug(f"  ML Scoring nicht verfuegbar: {e}")
 
+    # R-B72: teilgefuellte M2a-Kaeufe dieses Fensters aufstocken — VOR den
+    # Neukaeufen und NACH allen Gates (Drawdown, Regime, Timing, Recovery).
+    if _m2a_rest is not None:
+        try:
+            for _nk in _m2a_nachkaeufe(client, config, parsed_positions,
+                                       effective_cash, _hist or []):
+                trades_executed.append(_nk)
+                if _nk.get("status") in ("executed", "partial", "submitted"):
+                    credit -= _nk["amount_usd"]
+                    effective_cash -= _nk["amount_usd"]
+        except Exception as e:
+            log.warning(f"  M2A-Nachkauf fehlgeschlagen (non-fatal): {e!r}", exc_info=True)
+
     # R-B11/E4: ein SCANNER_SELL gibt den Slot erst frei, wenn er FILLED ist
     # (executed/partial) — nicht schon bei reiner Submission. Sonst oeffnet der
     # Bot einen neuen Buy auf einem noch nicht freien Slot -> kurzzeitig ueber
@@ -2748,7 +2837,13 @@ def execute_scanner_trades(client, config, scan_results):
                          f"(Score={candidate['score']:+.1f}, {candidate['signal']})")
 
                 start_time = time.time()
-                result = client.buy(candidate["etoro_id"], amount, leverage=leverage)
+                # R-B72: M2a-Kaeufe mit 2% Preisobergrenze (Paper-Kurse sind
+                # 15 Min alt; 0.5% lag bei GIII/EPRT/ARI unter dem Markt).
+                _kauf_kwargs = ({"limit_slippage_pct": _m2a.kauf_limit_puffer_pct(config)}
+                                if _m2a_rest is not None
+                                and getattr(client, "broker_name", "") == "ibkr" else {})
+                result = client.buy(candidate["etoro_id"], amount, leverage=leverage,
+                                    **_kauf_kwargs)
 
                 if ex and result:
                     ex.track_execution(

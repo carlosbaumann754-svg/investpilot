@@ -1560,7 +1560,8 @@ class IbkrBroker(BrokerBase):
             log.exception("Order failed: %s", e)
             return None
 
-    def buy(self, instrument_id, amount_usd, leverage=1, stop_loss=0, take_profit=0):
+    def buy(self, instrument_id, amount_usd, leverage=1, stop_loss=0, take_profit=0,
+            limit_slippage_pct=None):
         """
         Market-BUY by Amount USD.
 
@@ -1571,6 +1572,9 @@ class IbkrBroker(BrokerBase):
                       Parameter wird IGNORIERT (nur fuer eToro-API-Kompatibilitaet).
             stop_loss: % unter Entry-Price fuer Stop-Loss (0 = kein SL)
             take_profit: % ueber Entry-Price fuer Take-Profit (0 = kein TP)
+            limit_slippage_pct: Preisobergrenze ueber dem Kurs (None = Default
+                      0.5%). R-B72: M2a-Kaeufe nutzen 2%, weil die Paper-Kurse
+                      15 Min alt sind und das 0.5%-Limit teils unter dem Markt lag.
         """
         # v37dc (06.05.2026): Visibility-Fix. Bisher: warning + ignoriert silent
         # weiter. Carlos hat 06.05. Inkonsistenz Trades-Tab(2x) vs Positionen-
@@ -1590,6 +1594,7 @@ class IbkrBroker(BrokerBase):
         result = self._place_market_order(
             instrument_id, amount_usd, "BUY",
             stop_loss_pct=stop_loss, take_profit_pct=take_profit,
+            limit_slippage_pct=limit_slippage_pct,
         )
         if result is not None and isinstance(result, dict):
             result["leverage_actual"] = 1  # v37dc: Reality-Marker

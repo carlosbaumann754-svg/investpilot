@@ -19,6 +19,12 @@ NEU:
   MaxDD -19.2%, SharpeM 0.95.
 - KAUF-FENSTER: Neukaeufe nur in den ersten 3 Handelstagen des Monats
   (Modell-Treue; entschaerft nebenbei das Teilfuellungs-Problem).
+  AUSFUEHRUNG (R-B72, Carlos-Freigabe 30.10.2026): Teilgefuellte Kaeufe
+  werden innerhalb DESSELBEN Fensters bis zum Zielbetrag nachgekauft
+  (zaehlt nicht als Neukauf, 126-Tage-Uhr ab Erstkauf). Preisobergrenze
+  2% ueber dem (15 Min verzoegerten) Paper-Kurs statt 0.5%. Anlass:
+  Sep/Okt nur ~39% des Zielbetrags gefuellt. Aeltere Teilpositionen
+  werden NICHT aufgestockt (anderer Einstieg als im Modell).
 - SIZING: deployment 0.60 (= Carlos-Risiko-Budget -20%; historisch
   gemessener Tages-MaxDD -19.9%, real koennen es -25/-30% werden —
   PRE-COMMIT: kein manueller Eingriff oberhalb des Budgets; Ausstieg
