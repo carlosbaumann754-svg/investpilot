@@ -25,6 +25,11 @@ NEU:
   2% ueber dem (15 Min verzoegerten) Paper-Kurs statt 0.5%. Anlass:
   Sep/Okt nur ~39% des Zielbetrags gefuellt. Aeltere Teilpositionen
   werden NICHT aufgestockt (anderer Einstieg als im Modell).
+  KANDIDATEN (R-B73, Carlos-Entscheid 02.11.2026): Gekauft wird von oben
+  in der Rangliste OHNE Earnings-Blackout und OHNE Sentiment-Filter (das
+  Modell kennt beide nicht). Faellt ein Kandidat durch einen anderen
+  Filter, rueckt der naechste Rang nach. Anlass: Fenster 02.11. — Top 5,
+  davon 4 per Earnings/Sentiment gesperrt, Rang 6+ nie geprueft -> 1 Kauf.
 - SIZING: deployment 0.60 (= Carlos-Risiko-Budget -20%; historisch
   gemessener Tages-MaxDD -19.9%, real koennen es -25/-30% werden —
   PRE-COMMIT: kein manueller Eingriff oberhalb des Budgets; Ausstieg

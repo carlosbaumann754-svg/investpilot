@@ -1834,6 +1834,18 @@ def rebalance_portfolio(client, config):
 # SCANNER-BASIERTES TRADING (v2 mit allen Filtern)
 # ============================================================
 
+def _kauf_kandidaten(buy_candidates, n_plan, m2a):
+    """R-B73 (02.11.2026): (Plan-Top-N, Iterationsliste) fuer die Kauf-Schleife.
+
+    Der Plan (Top-N) bleibt die Grundlage fuer Budget und Gewichte. Unter M2a
+    iteriert die Schleife aber die ganze Rangliste: faellt ein Top-Kandidat
+    durch einen Filter, rueckt der naechste nach (Kauf-Fenster 02.11.: Top 5
+    -> 4 gefiltert -> nur 1 Kauf, Rang 6+ nie geprueft). Alt-Motor unveraendert.
+    """
+    plan = list(buy_candidates[:n_plan])
+    return plan, (list(buy_candidates) if m2a else plan)
+
+
 def _m2a_nachkaeufe(client, config, parsed_positions, effective_cash,
                     trade_history, heute=None, schnitt_datum=None):
     """R-B72 (30.10.2026): teilgefuellte M2a-Kaeufe des laufenden Kauf-Fensters
@@ -2585,19 +2597,27 @@ def execute_scanner_trades(client, config, scan_results):
     if available_slots <= 0 or effective_cash < 100:
         log.info(f"  Keine Slots oder Cash fuer neue Trades")
     else:
-        top_buys = buy_candidates[:min(available_slots, 5)]
+        # R-B73: unter M2a Ersatz-Kandidaten aus der Rangliste (Top-N bleibt
+        # die Grundlage fuer Budget + Gewichte).
+        _m2a_kauf = _m2a_rest is not None
+        top_buys, _kauf_liste = _kauf_kandidaten(
+            buy_candidates, min(available_slots, 5), _m2a_kauf)
         if top_buys:
             total_score = sum(max(b["score"], 1) for b in top_buys)
             # v15: Budget nutzt effective_cash (bei aktivem DCA gestaffelt).
             budget = min(effective_cash * 0.7, max_trade * len(top_buys))
 
-            for candidate in top_buys:
+            for candidate in _kauf_liste:
                 if effective_cash < 100:
                     break
                 # R-B68: Anlauf-Limit gilt pro KAUF, nicht pro Zyklus.
-                if _m2a_rest is not None and _m2a_gebucht >= _m2a_rest:
+                if _m2a_kauf and _m2a_gebucht >= _m2a_rest:
                     log.info(f"  M2A: Restkontingent ({_m2a_rest}) in diesem "
                              f"Zyklus ausgeschoepft — keine weiteren Kaeufe")
+                    break
+                # R-B73: pro Zyklus hoechstens so viele Kaeufe wie geplant
+                # (freie Plaetze, max 5) — die Ersatzliste fuellt nur Ausfaelle.
+                if _m2a_kauf and _m2a_gebucht >= len(top_buys):
                     break
 
                 symbol = candidate["symbol"]
@@ -2626,7 +2646,9 @@ def execute_scanner_trades(client, config, scan_results):
                         continue
 
                 # Earnings Blackout Check (Aktien)
-                if asset_class == "stocks" and ec:
+                # R-B73: nicht fuer M2a — das validierte Modell kauft die Top-
+                # Raenge ohne Earnings-Filter (Carlos-Entscheid 02.11.2026).
+                if asset_class == "stocks" and ec and not _m2a_kauf:
                     blackout, blackout_reason = ec.is_earnings_blackout(symbol, config)
                     if blackout:
                         log.info(f"  EARNINGS BLACKOUT: {symbol} — {blackout_reason}")
@@ -2634,7 +2656,7 @@ def execute_scanner_trades(client, config, scan_results):
 
                 # Sentiment Filter
                 mc_config = config.get("market_context", {})
-                if sent and mc_config.get("use_sentiment_filter", False):
+                if sent and mc_config.get("use_sentiment_filter", False) and not _m2a_kauf:  # R-B73
                     sent_result = sent.get_sentiment(symbol)
                     sent_threshold = mc_config.get("sentiment_block_threshold", -0.5)
                     if sent_result["score"] < sent_threshold:
@@ -2644,7 +2666,7 @@ def execute_scanner_trades(client, config, scan_results):
                         continue
 
                 # Earnings Surprise Score Adjustment
-                if asset_class == "stocks" and ec:
+                if asset_class == "stocks" and ec and not _m2a_kauf:  # R-B73
                     from app.events_calendar import adjust_score_for_earnings
                     adjusted_score = adjust_score_for_earnings(symbol, candidate["score"])
                     if adjusted_score != candidate["score"]:
