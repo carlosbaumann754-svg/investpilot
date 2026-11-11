@@ -395,6 +395,35 @@ _CATASTROPHIC_ORDER_REF = "E6_CATASTROPHIC"
 # non-tradable valuation-only contracts'.
 _NICHT_HANDELBARE_EXCHANGES = ("", "VALUE")
 
+# R-B74 (11.11.2026): conIds ohne jeden Handelsplatz (IBKR kennt keine
+# Kontrakt-Definition, auch nicht ueber SMART). Fall: ARI wurde am 10.11. in
+# die Treuhand-Position ARI.ESC umgewandelt (Abwicklung) — der E6-Abgleich
+# versuchte alle 5 Min einen Stop, IBKR lehnte jedes Mal ab (Error 200).
+# Prozess-Speicher reicht: nach einem Neustart genau ein erneuter Check.
+_E6_NICHT_HANDELBAR = set()
+
+
+def _ist_handelbar(ib, kontrakt, cid, sym) -> bool:
+    """True, wenn IBKR fuer den (auf SMART geroutete) Kontrakt eine Definition
+    kennt. Ohne reqContractDetails oder bei Fehler: True (bisheriges Verhalten,
+    lieber einen abgelehnten Stop als einen fehlenden)."""
+    if cid in _E6_NICHT_HANDELBAR:
+        return False
+    fn = getattr(ib, "reqContractDetails", None)
+    if fn is None:
+        return True
+    try:
+        details = fn(kontrakt)
+    except Exception:
+        return True
+    if details:
+        return True
+    _E6_NICHT_HANDELBAR.add(cid)
+    log.warning("E6 reconcile: %s (conId=%s) ist nicht handelbar (keine Kontrakt-"
+                "Definition, z.B. Treuhand nach Abwicklung) — kein Notfall-Stop "
+                "moeglich, wird nicht weiter versucht", sym, cid)
+    return False
+
 
 def _orderfaehiger_kontrakt(contract):
     """Kontrakt fuer eine ORDER aufbereiten: notfalls auf SMART umrouten.
@@ -1692,16 +1721,20 @@ class IbkrBroker(BrokerBase):
                     log.warning("E6 reconcile: kein gueltiger Stop-Preis fuer "
                                 "conId=%s (avgCost=%.4f) — uebersprungen", cid, avg_cost)
                     continue
+                sym = getattr(p.contract, "symbol", "?")
+                # R-B46: Positions-Kontrakte kommen teils mit exchange=
+                # 'VALUE' (AVNS-Fall, 3 Tage taeglich abgelehnt) -> SMART
+                kontrakt = _orderfaehiger_kontrakt(p.contract)
+                # R-B74: Positionen ohne Handelsplatz (ARI.ESC) nicht endlos versuchen
+                if not _ist_handelbar(ib, kontrakt, cid, sym):
+                    continue
                 try:
                     new_o = StopOrder("SELL", qty, cat_price)
                     new_o.tif = "GTC"
                     new_o.outsideRth = True
                     new_o.orderRef = _CATASTROPHIC_ORDER_REF
-                    # R-B46: Positions-Kontrakte kommen teils mit exchange=
-                    # 'VALUE' (AVNS-Fall, 3 Tage taeglich abgelehnt) -> SMART
-                    ib.placeOrder(_orderfaehiger_kontrakt(p.contract), new_o)
+                    ib.placeOrder(kontrakt, new_o)
                     result["added"] += 1
-                    sym = getattr(p.contract, "symbol", "?")
                     log.info("E6 reconcile: fehlenden Catastrophic-Stop nachgezogen "
                              "(%s conId=%s, SELL %d @ %.2f, -%.0f%% von avgCost %.2f)",
                              sym, cid, qty, cat_price, self._cat_stop_pct, avg_cost)

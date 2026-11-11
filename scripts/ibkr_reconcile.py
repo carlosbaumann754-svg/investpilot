@@ -538,7 +538,16 @@ def _format_drift_for_alert(d: dict) -> str:
     return f"• {t}: {extras}"[:160]
 
 
-def maybe_alert(report: dict) -> None:
+DRIFT_REALERT_HOURS = 12
+
+
+def _drift_signatur(report: dict) -> str:
+    """Welche Abweichungen vorliegen (Typ + Symbol), unabhaengig von Mengen."""
+    return "|".join(sorted(f"{d.get('type')}:{d.get('symbol', '')}"
+                           for d in (report.get("drifts") or [])))
+
+
+def maybe_alert(report: dict, st: dict = None, jetzt=None) -> None:
     """Multi-Channel-Alert (Pushover/Telegram/Discord) wenn Drift gefunden.
 
     v37k: vorher Telegram-only (send_telegram direkt), jetzt via send_alert()
@@ -548,15 +557,41 @@ def maybe_alert(report: dict) -> None:
     v37f (08.05.2026): Format-Strings via _format_drift_for_alert() — vorher
     waren CASH_DRIFT/POSITION_MISMATCH/etc. push-bodies leer (kein symbol +
     kein comment im Drift-Dict).
+
+    R-B74 (11.11.2026): Mit `st` (Stand aus _persist_reconcile_status) meldet
+    eine UNVERAENDERTE Drift nur einmal und danach alle DRIFT_REALERT_HOURS;
+    eine neue/geaenderte Drift sofort; Entwarnung, wenn sie weg ist. Anlass:
+    ARI.ESC (Umwandlung nach Abwicklung) loeste ab Mitternacht alle 30 Min
+    eine Pushover-Warnung aus — 23 Stueck bis zum Vormittag.
+    Ohne `st`: bisheriges Verhalten (jede Drift sofort).
     """
+    from datetime import datetime, timezone
+    jetzt = jetzt or datetime.now(timezone.utc)
     if report["status"] == "OK":
+        if st and st.get("drift_entwarnung"):
+            try:
+                from app.alerts import send_alert
+                send_alert("\U0001f7e2 IBKR-Abgleich wieder in Ordnung — keine Abweichungen mehr.", level="INFO")
+            except Exception as e:
+                log.warning("Entwarnung fehlgeschlagen: %s", e)
         return
+    if st is not None and st.get("drift_alert_at"):
+        try:
+            seit = (jetzt - datetime.fromisoformat(st["drift_alert_at"])).total_seconds()
+            if seit < DRIFT_REALERT_HOURS * 3600:
+                log.info("Drift unveraendert, gemeldet vor %.1f Std — still", seit / 3600)
+                return
+        except (TypeError, ValueError):
+            pass
     try:
         from app.alerts import send_alert
         msg = f"IBKR Reconciliation Drift — {len(report['drifts'])} Probleme:"
         for d in report["drifts"][:5]:
             msg += "\n" + _format_drift_for_alert(d)
-        send_alert(msg, level="WARNING")
+        if send_alert(msg, level="WARNING") and st is not None:
+            from app.config_manager import save_json
+            st["drift_alert_at"] = jetzt.isoformat()
+            save_json("reconcile_status.json", st)
         log.info("Reconciliation-Alert versendet (Multi-Channel)")
     except Exception as e:
         log.warning("Alert-Dispatch fehlgeschlagen: %s", e)
@@ -600,6 +635,19 @@ def _persist_reconcile_status(report: dict) -> dict:
         else:
             st["consecutive_errors"] = 0
             st["error_streak_alerted"] = bool(serie_laeuft and prev.get("last_error_alert_at"))
+        # R-B74: Drift-Gedaechtnis fuer maybe_alert (gleiche Drift -> Ruhe).
+        # Ein Fehllauf dazwischen vergisst die Drift nicht.
+        if status == "ERROR":
+            for k in ("drift_signatur", "drift_alert_at"):
+                if prev.get(k):
+                    st[k] = prev[k]
+        elif status == "OK":
+            st["drift_entwarnung"] = bool(prev.get("drift_alert_at"))
+        else:
+            sig = _drift_signatur(report)
+            st["drift_signatur"] = sig
+            st["drift_alert_at"] = (prev.get("drift_alert_at")
+                                    if prev.get("drift_signatur") == sig else None)
         save_json("reconcile_status.json", st)
         return st
     except Exception as e:
@@ -736,7 +784,7 @@ def main():
             print("\n✅ Keine Drifts gefunden")
 
     if args.alert:
-        maybe_alert(report)
+        maybe_alert(report, st=_st or None)
         _alarm_bei_dauerfehler(_st)
 
     return 0 if report["status"] == "OK" else 1
