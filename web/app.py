@@ -1855,6 +1855,8 @@ async def api_m2a_gates(user=Depends(require_auth)):
         renditen = _mm.monatsrenditen(rows, hist, schnitt)
         lauf_ret = renditen[max(renditen)]["ret_pct"] if renditen else None
         kumuliert = _mm.kumuliert_pct(renditen)
+        # R-B75: Vergleich mit dem Small-Cap-Index (GO-Bedingung echtes Geld)
+        index_vgl = _mm.vergleich_mit_index(renditen, _mm.index_renditen(rows, schnitt)) or {}
         heute = _m2a_date.today()
         # R-B66e: zentrale Leiter-Faelligkeit (Bug-Fix: FAELLIG erst nach
         # 6 VOLLEN Monaten, nicht am 01.02. mit nur 5) — eine Wahrheit fuer
@@ -1893,6 +1895,8 @@ async def api_m2a_gates(user=Depends(require_auth)):
             "fenster6m": z3.get("fenster6m") or {},
             "laufender_monat_ret_usd_pct": lauf_ret,
             "kumuliert_seit_schnitt_pct": kumuliert,
+            "index_kumuliert_pct": index_vgl.get("index_pct"),
+            "vorsprung_index_pp": index_vgl.get("vorsprung_pp"),
             "messung": "FX-neutral, nur M2a (R-B71)",
             "g1_letzte_meldung": gates_state.get("last_g1"),
             "geerbt_offen": geerbt_offen,

@@ -73,6 +73,20 @@ def g1_teil(renditen, vor, baender):
             f"Median {baender['p50']}).", prio)
 
 
+def index_teil(vergleich, index, vor):
+    """R-B75 (13.11.2026): Vergleich mit dem Small-Cap-Index IWM — GO fuer
+    echtes Geld verlangt, dass M2a ihn ueber denselben Zeitraum schlaegt."""
+    teile = []
+    if (index or {}).get(vor) is not None:
+        teile.append(f"IWM {vor}: {index[vor]:+.2f}%.")
+    if vergleich:
+        teile.append(
+            f"Seit Schnitt M2a {vergleich['m2a_pct']:+.2f}% vs IWM "
+            f"{vergleich['index_pct']:+.2f}% ({vergleich['vorsprung_pp']:+.2f} pp, "
+            f"{'vor' if vergleich['schlaegt_index'] else 'HINTER'} dem Index).")
+    return " ".join(teile)
+
+
 def main() -> int:
     import sys
     sys.path.insert(0, "/app")
@@ -112,6 +126,12 @@ def main() -> int:
     kum = m2a_motor.kumuliert_pct({m: e for m, e in renditen.items() if m <= vor})
     if kum is not None:
         text_teile.append(f"M2a seit Schnitt kumuliert {kum:+.2f}%.")
+    # R-B75: Index-Vergleich (GO-Bedingung fuer echtes Geld)
+    index = m2a_motor.index_renditen(rows, schnitt)
+    idx_text = index_teil(m2a_motor.vergleich_mit_index(renditen, index, bis=vor),
+                          index, vor)
+    if idx_text:
+        text_teile.append(idx_text)
 
     # R-B66e: zentrale Faelligkeit aus m2a_motor.leiter_status — die alte
     # Inline-Formel (>= 6) haette am 01.02.2027 mit nur 5 VOLLEN Monaten

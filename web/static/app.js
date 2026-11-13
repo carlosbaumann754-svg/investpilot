@@ -473,7 +473,10 @@ async function loadM2aGates() {
             faellig ? 'FAELLIG' : `Monat ${d.leiter_monat ?? d.monate_seit_schnitt}/6`;
         // R-B71: bisherige M2a-Rendite seit Schnitt (FX-neutral, verzinst)
         const kum = d.kumuliert_seit_schnitt_pct;
-        const kumTxt = (kum == null) ? '' : `bisher ${kum >= 0 ? '+' : ''}${kum.toFixed(2)}% | `;
+        // R-B75: daneben der Small-Cap-Index im selben Zeitraum (GO-Bedingung)
+        const idx = d.index_kumuliert_pct;
+        const idxTxt = (idx == null) ? '' : ` (IWM ${idx >= 0 ? '+' : ''}${idx.toFixed(2)}%)`;
+        const kumTxt = (kum == null) ? '' : `bisher ${kum >= 0 ? '+' : ''}${kum.toFixed(2)}%${idxTxt} | `;
         document.getElementById('m2a-leiter-sub').textContent = kumTxt +
             (faellig ? '' : `Entscheid ab ${d.leiter_entscheid_ab ?? '2027-03'} | `) +
             `Stopp < ${d.fenster6m?.p01 ?? '-10.7'}% | GO >= +${d.fenster6m?.p25 ?? '1.2'}%`;

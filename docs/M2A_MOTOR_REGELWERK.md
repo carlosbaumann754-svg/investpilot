@@ -96,7 +96,20 @@ G3+G4 — 6-MONATS-LEITER (bindend, EIN Blick ~Ende Feb 2027), Basis:
     - -8.0..+1.2% (p05..p25)    -> UNENTSCHIEDEN: verlaengern auf
       Monat 9, dann 12 — danach erzwungener Entscheid.
     - >= +1.2% (p25) UND Paar-Proben-Bias < 3pp UND keine Regelwerk-
-      Verletzung -> GO-EMPFEHLUNG Real-Cutover.
+      Verletzung UND M2a >= IWM im selben Zeitraum (R-B75)
+      -> GO-EMPFEHLUNG Real-Cutover.
+
+    INDEX-BEDINGUNG (R-B75, Carlos-Freigabe 13.11.2026): Echtes Geld nur,
+    wenn M2a den Small-Cap-Index IWM (passend zum sp600-Universum) ueber
+    dieselben Monate schlaegt — sonst waere ein simpler Indexfonds die
+    bessere Wahl. Gemessen: M2a-Monatsrenditen (R-B71) gegen IWM-Kursrendite,
+    gleiche Stichtage (letzter Snapshot je Monat), beide verzinst. Erfuellt
+    M2a alle anderen GO-Bedingungen, liegt aber hinter dem IWM -> NICHT GO,
+    sondern verlaengern (Monat 9/12) und dann neu entscheiden.
+    Hinweis zur Fairness: Waehrend des Depot-Aufbaus ist nur ein Teil des
+    Kontos investiert — das daempft M2a in fallenden Maerkten und bremst in
+    steigenden. Beim Entscheid den Anteil investiert mitlesen.
+    Code: m2a_motor.index_renditen() + vergleich_mit_index().
 
 G5 — MODELL-STURZ (jederzeit):
     Faellt eine kuenftige Validierung des Simulators (>= 10 neue Paare)

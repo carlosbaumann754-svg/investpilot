@@ -401,3 +401,47 @@ def nachkauf_rest(ziel_usd: float, investiert_usd: float) -> float:
     if rest < max(NACHKAUF_MIN_USD, NACHKAUF_MIN_ANTEIL * float(ziel_usd)):
         return 0.0
     return round(rest, 2)
+
+
+# ── R-B75 (13.11.2026): Vergleich mit dem Small-Cap-Index (IWM) ──
+# Fuer die GO-Entscheidung ueber echtes Geld reicht "Bot verdient Geld" nicht:
+# er muss ueber denselben Zeitraum einen simplen Indexfonds schlagen, sonst ist
+# der Fonds die bessere Wahl. IWM = Small-Cap-Index, passend zum sp600-Universum.
+# Gleiche Stichtage wie monatsrenditen() (letzter Snapshot je Monat), Kursrendite.
+# Carlos-Freigabe 13.11.2026.
+
+def index_renditen(rows, schnitt_datum: str, feld: str = "iwm_close") -> dict:
+    """{YYYY-MM: pct} Monatsrendite des Vergleichsindex nach dem Schnitt;
+    None, wenn an einem der beiden Stichtage kein Kurs vorliegt."""
+    je_monat = {}
+    for r in sorted((r for r in rows or [] if isinstance(r, dict)),
+                    key=lambda r: str(r.get("date", ""))):
+        d = str(r.get("date", ""))
+        if len(d) >= 7:
+            je_monat[d[:7]] = r
+    monate = [m for m in sorted(je_monat) if m >= str(schnitt_datum)[:7]]
+    out = {}
+    for vor, m in zip(monate, monate[1:]):
+        a, b = je_monat[vor].get(feld), je_monat[m].get(feld)
+        out[m] = (round((float(b) / float(a) - 1) * 100, 2)
+                  if a and b else None)
+    return out
+
+
+def vergleich_mit_index(renditen: dict, index: dict, bis: str = None):
+    """M2a gegen Index ueber dieselben Monate (beide verzinst), optional bis
+    einschliesslich Monat `bis`. None, wenn ein Monat auf einer Seite fehlt."""
+    monate = sorted(m for m in renditen if m in index and (not bis or m <= bis))
+    if not monate:
+        return None
+    m2a = kumuliert_pct({m: renditen[m] for m in monate})
+    faktor = 1.0
+    for m in monate:
+        if index[m] is None:
+            return None
+        faktor *= 1 + index[m] / 100
+    if m2a is None:
+        return None
+    idx = round((faktor - 1) * 100, 2)
+    return {"m2a_pct": m2a, "index_pct": idx,
+            "vorsprung_pp": round(m2a - idx, 2), "schlaegt_index": m2a >= idx}
